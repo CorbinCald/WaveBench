@@ -1,6 +1,6 @@
 # LLM Benchmark Generator
 
-This tool allows you to benchmark various Large Language Models (LLMs) via the OpenRouter API. It generates code based on a user prompt using multiple models in parallel and saves the results for comparison.
+This tool allows you to benchmark various Large Language Models (LLMs) via the OpenRouter API. It generates code based on a user prompt using multiple models in parallel and saves the results for comparison, while also tracking lifetime performance analytics.
 
 ## Prerequisites
 
@@ -17,16 +17,18 @@ This tool allows you to benchmark various Large Language Models (LLMs) via the O
 
 2. Create a virtual environment (optional but recommended):
    ```bash
-   python -m venv venv
+   python -m venv .venv
    # Windows
-   venv\Scripts\activate
+   .venv\Scripts\activate
    # macOS/Linux
-   source venv/bin/activate
+   source .venv/bin/activate
    ```
 
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
+   # Or install as a package:
+   pip install .
    ```
 
 ## Configuration
@@ -41,37 +43,61 @@ You need to provide your OpenRouter API key. You can do this in one of two ways:
 
 ## Usage
 
-Run the script from the command line:
+You can run the benchmark using the provided shell script or as a Python module:
 
 ```bash
-python LLM_benchmarks.py
+./run_benchmarks.sh
+# OR
+python -m llm_benchmarks
 ```
 
-You will be prompted to enter a description of the program you want the LLMs to generate.
+You will be prompted to select a mode (Code or Text) and to enter a description of the prompt you want the LLMs to process.
 
 Alternatively, you can provide the prompt directly as an argument:
 
 ```bash
-python LLM_benchmarks.py --prompt "Create a snake game in Python"
+./run_benchmarks.sh --prompt "Create a snake game in Python"
+```
+
+To run in text mode (for prose answers instead of code):
+```bash
+./run_benchmarks.sh --prompt "Explain quantum computing" --text
+```
+
+### Configuration Menu
+
+You can interactively configure which models to benchmark and view their pricing:
+
+```bash
+./run_benchmarks.sh --config
+```
+*(Or press `c` during the interactive prompt)*
+
+### Analytics
+
+The tool tracks lifetime analytics of your model runs. To view them:
+
+```bash
+./run_benchmarks.sh --stats
+```
+
+To clear your history:
+
+```bash
+./run_benchmarks.sh --clear-history
 ```
 
 ## Output
 
 The script will:
-1. Generate a directory name based on your prompt.
+1. Generate a directory name based on your prompt using a fast model.
 2. Create a folder in `benchmarkResults/`.
-3. Query multiple models (configured in `MODEL_MAPPING`).
-4. Save the generated code from each model into the folder.
+3. Query multiple models concurrently.
+4. Extract the code from the response.
+5. Save the generated code (or text) from each model into the folder.
 
 ## Models
 
-The script is currently configured to test a variety of models including:
-- Gemini 3.0 (Flash & Pro)
-- GPT-5.2 (and variants)
-- Claude (Opus)
-- DeepSeek V3.2
-- GLM 4.7
-- And others...
+The script evaluates a variety of models. You can interactively select models using the `--config` menu, which fetches the top models from OpenRouter.
 
-You can modify the `MODEL_MAPPING` dictionary in `LLM_benchmarks.py` to add or remove models.
-
+The default active models are defined in `MODEL_MAPPING` located in `llm_benchmarks/models.py`. You can modify this dictionary to change the default models.

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm_benchmarks"
+version = "0.1.0"
+description = "Benchmarks LLMs via the OpenRouter API"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "aiohttp",
+]
+
+[project.scripts]
+llm-benchmarks = "llm_benchmarks.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["llm_benchmarks*"]
