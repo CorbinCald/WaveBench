@@ -139,7 +139,8 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
 
     if reasoning_effort and not skip_reasoning:
         if is_anthropic:
-            reasoning_cfg = {"max_tokens": 32000}
+            # Let Anthropic models use provider-managed/default thinking behavior.
+            reasoning_cfg = {"enabled": True}
         else:
             reasoning_cfg = {"effort": reasoning_effort}
         data = {**base_data, "reasoning": reasoning_cfg}
@@ -304,7 +305,8 @@ async def call_model_streaming(
 
     if reasoning_effort and not skip_reasoning:
         if is_anthropic:
-            reasoning_cfg: dict = {"max_tokens": 32000}
+            # Let Anthropic models use provider-managed/default thinking behavior.
+            reasoning_cfg: dict = {"enabled": True}
         else:
             reasoning_cfg = {"effort": reasoning_effort}
         data = {**base_data, "reasoning": reasoning_cfg}
