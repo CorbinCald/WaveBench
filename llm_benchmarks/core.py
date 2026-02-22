@@ -6,14 +6,14 @@ import aiohttp
 from typing import Dict, Any, Optional
 
 from llm_benchmarks.api import call_model_streaming
-from llm_benchmarks.parsers import parse_with_gemini, get_directory_name
+from llm_benchmarks.parsers import parse_llm_output, get_directory_name
 from llm_benchmarks.tui.styles import S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, _rule, _truncate, _dot, _rpad, _tw
 from llm_benchmarks.tui.components import ProgressTracker, display_analytics
 from llm_benchmarks.storage import load_history, record_run
 
 OUTPUT_DIR       = "benchmarkResults"
 MAX_CONCURRENCY  = 12
-REQUEST_TIMEOUT  = 600  # seconds
+REQUEST_TIMEOUT  = 1800  # seconds
 
 SYSTEM_PROMPT_CODE = (
     "You are an expert programmer. Your goal is to provide a complete, "
@@ -123,7 +123,7 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
         print(f"  {_work} {model_name:<{pad}}  "
               f"{S.DIM}parsing…{S.RST}")
 
-    parsed = await parse_with_gemini(
+    parsed = await parse_llm_output(
         session, api_key, model_name, content)
 
     if registered:

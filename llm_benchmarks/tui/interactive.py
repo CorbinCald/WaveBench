@@ -49,6 +49,11 @@ def _unique_short_name(model_id: str, existing_names: set) -> str:
         counter += 1
     return f"{base}_{counter}"
 
+def _fit(text: str, width: int) -> str:
+    """Truncate *text* to *width*, adding ellipsis if needed."""
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
 def _read_key() -> str:
     """Read a single keypress from the terminal, handling escape sequences."""
     if not _HAS_TTY:
@@ -126,6 +131,16 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
     page_index = 0
     short_w = max(len(it['short']) for it in items) + 2
     id_w = max(len(it['id']) for it in items) + 2
+
+    term_w = shutil.get_terminal_size((80, 24)).columns
+    max_price_w = max((len(it['pricing']) for it in items if it['pricing']), default=0)
+    overhead = 9 + (2 + max_price_w if max_price_w else 0)
+    avail = max(24, term_w - overhead)
+    if short_w + id_w > avail:
+        ratio = avail / (short_w + id_w)
+        short_w = max(10, int(short_w * ratio))
+        id_w = max(10, avail - short_w)
+
     menu_lines = page_size + 5
 
     def _page_count() -> int:
@@ -163,14 +178,16 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
             is_cur = i == cursor_pos
             chk = f"{S.HGRN}✓{S.RST}" if item['selected'] else " "
 
+            sn = _fit(item['short'], short_w)
+            mi = _fit(item['id'], id_w)
             if is_cur:
                 mk = f"{S.HCYN}▸{S.RST}"
-                ns = f"{S.BOLD}{item['short']:<{short_w}}{S.RST}"
-                ids = f"{S.CYN}{item['id']:<{id_w}}{S.RST}"
+                ns = f"{S.BOLD}{sn:<{short_w}}{S.RST}"
+                ids = f"{S.CYN}{mi:<{id_w}}{S.RST}"
             else:
                 mk = " "
-                ns = f"{item['short']:<{short_w}}"
-                ids = f"{S.DIM}{item['id']:<{id_w}}{S.RST}"
+                ns = f"{sn:<{short_w}}"
+                ids = f"{S.DIM}{mi:<{id_w}}{S.RST}"
 
             ps = (f"  {S.DIM}{item['pricing']}{S.RST}"
                   if item['pricing'] else "")
@@ -305,6 +322,16 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
 
     short_w = max(len(it['short']) for it in model_items) + 2
     id_w = max(len(it['id']) for it in model_items) + 2
+
+    term_w = shutil.get_terminal_size((80, 24)).columns
+    max_price_w = max((len(it['pricing']) for it in model_items if it['pricing']), default=0)
+    overhead = 9 + (2 + max_price_w if max_price_w else 0)
+    avail = max(24, term_w - overhead)
+    if short_w + id_w > avail:
+        ratio = avail / (short_w + id_w)
+        short_w = max(10, int(short_w * ratio))
+        id_w = max(10, avail - short_w)
+
     from llm_benchmarks.tui.styles import _tw
     content_height = max(model_page_size, len(settings_items))
     total_lines = content_height + 6
@@ -356,14 +383,16 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     item = model_items[start + row]
                     is_cur = (start + row == model_cursor)
                     chk = f"{S.HGRN}✓{S.RST}" if item['selected'] else " "
+                    sn = _fit(item['short'], short_w)
+                    mi = _fit(item['id'], id_w)
                     if is_cur:
                         mk = f"{S.HCYN}▸{S.RST}"
-                        ns = f"{S.BOLD}{item['short']:<{short_w}}{S.RST}"
-                        ids = f"{S.CYN}{item['id']:<{id_w}}{S.RST}"
+                        ns = f"{S.BOLD}{sn:<{short_w}}{S.RST}"
+                        ids = f"{S.CYN}{mi:<{id_w}}{S.RST}"
                     else:
                         mk = " "
-                        ns = f"{item['short']:<{short_w}}"
-                        ids = f"{S.DIM}{item['id']:<{id_w}}{S.RST}"
+                        ns = f"{sn:<{short_w}}"
+                        ids = f"{S.DIM}{mi:<{id_w}}{S.RST}"
                     ps = (f"  {S.DIM}{item['pricing']}{S.RST}"
                           if item['pricing'] else "")
                     sys.stdout.write(

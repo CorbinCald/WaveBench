@@ -289,9 +289,16 @@ async def call_model_streaming(
                         for ch in obj.get("choices", []):
                             delta = ch.get("delta", {})
                             txt = delta.get("content", "")
-                            if txt:
-                                parts.append(txt)
-                                total_chars += len(txt)
+                            reasoning = delta.get("reasoning", "")
+                            
+                            # Safely handle None values from OpenRouter
+                            if txt is None: txt = ""
+                            if reasoning is None: reasoning = ""
+                            
+                            if txt or reasoning:
+                                if txt:
+                                    parts.append(txt)
+                                total_chars += len(txt) + len(reasoning)
                                 if on_progress:
                                     on_progress(total_chars)
                     except json.JSONDecodeError:
