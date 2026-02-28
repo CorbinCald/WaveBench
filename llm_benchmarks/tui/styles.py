@@ -58,6 +58,54 @@ def _rule(label: str = "", heavy: bool = False) -> None:
         seg = ch * w
     print(f"  {S.DIM}{seg}{S.RST}")
 
+def _box_top(title: str = "", width: int = 0, heavy: bool = False) -> str:
+    """Return the top border of a btop-style box with optional embedded title."""
+    if not width:
+        width = _tw() - 4
+    ch, lc, rc = ("━", "┏", "┓") if heavy else ("─", "╭", "╮")
+    if title:
+        vis = _vlen(title)
+        fill = max(1, width - 5 - vis)
+        return (f"  {S.DIM}{lc}{ch} {S.RST}{S.BOLD}{S.CYN}{title}{S.RST}"
+                f"{S.DIM} {ch * fill}{rc}{S.RST}")
+    return f"  {S.DIM}{lc}{ch * (width - 2)}{rc}{S.RST}"
+
+def _box_row(content: str = "", width: int = 0, heavy: bool = False) -> str:
+    """Return a box row with content padded to fill the inner width."""
+    if not width:
+        width = _tw() - 4
+    sc = "┃" if heavy else "│"
+    inner = width - 4
+    pad = max(0, inner - _vlen(content))
+    return f"  {S.DIM}{sc}{S.RST} {content}{' ' * pad} {S.DIM}{sc}{S.RST}"
+
+def _box_sep(label: str = "", width: int = 0) -> str:
+    """Return a box separator with optional embedded label."""
+    if not width:
+        width = _tw() - 4
+    if label:
+        vis = _vlen(label)
+        fill = max(1, width - 5 - vis)
+        return (f"  {S.DIM}├─ {S.RST}{S.BOLD}{S.CYN}{label}{S.RST}"
+                f"{S.DIM} {'─' * fill}┤{S.RST}")
+    return f"  {S.DIM}├{'─' * (width - 2)}┤{S.RST}"
+
+def _box_bot(width: int = 0, heavy: bool = False) -> str:
+    """Return the bottom border of a box."""
+    if not width:
+        width = _tw() - 4
+    ch, lc, rc = ("━", "┗", "┛") if heavy else ("─", "╰", "╯")
+    return f"  {S.DIM}{lc}{ch * (width - 2)}{rc}{S.RST}"
+
+def _box(title: str, lines: list, width: int = 0, heavy: bool = False) -> None:
+    """Print content inside a bordered box."""
+    if not width:
+        width = _tw() - 4
+    print(_box_top(title, width, heavy))
+    for line in lines:
+        print(_box_row(line, width, heavy))
+    print(_box_bot(width, heavy))
+
 def format_duration(seconds: float | None) -> str:
     """Format *seconds* into a concise human-readable string."""
     if seconds is None:

@@ -7,7 +7,11 @@ from typing import Dict, Any, Optional
 
 from llm_benchmarks.api import call_model_streaming
 from llm_benchmarks.parsers import parse_llm_output, get_directory_name
-from llm_benchmarks.tui.styles import S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, _rule, _truncate, _dot, _rpad, _tw
+from llm_benchmarks.tui.styles import (
+    S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration,
+    _truncate, _dot, _rpad, _tw, _vlen,
+    _box, _box_top, _box_row, _box_bot,
+)
 from llm_benchmarks.tui.components import ProgressTracker, display_analytics
 from llm_benchmarks.storage import load_history, record_run
 
@@ -267,14 +271,14 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     mode_label = f"{S.HYEL}TEXT{S.RST}" if text_mode else f"{S.HCYN}CODE{S.RST}"
 
     # ── Config display ─────────────────────────────────────────────────────
-    _rule(heavy=True)
+    w = _tw() - 4
     print()
-    print(f"  {S.DIM}{'MODE':>8}{S.RST}  {mode_label}")
-    print(f"  {S.DIM}{'PROMPT':>8}{S.RST}  "
-          f"{S.BOLD}{_truncate(user_prompt, _tw() - 14)}{S.RST}")
-    print(f"  {S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active")
-    print()
-    _rule()
+    _box("", [
+        f"{S.DIM}{'MODE':>8}{S.RST}  {mode_label}",
+        f"{S.DIM}{'PROMPT':>8}{S.RST}  "
+        f"{S.BOLD}{_truncate(user_prompt, w - 16)}{S.RST}",
+        f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active",
+    ], w, heavy=True)
     print()
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -287,7 +291,9 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector,
     ) as session:
-        tracker = ProgressTracker(len(targets), results, pad=pad)
+        model_names = [name for name, _ in targets]
+        tracker = ProgressTracker(
+            len(targets), results, pad=pad, model_names=model_names)
         try:
             async def resolve_output_dir() -> str:
                 dir_name = await get_directory_name(
@@ -346,9 +352,11 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     fail = sum(1 for v in results.values() if v["status"] == "failed")
     canc = sum(1 for v in results.values() if v["status"] == "cancelled")
 
+    inner_w = w - 4
+
     print()
-    _rule("Run Results")
-    print()
+    print(_box_top("Run Results", w))
+    print(_box_row("", w))
 
     # Ranked leaderboard — successes first (fastest wins), then failures
     def _rank_key(item: Any) -> Any:
@@ -378,23 +386,24 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
             detail = f"{S.RED}failed{S.RST}"
 
         rank = f"{S.DIM}{i:>2}.{S.RST}"
-        print(f"  {rank} {sym} {_rpad(name, pad)}"
-              f"  {_rpad(detail, 46)}  {S.DIM}{t}{S.RST}")
+        content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
+        gap = max(inner_w - _vlen(content) - len(t), 2)
+        print(_box_row(
+            f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
 
-    print()
+    print(_box_row("", w))
     parts = []
     if ok:   parts.append(f"{S.HGRN}{ok} passed{S.RST}")
     if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
     if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
     parts.append(f"{format_duration(total_time)} total")
-    print(f"  {f' {_dot} '.join(parts)}")
+    sep = f" {_dot} "
+    print(_box_row(sep.join(parts), w))
+    print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
     history = load_history()
     record_run(history, user_prompt, output_dir_final[0],
                total_time, results)
     display_analytics(history, compact=True, pad=pad)
-
-    print()
-    _rule(heavy=True)
     print()
