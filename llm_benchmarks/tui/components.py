@@ -4,7 +4,10 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from llm_benchmarks.tui.styles import S, _SPIN, format_duration, _rule, _tw, _truncate, _dot
+from llm_benchmarks.tui.styles import (
+    S, _SPIN, format_duration, _tw, _truncate, _dot,
+    _box_top, _box_row, _box_sep, _box_bot,
+)
 
 BAR_WIDTH = 20
 _BAR_FILL = "█"
@@ -32,7 +35,8 @@ class ProgressTracker:
     """
 
     def __init__(self, total: int, results: Dict[str, Any],
-                 pad: int = 16, label: str = "Generating"):
+                 pad: int = 16, label: str = "Generating",
+                 model_names: Optional[list] = None):
         self._total = total
         self._results = results
         self._label = label
@@ -45,6 +49,7 @@ class ProgressTracker:
         self._active: Dict[str, Dict[str, Any]] = {}
         self._parsing: Dict[str, Dict[str, Any]] = {}
         self._drawn_lines = 0
+        self._model_names = model_names or []
 
     @property
     def is_running(self) -> bool:
@@ -52,7 +57,10 @@ class ProgressTracker:
 
     def register(self, model_name: str) -> None:
         """Mark a model as actively streaming."""
-        self._active[model_name] = {"chars": 0, "start": time.monotonic()}
+        self._active[model_name] = {
+            "chars": 0, "start": time.monotonic(),
+            "last_chars": 0, "last_rate_time": 0.0, "smoothed_rate": 0.0,
+        }
 
     def update(self, model_name: str, chars: int) -> None:
         """Update the character count for an active model."""
@@ -96,6 +104,13 @@ class ProgressTracker:
 
     # ── internal rendering ────────────────────────────────────────────────
 
+    @staticmethod
+    def _phase_boxes(filled: int, color: str) -> str:
+        """Render a 5-stage inline progress indicator (■■■□□)."""
+        filled = max(0, min(filled, 5))
+        empty = 5 - filled
+        return f"{color}{'■' * filled}{S.RST}{S.DIM}{'□' * empty}{S.RST}"
+
     def _clear_drawn(self) -> None:
         """Erase all previously drawn progress lines."""
         if self._drawn_lines <= 0:
@@ -122,8 +137,9 @@ class ProgressTracker:
                     mel = format_duration(
                         time.monotonic() - info["start"])
                     dots = "·" * (1 + (idx // 4) % 3)
+                    boxes = self._phase_boxes(5, S.HCYN)
                     buf.append(
-                        f"  {S.HCYN}◌{S.RST} "
+                        f"  {boxes} "
                         f"{name:<{self._pad}}  "
                         f"{S.DIM}parsing{dots:<4}"
                         f"  {mel:>7}{S.RST}\033[K\n")
@@ -139,21 +155,57 @@ class ProgressTracker:
                             time.monotonic() - info["start"])
                         if info["chars"] == 0:
                             dots = "·" * (1 + (idx // 4) % 3)
+                            boxes = self._phase_boxes(1, S.HYEL)
                             buf.append(
-                                f"  {S.HYEL}●{S.RST} "
+                                f"  {boxes} "
                                 f"{name:<{self._pad}}  "
                                 f"{S.DIM}reasoning{dots:<4}"
                                 f" {mel:>7}{S.RST}\033[K\n")
                         else:
+                            now = time.monotonic()
+                            dt = now - info["last_rate_time"]
+                            if dt >= 0.5:
+                                if info["last_rate_time"] == 0.0:
+                                    info["last_chars"] = info["chars"]
+                                    info["last_rate_time"] = now
+                                else:
+                                    d_chars = info["chars"] - info["last_chars"]
+                                    instant_tks = (d_chars / 4) / dt
+                                    if info["smoothed_rate"] <= 0:
+                                        info["smoothed_rate"] = instant_tks
+                                    else:
+                                        info["smoothed_rate"] = (
+                                            0.3 * instant_tks
+                                            + 0.7 * info["smoothed_rate"])
+                                    info["last_chars"] = info["chars"]
+                                    info["last_rate_time"] = now
+
+                            ratio = min(
+                                info["chars"] / max(scale, 1), 1.0)
+                            if ratio < 0.33:
+                                stream_stage = 2
+                            elif ratio < 0.66:
+                                stream_stage = 3
+                            else:
+                                stream_stage = 4
+                            boxes = self._phase_boxes(
+                                stream_stage, S.HYEL)
                             bar = _render_token_bar(
                                 info["chars"], scale)
                             est_tk = info["chars"] // 4
+                            rate_s = ""
+                            if info["smoothed_rate"] > 0:
+                                rate_s = (
+                                    f"  {S.CYN}"
+                                    f"{int(info['smoothed_rate']):,} tk/s"
+                                    f"{S.RST}")
                             buf.append(
-                                f"  {S.HYEL}●{S.RST} "
+                                f"  {boxes} "
                                 f"{name:<{self._pad}}  "
                                 f"{bar}  "
-                                f"{S.DIM}~{est_tk:,} tk"
-                                f"  {mel}{S.RST}\033[K\n")
+                                f"{S.DIM}~{est_tk:,} tk{S.RST}"
+                                f"{rate_s}"
+                                f"  {S.DIM}{mel}{S.RST}\033[K\n")
                         lines += 1
 
                 buf.append(
@@ -200,6 +252,9 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
         print(f"  {S.DIM}No history yet. Complete a run to begin tracking.{S.RST}")
         return
 
+    w = _tw() - 4
+    inner = w - 4
+
     # ── Aggregate per-model stats ──────────────────────────────────────────
     stats: Dict[str, Any] = {}
     for run in runs:
@@ -235,16 +290,16 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
     col = max((len(name) for name, _ in ranked), default=12) + 2
     col = max(col, pad)
 
-    # ── Section header ─────────────────────────────────────────────────────
+    # ── Box header ─────────────────────────────────────────────────────────
     print()
-    _rule(f"Lifetime Analytics ({n} run{'s' if n != 1 else ''})")
-    print()
+    print(_box_top(f"Lifetime Analytics ({n} run{'s' if n != 1 else ''})", w))
+    print(_box_row("", w))
 
     # ── Table header ───────────────────────────────────────────────────────
-    hdr = (f"  {S.BOLD}{'MODEL':<{col}}{'RUNS':>5}  {'RATE':>5}"
+    hdr = (f"{S.BOLD}{'MODEL':<{col}}{'RUNS':>5}  {'RATE':>5}"
            f"  {'AVG':>8}  {'BEST':>8}  {'WORST':>8}  {'AVG TKNS':>9}{S.RST}")
-    print(hdr)
-    print(f"  {S.DIM}{'─' * min(col + 51, _tw() - 4)}{S.RST}")
+    print(_box_row(hdr, w))
+    print(_box_row(f"{S.DIM}{'─' * min(col + 51, inner)}{S.RST}", w))
 
     # ── Table rows ─────────────────────────────────────────────────────────
     total_calls = total_ok = 0
@@ -267,11 +322,12 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
 
         avg_tk_s = f"{int(avg_tk):,}" if avg_tk is not None else "—"
 
-        print(f"  {name:<{col}}{s['runs']:>5}  {rate_c}"
-              f"  {S.CYN}{format_duration(avg_v):>8}{S.RST}"
-              f"  {S.GRN}{format_duration(best_v):>8}{S.RST}"
-              f"  {S.DIM}{format_duration(wrst_v):>8}{S.RST}"
-              f"  {S.DIM}{avg_tk_s:>9}{S.RST}")
+        print(_box_row(
+            f"{name:<{col}}{s['runs']:>5}  {rate_c}"
+            f"  {S.CYN}{format_duration(avg_v):>8}{S.RST}"
+            f"  {S.GRN}{format_duration(best_v):>8}{S.RST}"
+            f"  {S.DIM}{format_duration(wrst_v):>8}{S.RST}"
+            f"  {S.DIM}{avg_tk_s:>9}{S.RST}", w))
 
         total_calls += s["runs"]
         total_ok += s["ok"]
@@ -285,16 +341,16 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
     all_tokens = [t for s in stats.values() for t in s["tokens"]]
     avg_tk_all = f"{int(sum(all_tokens) / len(all_tokens)):,}" if all_tokens else "—"
 
-    print()
-    print(f"  {total_calls} calls {_dot} {total_ok} passed {_dot} "
-          f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {S.CYN}{avg_all}{S.RST} "
-          f"{_dot} avg tkns {S.DIM}{avg_tk_all}{S.RST}")
+    print(_box_row("", w))
+    print(_box_row(
+        f"{total_calls} calls {_dot} {total_ok} passed {_dot} "
+        f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {S.CYN}{avg_all}{S.RST} "
+        f"{_dot} avg tkns {S.DIM}{avg_tk_all}{S.RST}", w))
 
     # ── Recent prompts (full view only) ────────────────────────────────────
     if not compact and runs:
-        print()
-        _rule("Recent Prompts")
-        print()
+        print(_box_sep("Recent Prompts", w))
+        print(_box_row("", w))
         for run in reversed(runs[-8:]):
             ts = run.get("timestamp", "")
             try:
@@ -306,5 +362,8 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
             ok = sum(1 for r in models.values()
                      if r.get("status") == "success")
             tot = len(models)
-            prompt = _truncate(run.get("prompt", "—"), _tw() - 26)
-            print(f"  {S.DIM}{date_s}{S.RST}  {ok}/{tot}  {prompt}")
+            prompt = _truncate(run.get("prompt", "—"), inner - 20)
+            print(_box_row(
+                f"{S.DIM}{date_s}{S.RST}  {ok}/{tot}  {prompt}", w))
+
+    print(_box_bot(w))
