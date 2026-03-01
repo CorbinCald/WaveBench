@@ -141,7 +141,8 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         short_w = max(10, int(short_w * ratio))
         id_w = max(10, avail - short_w)
 
-    menu_lines = page_size + 5
+    from llm_benchmarks.tui.styles import _vlen
+    last_menu_lines = page_size + 5
 
     def _page_count() -> int:
         return max(1, (len(items) + page_size - 1) // page_size)
@@ -156,20 +157,27 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         return start, end
 
     def render(first: bool = False) -> None:
+        nonlocal last_menu_lines
         if not first:
-            sys.stdout.write(f"\033[{menu_lines}A")
+            sys.stdout.write(f"\033[{last_menu_lines}A")
 
+        screen_lines = 0
         pcount = _page_count()
-        sys.stdout.write(
-            f"\033[K  {S.DIM}↑↓{S.RST} navigate  {_dot}  "
-            f"{S.DIM}Space{S.RST} toggle  {_dot}  "
-            f"{S.DIM}Enter{S.RST} confirm  {_dot}  "
-            f"{S.DIM}a{S.RST} all  {_dot}  "
-            f"{S.DIM}n{S.RST} none  {_dot}  "
-            f"{S.DIM}[ ]{S.RST} page  {_dot}  "
-            f"{S.DIM}q{S.RST} cancel\n")
+        hl = (f"  {S.DIM}↑↓{S.RST} navigate  {_dot}  "
+              f"{S.DIM}Space{S.RST} toggle  {_dot}  "
+              f"{S.DIM}Enter{S.RST} confirm  {_dot}  "
+              f"{S.DIM}a{S.RST} all  {_dot}  "
+              f"{S.DIM}n{S.RST} none  {_dot}  "
+              f"{S.DIM}[ ]{S.RST} page  {_dot}  "
+              f"{S.DIM}q{S.RST} cancel")
+        sys.stdout.write(f"\033[K{hl}\n")
+        tw = shutil.get_terminal_size((80, 24)).columns
+        hl_vis = _vlen(hl)
+        screen_lines += max(1, (hl_vis + tw - 1) // tw) if tw > 0 else 1
+
         sys.stdout.write(
             f"\033[K  {S.DIM}page {page_index + 1}/{pcount}{S.RST}\n")
+        screen_lines += 1
 
         start, end = _page_bounds()
         visible = items[start:end]
@@ -195,11 +203,15 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
                 f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
         for _ in range(page_size - len(visible)):
             sys.stdout.write("\033[K\n")
+        screen_lines += page_size
 
         sys.stdout.write("\033[K\n")
+        screen_lines += 1
         sel = sum(1 for it in items if it['selected'])
         sys.stdout.write(
             f"\033[K  {S.BOLD}{sel}{S.RST} of {len(items)} selected\n")
+        screen_lines += 1
+        last_menu_lines = screen_lines
         sys.stdout.flush()
 
     sys.stdout.write("\033[?25l")
@@ -303,11 +315,21 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             'pricing': _format_price(pricing_lookup.get(mid, {})),
         })
 
+    REASONING_CHOICES = ["high", "medium", "low", "off"]
+
     settings_items = [
         {
             "key": "auto_use_venv",
             "label": "Auto-activate virtual environment",
             "value": current_config.get("auto_use_venv", True),
+            "type": "bool",
+        },
+        {
+            "key": "reasoning_effort",
+            "label": "Reasoning effort",
+            "value": current_config.get("reasoning_effort", "high"),
+            "type": "cycle",
+            "choices": REASONING_CHOICES,
         },
     ]
 
@@ -332,9 +354,10 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         short_w = max(10, int(short_w * ratio))
         id_w = max(10, avail - short_w)
 
-    from llm_benchmarks.tui.styles import _tw
+    from llm_benchmarks.tui.styles import _tw, _vlen
     content_height = max(model_page_size, len(settings_items))
     total_lines = content_height + 6
+    last_rendered_lines = total_lines
 
     def _model_page_count() -> int:
         return max(1, (len(model_items) + model_page_size - 1) // model_page_size)
@@ -349,8 +372,11 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         return start, end
 
     def render(first: bool = False) -> None:
+        nonlocal last_rendered_lines
         if not first:
-            sys.stdout.write(f"\033[{total_lines}A")
+            sys.stdout.write(f"\033[{last_rendered_lines}A")
+
+        screen_lines = 0
 
         tab_parts = []
         for i, name in enumerate(tabs):
@@ -359,9 +385,11 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             else:
                 tab_parts.append(f"{S.DIM} {name} {S.RST}")
         sys.stdout.write(f"\033[K  {'   '.join(tab_parts)}\n")
+        screen_lines += 1
 
         sys.stdout.write(
             f"\033[K  {S.DIM}{'─' * min(50, _tw() - 4)}{S.RST}\n")
+        screen_lines += 1
 
         hl = (f"{S.DIM}←→{S.RST} switch tab  {_dot}  "
               f"{S.DIM}↑↓{S.RST} navigate  {_dot}  "
@@ -373,8 +401,12 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                    f"  {_dot}  {S.DIM}[ ]{S.RST} page")
         hl += f"  {_dot}  {S.DIM}Tab{S.RST}/{S.DIM}q{S.RST} cancel"
         sys.stdout.write(f"\033[K  {hl}\n")
+        tw = _tw()
+        hl_visible_len = _vlen(f"  {hl}")
+        screen_lines += max(1, (hl_visible_len + tw - 1) // tw) if tw > 0 else 1
 
         sys.stdout.write("\033[K\n")
+        screen_lines += 1
 
         for row in range(content_height):
             if active_tab == 0:
@@ -403,10 +435,22 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 if row < len(settings_items):
                     item = settings_items[row]
                     is_cur = (row == settings_cursor)
-                    val_s = (f"{S.HGRN}ON{S.RST}" if item["value"]
-                             else f"{S.HRED}OFF{S.RST}")
-                    chk = (f"{S.HGRN}✓{S.RST}" if item["value"]
-                           else " ")
+                    if item.get("type") == "cycle":
+                        val = item["value"]
+                        if val == "off":
+                            val_s = f"{S.HRED}{val}{S.RST}"
+                            chk = " "
+                        elif val == "high":
+                            val_s = f"{S.HGRN}{val}{S.RST}"
+                            chk = f"{S.HGRN}✓{S.RST}"
+                        else:
+                            val_s = f"{S.HYEL}{val}{S.RST}"
+                            chk = f"{S.HYEL}~{S.RST}"
+                    else:
+                        val_s = (f"{S.HGRN}ON{S.RST}" if item["value"]
+                                 else f"{S.HRED}OFF{S.RST}")
+                        chk = (f"{S.HGRN}✓{S.RST}" if item["value"]
+                               else " ")
                     if is_cur:
                         mk = f"{S.HCYN}▸{S.RST}"
                         label = f"{S.BOLD}{item['label']}{S.RST}"
@@ -418,7 +462,10 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 else:
                     sys.stdout.write("\033[K\n")
 
+        screen_lines += content_height
+
         sys.stdout.write("\033[K\n")
+        screen_lines += 1
 
         if active_tab == 0:
             sel = sum(1 for it in model_items if it['selected'])
@@ -428,13 +475,16 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 f"{len(model_items)} selected  "
                 f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}\n")
         else:
+            defaults = {"auto_use_venv": True, "reasoning_effort": "high"}
             changed = any(
-                it["value"] != current_config.get(it["key"], True)
+                it["value"] != current_config.get(it["key"], defaults.get(it["key"]))
                 for it in settings_items)
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
             sys.stdout.write(
                 f"\033[K  {S.DIM}{len(settings_items)} "
                 f"setting(s){S.RST}{tag}\n")
+        screen_lines += 1
+        last_rendered_lines = screen_lines
         sys.stdout.flush()
 
     sys.stdout.write("\033[?25l")
@@ -469,8 +519,13 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     model_items[model_cursor]['selected'] = \
                         not model_items[model_cursor]['selected']
                 elif settings_items:
-                    settings_items[settings_cursor]['value'] = \
-                        not settings_items[settings_cursor]['value']
+                    item = settings_items[settings_cursor]
+                    if item.get("type") == "cycle":
+                        choices = item["choices"]
+                        idx = choices.index(item["value"]) if item["value"] in choices else 0
+                        item["value"] = choices[(idx + 1) % len(choices)]
+                    else:
+                        item['value'] = not item['value']
             elif key == 'enter':
                 break
             elif key == 'a' and active_tab == 0:

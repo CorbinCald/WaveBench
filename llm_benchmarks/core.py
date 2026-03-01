@@ -51,7 +51,8 @@ def get_unique_filename(directory: str, base_name: str, extension: str) -> str:
 
 async def process_model(session: aiohttp.ClientSession, api_key: str, model_name: str, model_id: str, prompt: str,
                         default_ext: str, output_dir_task: asyncio.Task, semaphore: asyncio.Semaphore,
-                        results: Dict[str, Any], pad: int, tracker: Any) -> None:
+                        results: Dict[str, Any], pad: int, tracker: Any,
+                        reasoning_effort: Optional[str] = "high") -> None:
     """Generate code from a single model, parse it, and save to disk."""
     start = time.monotonic()
     registered = tracker.is_running
@@ -73,6 +74,7 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
 
             content, usage = await call_model_streaming(
                 session, api_key, model_id, prompt,
+                reasoning_effort=reasoning_effort,
                 on_progress=_on_progress)
 
     except asyncio.CancelledError:
@@ -158,7 +160,8 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
 
 async def process_model_text(session: aiohttp.ClientSession, api_key: str, model_name: str, model_id: str, prompt: str,
                              output_dir_task: asyncio.Task, semaphore: asyncio.Semaphore,
-                             results: Dict[str, Any], pad: int, tracker: Any) -> None:
+                             results: Dict[str, Any], pad: int, tracker: Any,
+                             reasoning_effort: Optional[str] = "high") -> None:
     """Query a single model for a text response and save as Markdown."""
     start = time.monotonic()
     registered = tracker.is_running
@@ -180,6 +183,7 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
 
             content, usage = await call_model_streaming(
                 session, api_key, model_id, prompt,
+                reasoning_effort=reasoning_effort,
                 on_progress=_on_progress)
 
     except asyncio.CancelledError:
@@ -242,10 +246,18 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
     results[model_name] = {
         "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
 
-async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, str]] = None) -> None:
+async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, str]] = None,
+                     config: Optional[Dict[str, Any]] = None) -> None:
     from llm_benchmarks.models import MODEL_MAPPING
     mapping = model_mapping if model_mapping is not None else MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 4
+
+    if config is None:
+        from llm_benchmarks.storage import load_config
+        config = load_config()
+
+    raw_effort = config.get("reasoning_effort", "high")
+    reasoning_effort: Optional[str] = None if raw_effort == "off" else raw_effort
 
     user_prompt = args.prompt
     text_mode = getattr(args, "text", False)
@@ -272,12 +284,17 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
 
     # ── Config display ─────────────────────────────────────────────────────
     w = _tw() - 4
+    if reasoning_effort:
+        reasoning_label = f"{S.HGRN}{reasoning_effort}{S.RST}"
+    else:
+        reasoning_label = f"{S.HRED}off{S.RST}"
     print()
     _box("", [
         f"{S.DIM}{'MODE':>8}{S.RST}  {mode_label}",
         f"{S.DIM}{'PROMPT':>8}{S.RST}  "
         f"{S.BOLD}{_truncate(user_prompt, w - 16)}{S.RST}",
         f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active",
+        f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}",
     ], w, heavy=True)
     print()
 
@@ -288,12 +305,23 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     output_dir_final = [None]
     t0 = time.monotonic()
 
+    history = load_history()
+    avg_tokens: Dict[str, float] = {}
+    for run in history.get("runs", []):
+        for name, res in run.get("models", {}).items():
+            if res.get("status") == "success":
+                tkns = (res.get("usage") or {}).get("total_tokens")
+                if tkns:
+                    avg_tokens.setdefault(name, []).append(tkns)  # type: ignore[arg-type]
+    avg_tokens = {k: sum(v) / len(v) for k, v in avg_tokens.items()}  # type: ignore[arg-type]
+
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector,
     ) as session:
         model_names = [name for name, _ in targets]
         tracker = ProgressTracker(
-            len(targets), results, pad=pad, model_names=model_names)
+            len(targets), results, pad=pad, model_names=model_names,
+            avg_tokens=avg_tokens)
         try:
             async def resolve_output_dir() -> str:
                 dir_name = await get_directory_name(
@@ -320,7 +348,7 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
                     process_model_text(
                         session, api_key, name, mid, full_prompt,
                         output_dir_task, semaphore, results, pad,
-                        tracker,
+                        tracker, reasoning_effort=reasoning_effort,
                     )
                     for name, mid in targets
                 ]
@@ -329,7 +357,7 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
                     process_model(
                         session, api_key, name, mid, full_prompt,
                         default_ext, output_dir_task, semaphore, results, pad,
-                        tracker,
+                        tracker, reasoning_effort=reasoning_effort,
                     )
                     for name, mid in targets
                 ]
@@ -402,7 +430,6 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
-    history = load_history()
     record_run(history, user_prompt, output_dir_final[0],
                total_time, results)
     display_analytics(history, compact=True, pad=pad)

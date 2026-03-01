@@ -22,6 +22,26 @@ class S:
     HCYN = "" if _NO_COLOR else "\033[96m"
     HWHT = "" if _NO_COLOR else "\033[97m"
 
+PHASE_GRADIENT: list[str] = [
+    "" if _NO_COLOR else "\033[38;2;30;65;187m",     # solid deep blue
+    "" if _NO_COLOR else "\033[38;2;40;105;204m",    # medium blue
+    "" if _NO_COLOR else "\033[38;2;55;150;221m",    # teal-blue
+    "" if _NO_COLOR else "\033[38;2;75;200;238m",    # muted cyan
+    "" if _NO_COLOR else "\033[38;2;102;255;255m",   # bright neon cyan
+]
+
+PULSE_GRADIENT: list[str] = [
+    "" if _NO_COLOR else "\033[38;2;0;40;10m",
+    "" if _NO_COLOR else "\033[38;2;0;80;20m",
+    "" if _NO_COLOR else "\033[38;2;0;130;35m",
+    "" if _NO_COLOR else "\033[38;2;0;180;45m",
+    "" if _NO_COLOR else "\033[38;2;0;220;60m",
+    "" if _NO_COLOR else "\033[38;2;40;250;85m",
+    "" if _NO_COLOR else "\033[38;2;110;255;150m",
+]
+
+PULSE_DIM: str = "" if _NO_COLOR else "\033[38;2;0;30;8m"
+
 _ok    = f"{S.HGRN}✓{S.RST}"
 _fail  = f"{S.HRED}✗{S.RST}"
 _wait  = f"{S.HYEL}●{S.RST}"
