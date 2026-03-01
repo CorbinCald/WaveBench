@@ -1,4 +1,5 @@
 import sys
+import math
 import time
 import asyncio
 from datetime import datetime
@@ -7,20 +8,94 @@ from typing import Dict, Any, Optional
 from llm_benchmarks.tui.styles import (
     S, _SPIN, format_duration, _tw, _truncate, _dot,
     _box_top, _box_row, _box_sep, _box_bot,
+    PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM,
 )
 
 BAR_WIDTH = 20
-_BAR_FILL = "█"
-_BAR_EMPTY = "░"
+
+_PULSE_CHARS: list = [
+    ['⠀'],                          # 0: blank
+    ['⡀', '⢀', '⣀'],              # 1: bottom row
+    ['⡄', '⢠', '⣤', '⣄'],        # 2: bottom 2 rows
+    ['⡆', '⢰', '⣶', '⣦'],        # 3: bottom 3 rows
+    ['⡇', '⢸', '⣏', '⣼'],        # 4: all 4 rows, partial
+    ['⣷', '⣾', '⣻', '⣯'],        # 5: near-full (7/8 dots)
+    ['⣿'],                          # 6: full block
+]
 
 
-def _render_token_bar(chars: int, scale: float) -> str:
-    """Return a green progress bar string of fixed *BAR_WIDTH* characters."""
+def _render_pulse_bar(chars: int, scale: float, tick: int) -> str:
+    """Animated braille pulse-wave progress bar.
+
+    Density builds from the bottom row of each braille cell upward,
+    creating a waveform that rises and falls as packets scroll right.
+    A density floor keeps the baseline alive between peaks.
+    """
     ratio = min(chars / max(scale, 1), 1.0)
     filled = round(ratio * BAR_WIDTH)
     empty = BAR_WIDTH - filled
-    return (f"{S.HGRN}{_BAR_FILL * filled}{S.RST}"
-            f"{S.DIM}{_BAR_EMPTY * empty}{S.RST}")
+
+    phase = tick * 0.35
+    parts: list[str] = []
+    prev_level = -1
+
+    densities: list[float] = []
+    for i in range(filled):
+        w1 = max(0.0, math.cos(i * 0.9 - phase)) ** 1.5
+        w2 = max(0.0, math.cos(i * 1.5 - phase * 0.7 + 1.5)) ** 1.8
+        d = min(1.0, w1 * 0.65 + w2 * 0.35 + 0.12)
+
+        edge = filled - 1 - i
+        if edge < 3 and filled > 4:
+            d = min(1.0, d + (3 - edge) * 0.2)
+        densities.append(d)
+
+    for i, d in enumerate(densities):
+        level = max(1, min(6, round(d * 6)))
+
+        if level >= 6:
+            prev_d = densities[i - 1] if i > 0 else 0.0
+            next_d = densities[i + 1] if i < filled - 1 else 0.0
+            if not (d > prev_d and d >= next_d):
+                level = 5
+
+        pool = _PULSE_CHARS[level]
+        ch = pool[(i + tick) % len(pool)]
+
+        if level != prev_level:
+            if prev_level >= 0:
+                parts.append(S.RST)
+            parts.append(PULSE_GRADIENT[level])
+            prev_level = level
+        parts.append(ch)
+
+    if filled:
+        parts.append(S.RST)
+
+    stray: list[str] = []
+    for i in range(empty):
+        pos = filled + i
+        prox = 1.0 - i / max(empty, 1)
+        scatter_val = (pos * 7 + tick * 3) % 17
+        if scatter_val < 2 + int(prox * 4):
+            level_val = (pos * 11 + tick * 5) % 11
+            if level_val < 1 and prox > 0.5:
+                sl = 3
+            elif level_val < 3 and prox > 0.2:
+                sl = 2
+            else:
+                sl = 1
+            pool = _PULSE_CHARS[sl]
+            stray.append(pool[(pos + tick) % len(pool)])
+        else:
+            stray.append('⠀')
+
+    if stray:
+        parts.append(PULSE_DIM)
+        parts.extend(stray)
+        parts.append(S.RST)
+
+    return ''.join(parts)
 
 
 class ProgressTracker:
@@ -34,9 +109,12 @@ class ProgressTracker:
     model plus a summary spinner line at the bottom.
     """
 
+    DEFAULT_AVG_TOKENS = 2000
+
     def __init__(self, total: int, results: Dict[str, Any],
                  pad: int = 16, label: str = "Generating",
-                 model_names: Optional[list] = None):
+                 model_names: Optional[list] = None,
+                 avg_tokens: Optional[Dict[str, float]] = None):
         self._total = total
         self._results = results
         self._label = label
@@ -50,6 +128,7 @@ class ProgressTracker:
         self._parsing: Dict[str, Dict[str, Any]] = {}
         self._drawn_lines = 0
         self._model_names = model_names or []
+        self._avg_tokens = avg_tokens or {}
 
     @property
     def is_running(self) -> bool:
@@ -73,7 +152,10 @@ class ProgressTracker:
 
     def mark_parsing(self, model_name: str) -> None:
         """Move a model into the parsing state (shown in animated section)."""
-        self._parsing[model_name] = {"start": time.monotonic()}
+        last_chars = 0
+        if model_name in self._active:
+            last_chars = self._active[model_name].get("chars", 0)
+        self._parsing[model_name] = {"start": time.monotonic(), "chars": last_chars}
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -105,11 +187,24 @@ class ProgressTracker:
     # ── internal rendering ────────────────────────────────────────────────
 
     @staticmethod
-    def _phase_boxes(filled: int, color: str) -> str:
-        """Render a 5-stage inline progress indicator (■■■□□)."""
+    def _phase_boxes(filled: int) -> str:
+        """Render a 5-stage inline progress indicator with uniform color that
+        shifts from deep blue → bright neon cyan as more boxes fill."""
         filled = max(0, min(filled, 5))
-        empty = 5 - filled
-        return f"{color}{'■' * filled}{S.RST}{S.DIM}{'□' * empty}{S.RST}"
+        color = PHASE_GRADIENT[filled - 1] if filled > 0 else ""
+        on = f"{color}{'■' * filled}{S.RST}" if filled else ""
+        off = f"{S.DIM}{'□' * (5 - filled)}{S.RST}" if filled < 5 else ""
+        return f"{on}{off}"
+
+    def _token_boxes(self, model_name: str, chars: int) -> str:
+        """Boxes based on token progress: each box = 20% of avg tokens."""
+        avg = self._avg_tokens.get(model_name, self.DEFAULT_AVG_TOKENS)
+        est_tokens = chars / 4
+        pct = min(est_tokens / max(avg, 1), 1.0)
+        filled = int(pct * 5)
+        if pct > 0 and filled == 0:
+            filled = 1
+        return self._phase_boxes(filled)
 
     def _clear_drawn(self) -> None:
         """Erase all previously drawn progress lines."""
@@ -137,7 +232,7 @@ class ProgressTracker:
                     mel = format_duration(
                         time.monotonic() - info["start"])
                     dots = "·" * (1 + (idx // 4) % 3)
-                    boxes = self._phase_boxes(5, S.HCYN)
+                    boxes = self._token_boxes(name, info.get("chars", 0))
                     buf.append(
                         f"  {boxes} "
                         f"{name:<{self._pad}}  "
@@ -146,16 +241,12 @@ class ProgressTracker:
                     lines += 1
 
                 if self._active:
-                    max_chars = max(
-                        m["chars"] for m in self._active.values())
-                    scale = max(max_chars * 1.3, 2000)
-
                     for name, info in self._active.items():
                         mel = format_duration(
                             time.monotonic() - info["start"])
                         if info["chars"] == 0:
                             dots = "·" * (1 + (idx // 4) % 3)
-                            boxes = self._phase_boxes(1, S.HYEL)
+                            boxes = self._token_boxes(name, 0)
                             buf.append(
                                 f"  {boxes} "
                                 f"{name:<{self._pad}}  "
@@ -180,18 +271,12 @@ class ProgressTracker:
                                     info["last_chars"] = info["chars"]
                                     info["last_rate_time"] = now
 
-                            ratio = min(
-                                info["chars"] / max(scale, 1), 1.0)
-                            if ratio < 0.33:
-                                stream_stage = 2
-                            elif ratio < 0.66:
-                                stream_stage = 3
-                            else:
-                                stream_stage = 4
-                            boxes = self._phase_boxes(
-                                stream_stage, S.HYEL)
-                            bar = _render_token_bar(
-                                info["chars"], scale)
+                            boxes = self._token_boxes(name, info["chars"])
+                            avg_tk = self._avg_tokens.get(
+                                name, self.DEFAULT_AVG_TOKENS)
+                            model_scale = avg_tk * 4
+                            bar = _render_pulse_bar(
+                                info["chars"], model_scale, idx)
                             est_tk = info["chars"] // 4
                             rate_s = ""
                             if info["smoothed_rate"] > 0:

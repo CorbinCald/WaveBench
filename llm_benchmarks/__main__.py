@@ -195,7 +195,7 @@ def main() -> None:
         print()
 
     try:
-        asyncio.run(main_async(args, api_key, model_mapping=selected_models))
+        asyncio.run(main_async(args, api_key, model_mapping=selected_models, config=config))
     except KeyboardInterrupt:
         print(f"\n\n  {S.DIM}Interrupted.{S.RST}\n")
 
