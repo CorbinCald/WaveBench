@@ -57,17 +57,23 @@ async def _resolve_max_tokens(
     session: aiohttp.ClientSession, api_key: str, model_id: str,
     prompt: str, fallback: int,
 ) -> int:
-    """Use model context_length and budget around prompt size."""
+    """Use model context_length and budget around prompt size.
+
+    The result is capped to MAX_OUTPUT_TOKENS_DEFAULT so we don't
+    request an absurdly large completion that exceeds credit budgets
+    (HTTP 402) or wastes context window.  Callers can still pass an
+    explicit *max_tokens* to override this cap.
+    """
     if model_id in _MODEL_CONTEXT_CACHE:
         context_limit = _MODEL_CONTEXT_CACHE[model_id]
     else:
         await _load_model_context_lengths(session, api_key)
         context_limit = _MODEL_CONTEXT_CACHE.get(model_id, fallback)
 
-    # Rough estimate: ~4 chars/token, plus a safety buffer for message framing.
     prompt_tokens_est = max(1, len(prompt) // 4)
     safety_buffer = 512
-    return max(1, context_limit - prompt_tokens_est - safety_buffer)
+    available = max(1, context_limit - prompt_tokens_est - safety_buffer)
+    return min(available, MAX_OUTPUT_TOKENS_DEFAULT)
 
 def _context_limit_from_error_text(err_text: str) -> Optional[int]:
     """Extract context limit from OpenRouter 400 text when present."""
@@ -79,6 +85,25 @@ def _context_limit_from_error_text(err_text: str) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return limit if limit > 0 else None
+
+def _credit_token_limit_from_error(err_text: str) -> Optional[int]:
+    """Extract the affordable token count from an OpenRouter 402 error.
+
+    Typical message: "You requested up to 128000 tokens, but can only
+    afford 24576 tokens."  We grab the *affordable* number so we can
+    retry with a lower max_tokens.
+    """
+    m = re.search(r"can(?:\s+only)?\s+(?:afford\s+)?(\d[\d,]*)\b", err_text)
+    if not m:
+        return None
+    try:
+        limit = int(m.group(1).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > 0 else None
+
+
+MAX_OUTPUT_TOKENS_DEFAULT = 32_000
 
 def load_api_key() -> Optional[str]:
     """Load API key from environment or .env file."""
@@ -99,6 +124,63 @@ def load_api_key() -> Optional[str]:
             print(f"    {_tri} {S.DIM}could not read .env: {exc}{S.RST}")
 
     return None
+
+
+def _reasoning_attempts(
+    model_id: str, effort: str, max_tokens: int,
+) -> List[Dict[str, Any]]:
+    """Build an ordered list of reasoning payload overrides to try.
+
+    Each entry is a dict to merge into the base request data.  When the
+    provider returns 400 the caller moves to the next entry.  Returns an
+    empty list for models known to never support reasoning.
+
+    The order is:
+      1. Provider-specific primary format (Anthropic enabled flag,
+         standard OpenRouter effort for everything else).
+      2. max_tokens-based reasoning (Anthropic / Gemini / Qwen style).
+      3. Simple ``enabled: true`` flag.
+      4. Top-level ``reasoning_effort`` (native provider APIs).
+    Duplicates are suppressed automatically.
+    """
+    lower = model_id.lower()
+
+    if "glm-4.7" in lower:
+        return []
+
+    is_anthropic = "anthropic/" in lower or "claude" in lower
+    is_mercury = "inception/" in lower or "mercury" in lower
+
+    seen: List[Dict[str, Any]] = []
+
+    def _add(extra: Dict[str, Any]) -> None:
+        if extra not in seen:
+            seen.append(extra)
+
+    if is_mercury:
+        # Mercury-2 accepts OpenRouter's reasoning.effort (low/medium/high)
+        # and Inception's native reasoning_summary param which gets passed
+        # through to the provider, producing more detailed chain-of-thought
+        # inline in the content.  Don't try max_tokens or enabled — they're
+        # no-ops for Mercury, and combining effort + max_tokens causes a 400.
+        _add({
+            "reasoning": {"effort": effort},
+            "reasoning_summary": True,
+        })
+        return seen
+
+    if is_anthropic:
+        _add({"reasoning": {"enabled": True}})
+    else:
+        _add({"reasoning": {"effort": effort}})
+
+    budget = max(1024, int(max_tokens * 0.8))
+    _add({"reasoning": {"max_tokens": budget}})
+    _add({"reasoning": {"enabled": True}})
+    _add({"reasoning_effort": effort})
+
+    return seen
+
 
 async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_id: str, prompt: str,
                            reasoning_effort: Optional[str] = "high", return_usage: bool = False,
@@ -129,57 +211,81 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
         "max_tokens": model_max_tokens,
     }
 
-    # Gemini 3 models require temperature = 1
     if "gemini-3" in model_id.lower():
         base_data["temperature"] = 1.0
 
-    # Attempt 1 — with reasoning (skip for unsupported models)
-    skip_reasoning = ("mimo" in model_id.lower()
-                      or "glm-4.7" in model_id.lower())
+    async def _retry_with_reduced_tokens(data: dict, affordable: int) -> Any:
+        """Re-issue *data* with max_tokens clamped to *affordable* (402 recovery)."""
+        if affordable >= data.get("max_tokens", 0):
+            return None
+        retry_data = {**data, "max_tokens": max(1, affordable)}
+        print(f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
+              f"max_tokens={retry_data['max_tokens']}{S.RST}")
+        async with session.post(
+            f"{API_URL}/chat/completions", headers=headers, json=retry_data,
+        ) as r:
+            if r.status == 200:
+                body = await r.json()
+                content = body['choices'][0]['message']['content']
+                usage = body.get('usage', {})
+                return (content, usage) if return_usage else content
+            t = await r.text()
+            raise RuntimeError(f"HTTP {r.status}: {t[:120].strip()}")
 
-    if reasoning_effort and not skip_reasoning:
-        if is_anthropic:
-            # Let Anthropic models use provider-managed/default thinking behavior.
-            reasoning_cfg = {"enabled": True}
-        else:
-            reasoning_cfg = {"effort": reasoning_effort}
-        data = {**base_data, "reasoning": reasoning_cfg}
-        try:
-            async with session.post(
-                f"{API_URL}/chat/completions",
-                headers=headers, json=data,
-            ) as resp:
-                if resp.status == 200:
-                    try:
-                        body = await resp.json()
-                        content = body['choices'][0]['message']['content']
-                        usage = body.get('usage', {})
-                        return (content, usage) if return_usage else content
-                    except (KeyError, IndexError, json.JSONDecodeError) as e:
-                        print(f"    {_tri} {S.DIM}parse error "
-                              f"({model_id}): {e}{S.RST}")
+    # Try reasoning formats in priority order; on 400 try the next format
+    if reasoning_effort:
+        attempts = _reasoning_attempts(model_id, reasoning_effort, model_max_tokens)
+        for attempt_idx, extra in enumerate(attempts):
+            data = {**base_data, **extra}
+            try:
+                async with session.post(
+                    f"{API_URL}/chat/completions",
+                    headers=headers, json=data,
+                ) as resp:
+                    if resp.status == 200:
+                        try:
+                            body = await resp.json()
+                            content = body['choices'][0]['message']['content']
+                            usage = body.get('usage', {})
+                            return (content, usage) if return_usage else content
+                        except (KeyError, IndexError, json.JSONDecodeError) as e:
+                            print(f"    {_tri} {S.DIM}parse error "
+                                  f"({model_id}): {e}{S.RST}")
+                    elif resp.status == 400:
+                        remaining = len(attempts) - attempt_idx - 1
+                        if remaining > 0:
+                            print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                                  f" — trying next format ({remaining} left)…{S.RST}")
+                            continue
+                        print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                              f" — retrying without…{S.RST}")
+                    elif resp.status == 402:
+                        text = await resp.text()
+                        affordable = _credit_token_limit_from_error(text)
+                        if affordable:
+                            result = await _retry_with_reduced_tokens(data, affordable)
+                            if result is not None:
+                                return result
+                        raise RuntimeError(f"HTTP 402: {text[:120].strip()}")
+                    else:
+                        text = await resp.text()
+                        print(f"    {_tri} {S.DIM}{model_id}: {resp.status}"
+                              f" — {text[:120].strip()}{S.RST}")
+                        if resp.status not in (429, 500, 502, 503, 504):
+                            raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: timeout{S.RST}")
+            except aiohttp.ClientError as exc:
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
+            except Exception as exc:
+                exc_str = str(exc) or exc.__class__.__name__
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
+                      f"{exc_str}{S.RST}")
+            break  # non-400 failures skip remaining reasoning formats
 
-                if resp.status == 400:
-                    print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                          f" — retrying without…{S.RST}")
-                else:
-                    text = await resp.text()
-                    print(f"    {_tri} {S.DIM}{model_id}: {resp.status}"
-                          f" — {text[:120].strip()}{S.RST}")
-                    if resp.status not in (429, 500, 502, 503, 504):
-                        raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
-        except asyncio.CancelledError:
-            raise
-        except asyncio.TimeoutError:
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: timeout{S.RST}")
-        except aiohttp.ClientError as exc:
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
-        except Exception as exc:
-            exc_str = str(exc) or exc.__class__.__name__
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
-                  f"{exc_str}{S.RST}")
-
-    # Attempt 2 — without reasoning
+    # Final attempt — without reasoning
     async with session.post(
         f"{API_URL}/chat/completions",
         headers=headers, json=base_data,
@@ -194,6 +300,15 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
                 raise RuntimeError(f"parse error: {e}")
 
         text = await resp.text()
+
+        if resp.status == 402:
+            affordable = _credit_token_limit_from_error(text)
+            if affordable:
+                result = await _retry_with_reduced_tokens(base_data, affordable)
+                if result is not None:
+                    return result
+            raise RuntimeError(f"HTTP 402: {text[:120].strip()}")
+
         if resp.status == 400:
             limit = _context_limit_from_error_text(text)
             if limit is not None:
@@ -306,48 +421,71 @@ async def call_model_streaming(
 
         return "".join(parts), usage, 200, ""
 
-    # Attempt 1 — with reasoning (skip for unsupported models)
-    skip_reasoning = ("mimo" in model_id.lower()
-                      or "glm-4.7" in model_id.lower())
+    async def _stream_retry_402(data: dict, err_text: str) -> Optional[Tuple[str, dict]]:
+        """On 402, parse affordable token limit and retry with reduced max_tokens."""
+        affordable = _credit_token_limit_from_error(err_text)
+        if not affordable or affordable >= data.get("max_tokens", 0):
+            return None
+        retry_data = {**data, "max_tokens": max(1, affordable)}
+        print(f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
+              f"max_tokens={retry_data['max_tokens']}{S.RST}")
+        content, usage, status, err = await _do_stream(retry_data)
+        if status == 200 and content:
+            return content, usage
+        return None
 
-    if reasoning_effort and not skip_reasoning:
-        if is_anthropic:
-            # Let Anthropic models use provider-managed/default thinking behavior.
-            reasoning_cfg: dict = {"enabled": True}
-        else:
-            reasoning_cfg = {"effort": reasoning_effort}
-        data = {**base_data, "reasoning": reasoning_cfg}
-        try:
-            content, usage, status, err = await _do_stream(data)
-            if status == 200:
-                if content:
-                    return content, usage
-                # empty content at 200 — fall through to retry without reasoning
-            elif status == 400:
-                print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                      f" — retrying without…{S.RST}")
-            else:
-                print(f"    {_tri} {S.DIM}{model_id}: {status}"
-                      f" — {err[:120].strip()}{S.RST}")
-                if status not in (429, 500, 502, 503, 504):
-                    raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
-        except (asyncio.CancelledError, RuntimeError):
-            raise
-        except asyncio.TimeoutError:
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: timeout{S.RST}")
-        except aiohttp.ClientError as exc:
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
-        except Exception as exc:
-            exc_str = str(exc) or exc.__class__.__name__
-            print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
-                  f"{exc_str}{S.RST}")
+    # Try reasoning formats in priority order; on 400 try the next format
+    if reasoning_effort:
+        attempts = _reasoning_attempts(model_id, reasoning_effort, model_max_tokens)
+        for attempt_idx, extra in enumerate(attempts):
+            data = {**base_data, **extra}
+            try:
+                content, usage, status, err = await _do_stream(data)
+                if status == 200:
+                    if content:
+                        return content, usage
+                    # empty content at 200 — stop trying reasoning formats
+                elif status == 400:
+                    remaining = len(attempts) - attempt_idx - 1
+                    if remaining > 0:
+                        print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                              f" — trying next format ({remaining} left)…{S.RST}")
+                        continue
+                    print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                          f" — retrying without…{S.RST}")
+                elif status == 402:
+                    result = await _stream_retry_402(data, err)
+                    if result is not None:
+                        return result
+                    raise RuntimeError(f"HTTP 402: {err[:120].strip()}")
+                else:
+                    print(f"    {_tri} {S.DIM}{model_id}: {status}"
+                          f" — {err[:120].strip()}{S.RST}")
+                    if status not in (429, 500, 502, 503, 504):
+                        raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
+            except (asyncio.CancelledError, RuntimeError):
+                raise
+            except asyncio.TimeoutError:
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: timeout{S.RST}")
+            except aiohttp.ClientError as exc:
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
+            except Exception as exc:
+                exc_str = str(exc) or exc.__class__.__name__
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
+                      f"{exc_str}{S.RST}")
+            break  # non-400 failures skip remaining reasoning formats
 
-    # Attempt 2 — without reasoning
+    # Final attempt — without reasoning
     content, usage, status, err = await _do_stream(base_data)
     if status == 200 and content:
         return content, usage
     if status == 200:
         raise RuntimeError("empty response")
+    if status == 402:
+        result = await _stream_retry_402(base_data, err)
+        if result is not None:
+            return result
+        raise RuntimeError(f"HTTP 402: {err[:120].strip()}")
     if status == 400:
         limit = _context_limit_from_error_text(err)
         if limit is not None:

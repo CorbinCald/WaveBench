@@ -14,7 +14,7 @@ from llm_benchmarks.tui.styles import S, _dot, _rule, _work
 from llm_benchmarks.api import fetch_top_models
 from llm_benchmarks.models import MODEL_MAPPING
 
-MODEL_MENU_LIMIT = 40
+MODEL_MENU_LIMIT = 100
 
 def _format_price(pricing_dict: Dict[str, Any]) -> str:
     """Format OpenRouter pricing as '$in/$out /M' (per million tokens)."""
@@ -54,6 +54,22 @@ def _fit(text: str, width: int) -> str:
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+def _filter_model_indices(items: List[Dict[str, Any]], query: str) -> List[int]:
+    """Return item indices matching the current search query."""
+    needle = query.strip().lower()
+    if not needle:
+        return list(range(len(items)))
+    return [
+        i for i, item in enumerate(items)
+        if needle in item['short'].lower() or needle in item['id'].lower()
+    ]
+
+
+def _is_printable_search_char(key: str) -> bool:
+    """Allow plain printable characters in search mode."""
+    return len(key) == 1 and key.isprintable() and key not in ("\t", "\r", "\n")
+
+
 def _read_key() -> str:
     """Read a single keypress from the terminal, handling escape sequences."""
     if not _HAS_TTY:
@@ -78,6 +94,12 @@ def _read_key() -> str:
             return 'space'
         if ch == '\x03':
             return 'ctrl-c'
+        if ch == '\x01':
+            return 'ctrl-a'
+        if ch == '\x0e':
+            return 'ctrl-n'
+        if ch in ('\x7f', '\b'):
+            return 'backspace'
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -129,6 +151,8 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
     cursor_pos = 0
     page_size = max(6, min(14, shutil.get_terminal_size((80, 24)).lines - 12))
     page_index = 0
+    search_query = ""
+    filtered_indices = list(range(len(items)))
     short_w = max(len(it['short']) for it in items) + 2
     id_w = max(len(it['id']) for it in items) + 2
 
@@ -145,16 +169,34 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
     last_menu_lines = page_size + 5
 
     def _page_count() -> int:
-        return max(1, (len(items) + page_size - 1) // page_size)
+        return max(1, (len(filtered_indices) + page_size - 1) // page_size)
 
     def _sync_page_from_cursor() -> None:
-        nonlocal page_index
-        page_index = cursor_pos // page_size
+        nonlocal cursor_pos, page_index
+        if not filtered_indices:
+            page_index = 0
+            return
+        if cursor_pos not in filtered_indices:
+            cursor_pos = filtered_indices[0]
+        page_index = filtered_indices.index(cursor_pos) // page_size
 
     def _page_bounds() -> Tuple[int, int]:
         start = page_index * page_size
-        end = min(start + page_size, len(items))
+        end = min(start + page_size, len(filtered_indices))
         return start, end
+
+    def _refresh_filter(preserve_current: bool = True) -> None:
+        nonlocal cursor_pos, page_index, filtered_indices
+        current = cursor_pos
+        filtered_indices = _filter_model_indices(items, search_query)
+        if not filtered_indices:
+            page_index = 0
+            return
+        if preserve_current and current in filtered_indices:
+            cursor_pos = current
+        else:
+            cursor_pos = filtered_indices[0]
+        _sync_page_from_cursor()
 
     def render(first: bool = False) -> None:
         nonlocal last_menu_lines
@@ -166,23 +208,28 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         hl = (f"  {S.DIM}↑↓{S.RST} navigate  {_dot}  "
               f"{S.DIM}Space{S.RST} toggle  {_dot}  "
               f"{S.DIM}Enter{S.RST} confirm  {_dot}  "
-              f"{S.DIM}a{S.RST} all  {_dot}  "
-              f"{S.DIM}n{S.RST} none  {_dot}  "
+              f"{S.DIM}^A{S.RST} all  {_dot}  "
+              f"{S.DIM}^N{S.RST} none  {_dot}  "
               f"{S.DIM}[ ]{S.RST} page  {_dot}  "
-              f"{S.DIM}q{S.RST} cancel")
+              f"{S.DIM}Esc{S.RST} cancel")
         sys.stdout.write(f"\033[K{hl}\n")
         tw = shutil.get_terminal_size((80, 24)).columns
         hl_vis = _vlen(hl)
         screen_lines += max(1, (hl_vis + tw - 1) // tw) if tw > 0 else 1
+
+        search_label = f"{S.HCYN}search{S.RST}" if search_query else "search"
+        query = search_query or f"{S.DIM}type to filter{S.RST}"
+        sys.stdout.write(f"\033[K  {search_label}: {query}\n")
+        screen_lines += 1
 
         sys.stdout.write(
             f"\033[K  {S.DIM}page {page_index + 1}/{pcount}{S.RST}\n")
         screen_lines += 1
 
         start, end = _page_bounds()
-        visible = items[start:end]
-        for off, item in enumerate(visible):
-            i = start + off
+        visible_indices = filtered_indices[start:end]
+        for i in visible_indices:
+            item = items[i]
             is_cur = i == cursor_pos
             chk = f"{S.HGRN}✓{S.RST}" if item['selected'] else " "
 
@@ -201,7 +248,13 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
                   if item['pricing'] else "")
             sys.stdout.write(
                 f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
-        for _ in range(page_size - len(visible)):
+        if not visible_indices:
+            sys.stdout.write(
+                f"\033[K  {S.DIM}No models match the current search.{S.RST}\n")
+            blank_rows = page_size - 1
+        else:
+            blank_rows = page_size - len(visible_indices)
+        for _ in range(blank_rows):
             sys.stdout.write("\033[K\n")
         screen_lines += page_size
 
@@ -209,7 +262,8 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         screen_lines += 1
         sel = sum(1 for it in items if it['selected'])
         sys.stdout.write(
-            f"\033[K  {S.BOLD}{sel}{S.RST} of {len(items)} selected\n")
+            f"\033[K  {S.BOLD}{sel}{S.RST} of {len(items)} selected  "
+            f"{S.DIM}{len(filtered_indices)} shown{S.RST}\n")
         screen_lines += 1
         last_menu_lines = screen_lines
         sys.stdout.flush()
@@ -219,35 +273,44 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         render(first=True)
         while True:
             key = _read_key()
-            if key in ('q', 'escape', 'ctrl-c'):
+            if key in ('escape', 'ctrl-c'):
                 sys.stdout.write("\033[?25h")
                 print()
                 return None
-            elif key == 'up':
-                cursor_pos = (cursor_pos - 1) % len(items)
+            elif key == 'up' and filtered_indices:
+                idx = filtered_indices.index(cursor_pos)
+                cursor_pos = filtered_indices[(idx - 1) % len(filtered_indices)]
                 _sync_page_from_cursor()
-            elif key == 'down':
-                cursor_pos = (cursor_pos + 1) % len(items)
+            elif key == 'down' and filtered_indices:
+                idx = filtered_indices.index(cursor_pos)
+                cursor_pos = filtered_indices[(idx + 1) % len(filtered_indices)]
                 _sync_page_from_cursor()
-            elif key == 'space':
+            elif key == 'space' and filtered_indices:
                 items[cursor_pos]['selected'] = \
                     not items[cursor_pos]['selected']
-            elif key in ('[', ']'):
+            elif key in ('[', ']') and filtered_indices:
                 pcount = _page_count()
                 if key == '[':
                     page_index = (page_index - 1) % pcount
                 else:
                     page_index = (page_index + 1) % pcount
                 start, end = _page_bounds()
-                cursor_pos = min(max(cursor_pos, start), end - 1)
+                cursor_pos = filtered_indices[start if start < end else 0]
             elif key == 'enter':
                 break
-            elif key == 'a':
+            elif key == 'ctrl-a':
                 for it in items:
                     it['selected'] = True
-            elif key == 'n':
+            elif key == 'ctrl-n':
                 for it in items:
                     it['selected'] = False
+            elif key == 'backspace':
+                if search_query:
+                    search_query = search_query[:-1]
+                    _refresh_filter(preserve_current=False)
+            elif _is_printable_search_char(key):
+                search_query += key
+                _refresh_filter(preserve_current=False)
             render()
     finally:
         sys.stdout.write("\033[?25h")
@@ -264,7 +327,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
 def run_model_selection(api_key: str, current_mapping: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
     """Fetch available models from OpenRouter and open the selector."""
     print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
-    available, pricing_lookup = fetch_top_models(api_key, count=60)
+    available, pricing_lookup = fetch_top_models(api_key, count=100)
     if not available:
         print(f"  {S.DIM}Could not fetch remote models — "
               f"showing local config only.{S.RST}")
@@ -336,6 +399,8 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     model_cursor = 0
     model_page_size = max(6, min(14, shutil.get_terminal_size((80, 24)).lines - 14))
     model_page = 0
+    model_search_query = ""
+    filtered_model_indices = list(range(len(model_items)))
     settings_cursor = 0
 
     if not model_items:
@@ -360,16 +425,35 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     last_rendered_lines = total_lines
 
     def _model_page_count() -> int:
-        return max(1, (len(model_items) + model_page_size - 1) // model_page_size)
+        return max(1, (len(filtered_model_indices) + model_page_size - 1) // model_page_size)
 
     def _sync_model_page_from_cursor() -> None:
-        nonlocal model_page
-        model_page = model_cursor // model_page_size
+        nonlocal model_cursor, model_page
+        if not filtered_model_indices:
+            model_page = 0
+            return
+        if model_cursor not in filtered_model_indices:
+            model_cursor = filtered_model_indices[0]
+        model_page = filtered_model_indices.index(model_cursor) // model_page_size
 
     def _model_page_bounds() -> Tuple[int, int]:
         start = model_page * model_page_size
-        end = min(start + model_page_size, len(model_items))
+        end = min(start + model_page_size, len(filtered_model_indices))
         return start, end
+
+    def _refresh_model_filter(preserve_current: bool = True) -> None:
+        nonlocal model_cursor, model_page, filtered_model_indices
+        current = model_cursor
+        filtered_model_indices = _filter_model_indices(
+            model_items, model_search_query)
+        if not filtered_model_indices:
+            model_page = 0
+            return
+        if preserve_current and current in filtered_model_indices:
+            model_cursor = current
+        else:
+            model_cursor = filtered_model_indices[0]
+        _sync_model_page_from_cursor()
 
     def render(first: bool = False) -> None:
         nonlocal last_rendered_lines
@@ -396,24 +480,30 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
               f"{S.DIM}Space{S.RST} toggle  {_dot}  "
               f"{S.DIM}Enter{S.RST} confirm")
         if active_tab == 0:
-            hl += (f"  {_dot}  {S.DIM}a{S.RST} all"
-                   f"  {_dot}  {S.DIM}n{S.RST} none"
+            hl += (f"  {_dot}  {S.DIM}^A{S.RST} all"
+                   f"  {_dot}  {S.DIM}^N{S.RST} none"
                    f"  {_dot}  {S.DIM}[ ]{S.RST} page")
-        hl += f"  {_dot}  {S.DIM}Tab{S.RST}/{S.DIM}q{S.RST} cancel"
+        hl += f"  {_dot}  {S.DIM}Tab{S.RST}/{S.DIM}Esc{S.RST} cancel"
         sys.stdout.write(f"\033[K  {hl}\n")
         tw = _tw()
         hl_visible_len = _vlen(f"  {hl}")
         screen_lines += max(1, (hl_visible_len + tw - 1) // tw) if tw > 0 else 1
 
-        sys.stdout.write("\033[K\n")
+        if active_tab == 0:
+            search_label = f"{S.HCYN}search{S.RST}" if model_search_query else "search"
+            query = model_search_query or f"{S.DIM}type to filter{S.RST}"
+            sys.stdout.write(f"\033[K  {search_label}: {query}\n")
+        else:
+            sys.stdout.write("\033[K\n")
         screen_lines += 1
 
         for row in range(content_height):
             if active_tab == 0:
                 start, end = _model_page_bounds()
                 if row < (end - start):
-                    item = model_items[start + row]
-                    is_cur = (start + row == model_cursor)
+                    item_idx = filtered_model_indices[start + row]
+                    item = model_items[item_idx]
+                    is_cur = (item_idx == model_cursor)
                     chk = f"{S.HGRN}✓{S.RST}" if item['selected'] else " "
                     sn = _fit(item['short'], short_w)
                     mi = _fit(item['id'], id_w)
@@ -429,6 +519,9 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                           if item['pricing'] else "")
                     sys.stdout.write(
                         f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
+                elif row == 0 and not filtered_model_indices:
+                    sys.stdout.write(
+                        f"\033[K  {S.DIM}No models match the current search.{S.RST}\n")
                 else:
                     sys.stdout.write("\033[K\n")
             else:
@@ -473,6 +566,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             sys.stdout.write(
                 f"\033[K  {S.BOLD}{sel}{S.RST} of "
                 f"{len(model_items)} selected  "
+                f"{S.DIM}{len(filtered_model_indices)} shown{S.RST}  "
                 f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}\n")
         else:
             defaults = {"auto_use_venv": True, "reasoning_effort": "high"}
@@ -492,7 +586,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         render(first=True)
         while True:
             key = _read_key()
-            if key in ('q', 'escape', 'ctrl-c', 'tab'):
+            if key in ('escape', 'ctrl-c', 'tab'):
                 sys.stdout.write("\033[?25h")
                 print()
                 return None, None
@@ -501,24 +595,28 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             elif key == 'right':
                 active_tab = (active_tab + 1) % len(tabs)
             elif key == 'up':
-                if active_tab == 0:
-                    model_cursor = (model_cursor - 1) % len(model_items)
+                if active_tab == 0 and filtered_model_indices:
+                    idx = filtered_model_indices.index(model_cursor)
+                    model_cursor = filtered_model_indices[
+                        (idx - 1) % len(filtered_model_indices)]
                     _sync_model_page_from_cursor()
-                elif settings_items:
+                elif active_tab != 0 and settings_items:
                     settings_cursor = ((settings_cursor - 1)
                                        % len(settings_items))
             elif key == 'down':
-                if active_tab == 0:
-                    model_cursor = (model_cursor + 1) % len(model_items)
+                if active_tab == 0 and filtered_model_indices:
+                    idx = filtered_model_indices.index(model_cursor)
+                    model_cursor = filtered_model_indices[
+                        (idx + 1) % len(filtered_model_indices)]
                     _sync_model_page_from_cursor()
-                elif settings_items:
+                elif active_tab != 0 and settings_items:
                     settings_cursor = ((settings_cursor + 1)
                                        % len(settings_items))
             elif key == 'space':
-                if active_tab == 0:
+                if active_tab == 0 and filtered_model_indices:
                     model_items[model_cursor]['selected'] = \
                         not model_items[model_cursor]['selected']
-                elif settings_items:
+                elif active_tab != 0 and settings_items:
                     item = settings_items[settings_cursor]
                     if item.get("type") == "cycle":
                         choices = item["choices"]
@@ -528,20 +626,27 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                         item['value'] = not item['value']
             elif key == 'enter':
                 break
-            elif key == 'a' and active_tab == 0:
+            elif key == 'ctrl-a' and active_tab == 0:
                 for it in model_items:
                     it['selected'] = True
-            elif key == 'n' and active_tab == 0:
+            elif key == 'ctrl-n' and active_tab == 0:
                 for it in model_items:
                     it['selected'] = False
-            elif key in ('[', ']') and active_tab == 0:
+            elif key in ('[', ']') and active_tab == 0 and filtered_model_indices:
                 pcount = _model_page_count()
                 if key == '[':
                     model_page = (model_page - 1) % pcount
                 else:
                     model_page = (model_page + 1) % pcount
                 start, end = _model_page_bounds()
-                model_cursor = min(max(model_cursor, start), end - 1)
+                model_cursor = filtered_model_indices[start if start < end else 0]
+            elif active_tab == 0 and key == 'backspace':
+                if model_search_query:
+                    model_search_query = model_search_query[:-1]
+                    _refresh_model_filter(preserve_current=False)
+            elif active_tab == 0 and _is_printable_search_char(key):
+                model_search_query += key
+                _refresh_model_filter(preserve_current=False)
             render()
     finally:
         sys.stdout.write("\033[?25h")
@@ -563,7 +668,7 @@ def run_config_menu(api_key: str, current_mapping: Optional[Dict[str, str]] = No
     """Fetch models from OpenRouter and open the tabbed config menu."""
     from llm_benchmarks.storage import load_config
     print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
-    available, pricing_lookup = fetch_top_models(api_key, count=60)
+    available, pricing_lookup = fetch_top_models(api_key, count=100)
     if not available:
         print(f"  {S.DIM}Could not fetch remote models — "
               f"showing local config only.{S.RST}")
