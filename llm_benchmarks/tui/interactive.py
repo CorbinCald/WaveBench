@@ -522,12 +522,6 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
 
     settings_items = [
         {
-            "key": "auto_use_venv",
-            "label": "Auto-activate virtual environment",
-            "value": current_config.get("auto_use_venv", True),
-            "type": "bool",
-        },
-        {
             "key": "reasoning_effort",
             "label": "Reasoning effort",
             "value": current_config.get("reasoning_effort", "high"),
@@ -713,8 +707,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 f"{S.DIM}{len(filtered_model_indices)} shown{S.RST}  "
                 f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}")
         else:
-            defaults = {"auto_use_venv": True, "reasoning_effort": "high",
-                        "analytics_sort": "runs"}
+            defaults = {"reasoning_effort": "high", "analytics_sort": "runs"}
             changed = any(
                 it["value"] != current_config.get(
                     it["key"], defaults.get(it["key"]))

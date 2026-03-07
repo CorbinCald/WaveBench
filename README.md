@@ -1,6 +1,6 @@
 # LLM Benchmark Generator
 
-A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send a single prompt to multiple models in parallel, compare their generated code or prose, and track lifetime performance analytics — all from an interactive TUI.
+A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send a single prompt to multiple models in parallel, compare their generated code or prose, and track lifetime performance analytics from your terminal.
 
 ## Prerequisites
 
@@ -64,7 +64,7 @@ llm-benchmarks --stats
 ## How It Works
 
 1. **Prompt** — You enter a description of what you want built (or answered).
-2. **Directory naming** — A fast model generates a short `snake_case` directory name from your prompt.
+2. **Directory naming** — A async LLM call generates a short `snake_case` directory name from your prompt.
 3. **Parallel execution** — All selected models are queried concurrently (up to 12 at a time) with streaming responses and a live progress display.
 4. **Parsing** — In code mode, responses are parsed to extract the code block and detect the file extension. In text mode, raw Markdown is saved directly.
 5. **Results** — A ranked leaderboard shows pass/fail status, file names, token counts, and timing for each model.
@@ -75,7 +75,7 @@ llm-benchmarks --stats
 The interactive config menu (`--config` or `c` at the mode prompt) has two tabs:
 
 - **Models** — Search, browse, and toggle models from the OpenRouter catalog. Models are scored and ranked by provider tier, pricing, recency, and capabilities.
-- **Settings** — Configure `reasoning_effort` (high / medium / low / off) and other options like `auto_use_venv`.
+- **Settings** — Configure `reasoning_effort` (high / medium / low / off) and other options like `analytics_sort`.
 
 Selections persist across runs in local JSON files.
 
