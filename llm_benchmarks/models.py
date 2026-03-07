@@ -44,6 +44,8 @@ def _model_score(m: dict) -> float:
     # Recency: bonus for new models, penalty for stale ones
     created = m.get("created") or 0
     age_days = max(0, (time.time() - created) / 86400)
+    if age_days <= 10:
+        score += 150 * (1 - age_days / 10)
     if age_days <= 30:
         score += 200 - age_days * 2.2
     else:
