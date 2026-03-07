@@ -31,13 +31,15 @@ PHASE_GRADIENT: list[str] = [
 ]
 
 PULSE_GRADIENT: list[str] = [
-    "" if _NO_COLOR else "\033[38;2;0;40;10m",
-    "" if _NO_COLOR else "\033[38;2;0;80;20m",
-    "" if _NO_COLOR else "\033[38;2;0;130;35m",
-    "" if _NO_COLOR else "\033[38;2;0;180;45m",
-    "" if _NO_COLOR else "\033[38;2;0;220;60m",
-    "" if _NO_COLOR else "\033[38;2;40;250;85m",
-    "" if _NO_COLOR else "\033[38;2;110;255;150m",
+    "" if _NO_COLOR else "\033[38;2;0;28;8m",
+    "" if _NO_COLOR else "\033[38;2;0;48;14m",
+    "" if _NO_COLOR else "\033[38;2;0;72;20m",
+    "" if _NO_COLOR else "\033[38;2;0;100;28m",
+    "" if _NO_COLOR else "\033[38;2;0;135;38m",
+    "" if _NO_COLOR else "\033[38;2;0;172;48m",
+    "" if _NO_COLOR else "\033[38;2;0;210;58m",
+    "" if _NO_COLOR else "\033[38;2;35;240;82m",
+    "" if _NO_COLOR else "\033[38;2;100;255;140m",
 ]
 
 PULSE_DIM: str = "" if _NO_COLOR else "\033[38;2;0;30;8m"

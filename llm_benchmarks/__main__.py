@@ -2,18 +2,19 @@ import argparse
 import sys
 import os
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, Future
 
 try:
     import readline
 except ImportError:
     readline = None  # type: ignore[assignment]
 
-from llm_benchmarks.api import load_api_key
+from llm_benchmarks.api import load_api_key, fetch_top_models
 from llm_benchmarks.models import MODEL_MAPPING
 from llm_benchmarks.storage import load_models, save_models, load_config, save_config, load_history, _history_path
 from llm_benchmarks.tui.styles import _rule, S, _ok, _fail
 from llm_benchmarks.tui.components import display_analytics
-from llm_benchmarks.tui.interactive import run_config_menu
+from llm_benchmarks.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape
 from llm_benchmarks.core import main_async
 
 QUERY_HISTORY_FILE = ".benchmark_query_history"
@@ -74,7 +75,9 @@ def main() -> None:
         print()
         _rule("LLM BENCHMARK", heavy=True)
         history = load_history()
-        display_analytics(history, compact=False)
+        cfg = load_config()
+        display_analytics(history, compact=False,
+                          sort_by=cfg.get("analytics_sort", "runs"))
         print()
         _rule(heavy=True)
         print()
@@ -97,9 +100,20 @@ def main() -> None:
         print(f"     Set via environment variable or .env file.\n")
         sys.exit(1)
 
+    # ── Pre-fetch models in background ────────────────────────────────────
+    _executor = ThreadPoolExecutor(max_workers=1)
+    models_future: Future = _executor.submit(fetch_top_models, api_key, 100)
+
     # ── Load persisted state ─────────────────────────────────────────────
     selected_models = load_models()
     config = load_config()
+
+    def _resolve_models_future() -> tuple:
+        """Block on the background fetch and return (available, pricing)."""
+        try:
+            return models_future.result(timeout=30)
+        except Exception:
+            return [], {}
 
     if args.config:
         print()
@@ -107,7 +121,8 @@ def main() -> None:
         print()
         new_models, new_config = run_config_menu(
             api_key, current_mapping=selected_models,
-            current_config=config)
+            current_config=config,
+            prefetched=_resolve_models_future())
         if new_models is None:
             print(f"  {S.DIM}Cancelled.{S.RST}\n")
             return
@@ -123,74 +138,107 @@ def main() -> None:
             _rule("LLM BENCHMARK", heavy=True)
             print()
 
-        # ── Mode selection (skip if --text was passed on CLI) ─────────
-        if not args.text:
-            def _print_mode_menu() -> None:
-                print(f"  {S.DIM}Select mode:{S.RST}  "
-                      f"{S.HCYN}[1]{S.RST} Code  "
-                      f"{S.HYEL}[2]{S.RST} Text")
-                active = (selected_models
-                          if selected_models is not None
-                          else MODEL_MAPPING)
-                print(f"  {S.DIM}{len(active)} models active{S.RST}  "
-                      f"{S.BLU}[c]{S.RST} config")
-            _print_mode_menu()
+        text_from_cli = args.text
 
-            while True:
-                try:
-                    mode_input = input(
-                        f"  \001{S.DIM}\002mode\001{S.RST}\002 "
-                        f"\001{S.HCYN}\002›\001{S.RST}\002 ").strip()
-                except (KeyboardInterrupt, EOFError):
-                    print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
-                    return
+        def _print_mode_menu() -> None:
+            active = (selected_models
+                      if selected_models is not None
+                      else MODEL_MAPPING)
+            print(f"  {S.DIM}Select mode:{S.RST}  "
+                  f"{S.HCYN}[1]{S.RST} Code  "
+                  f"{S.HYEL}[2]{S.RST} Text")
+            print(f"  {S.DIM}{len(active)} models active{S.RST}  "
+                  f"{S.BLU}[c]{S.RST} config")
 
-                if mode_input.lower() == "c":
-                    print()
-                    new_m, new_c = run_config_menu(
-                        api_key, current_mapping=selected_models,
-                        current_config=config)
-                    if new_m is not None:
-                        selected_models = new_m
-                        config = new_c
-                        save_models(selected_models)
-                        save_config(config)
-                    else:
-                        print(f"  {S.DIM}Cancelled — "
-                              f"keeping current config.{S.RST}")
-                    print()
-                    _print_mode_menu()
-                    continue
+        while True:
+            text_mode = text_from_cli
 
-                if mode_input == "2":
-                    args.text = True
-                break
+            # ── Mode selection (skip if --text was passed on CLI) ─────
+            if not text_from_cli:
+                _print_mode_menu()
+                mode_prompt = f"  {S.DIM}mode{S.RST} {S.HCYN}›{S.RST} "
+                sys.stdout.write(mode_prompt)
+                sys.stdout.flush()
+
+                mode_done = False
+                while not mode_done:
+                    key = _read_key()
+                    if key in ('tab', 'escape'):
+                        sys.stdout.write('\n')
+                        return
+                    if key == 'ctrl-c':
+                        print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
+                        return
+                    if key == 'c':
+                        sys.stdout.write('c\n')
+                        print()
+                        new_m, new_c = run_config_menu(
+                            api_key, current_mapping=selected_models,
+                            current_config=config,
+                            prefetched=_resolve_models_future())
+                        if new_m is not None:
+                            selected_models = new_m
+                            config = new_c
+                            save_models(selected_models)
+                            save_config(config)
+                        else:
+                            print(f"  {S.DIM}Cancelled — "
+                                  f"keeping current config.{S.RST}")
+                        print()
+                        _print_mode_menu()
+                        sys.stdout.write(mode_prompt)
+                        sys.stdout.flush()
+                        continue
+                    if key == '2':
+                        sys.stdout.write('2\n')
+                        text_mode = True
+                        mode_done = True
+                    elif key == '1':
+                        sys.stdout.write('1\n')
+                        mode_done = True
+                print()
+
+            # Show active models summary
+            active = (selected_models
+                      if selected_models is not None else MODEL_MAPPING)
+            names = list(active.keys())
+            summary = ", ".join(names[:6])
+            if len(names) > 6:
+                summary += f", … (+{len(names) - 6})"
+            print(f"  {S.DIM}{len(active)} models:{S.RST} {summary}")
             print()
 
-        # Show active models summary
-        active = (selected_models
-                  if selected_models is not None else MODEL_MAPPING)
-        names = list(active.keys())
-        summary = ", ".join(names[:6])
-        if len(names) > 6:
-            summary += f", … (+{len(names) - 6})"
-        print(f"  {S.DIM}{len(active)} models:{S.RST} {summary}")
-        print()
+            # ── Prompt input ──────────────────────────────────────────
+            try:
+                _load_query_history()
+                history_entries: list[str] = []
+                if readline:
+                    for i in range(readline.get_current_history_length()):
+                        entry = readline.get_history_item(i + 1)
+                        if entry:
+                            history_entries.append(entry)
 
-        try:
-            # \001 / \002 tell readline that enclosed chars are non-printing
-            # so cursor-position math stays correct with ANSI colours.
-            _load_query_history()
-            _rl_prompt = (f"  \001{S.HCYN}\002›\001{S.RST}\002 ")
-            args.prompt = input(_rl_prompt).strip()
-            if not args.prompt:
-                print(f"  {S.DIM}No prompt provided.{S.RST}\n")
+                rl_prompt = f"  {S.HCYN}›{S.RST} "
+                user_prompt = _read_line(rl_prompt, history=history_entries)
+
+                if not user_prompt.strip():
+                    print(f"  {S.DIM}No prompt provided.{S.RST}")
+                    print()
+                    continue
+                _save_query_history(user_prompt)
+            except _TabEscape:
+                if text_from_cli:
+                    return
+                print()
+                continue
+            except (KeyboardInterrupt, EOFError):
+                print(f"  {S.DIM}Interrupted.{S.RST}\n")
                 return
-            _save_query_history(args.prompt)
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
-            return
-        print()
+            print()
+
+            args.prompt = user_prompt.strip()
+            args.text = text_mode
+            break
     else:
         print()
 
