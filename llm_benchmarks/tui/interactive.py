@@ -10,7 +10,9 @@ try:
 except ImportError:
     _HAS_TTY = False
 
-from llm_benchmarks.tui.styles import S, _dot, _rule, _work
+from llm_benchmarks.tui.styles import (
+    S, _dot, _rule, _work, _tw, _vlen, _box_top, _box_row, _box_bot,
+)
 from llm_benchmarks.api import fetch_top_models
 from llm_benchmarks.models import MODEL_MAPPING
 
@@ -104,6 +106,144 @@ def _read_key() -> str:
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
+class _TabEscape(Exception):
+    """Raised when Tab or Escape is pressed to navigate back."""
+    pass
+
+
+def _redraw_input(prompt: str, buf: list, cursor: int) -> None:
+    """Redraw the input line and position the cursor."""
+    sys.stdout.write(f'\r{prompt}{"".join(buf)}\033[K')
+    back = len(buf) - cursor
+    if back > 0:
+        sys.stdout.write(f'\033[{back}D')
+    sys.stdout.flush()
+
+
+def _read_line(prompt: str, history: Optional[List[str]] = None) -> str:
+    """Read a line with basic editing and history.
+
+    Supports left/right, home/end, backspace/delete, Ctrl+A/E/K/U/W,
+    up/down for history, and raises *_TabEscape* on Tab or Escape.
+    """
+    if not _HAS_TTY:
+        return input(re.sub(r'\033\[[0-9;]*m', '', prompt))
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    buf: List[str] = []
+    cursor = 0
+    hist = list(history or [])
+    hist.append("")
+    hist_pos = len(hist) - 1
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+
+            if ch == '\x1b':
+                ch2 = sys.stdin.read(1)
+                if ch2 == '[':
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == 'A' and hist_pos > 0:
+                        hist[hist_pos] = ''.join(buf)
+                        hist_pos -= 1
+                        buf = list(hist[hist_pos])
+                        cursor = len(buf)
+                        _redraw_input(prompt, buf, cursor)
+                    elif ch3 == 'B' and hist_pos < len(hist) - 1:
+                        hist[hist_pos] = ''.join(buf)
+                        hist_pos += 1
+                        buf = list(hist[hist_pos])
+                        cursor = len(buf)
+                        _redraw_input(prompt, buf, cursor)
+                    elif ch3 == 'C' and cursor < len(buf):
+                        cursor += 1
+                        sys.stdout.write('\033[C')
+                        sys.stdout.flush()
+                    elif ch3 == 'D' and cursor > 0:
+                        cursor -= 1
+                        sys.stdout.write('\033[D')
+                        sys.stdout.flush()
+                    elif ch3 == 'H':
+                        cursor = 0
+                        _redraw_input(prompt, buf, cursor)
+                    elif ch3 == 'F':
+                        cursor = len(buf)
+                        _redraw_input(prompt, buf, cursor)
+                    elif ch3 in '345678':
+                        ch4 = sys.stdin.read(1)
+                        if ch3 == '3' and ch4 == '~' and cursor < len(buf):
+                            buf.pop(cursor)
+                            _redraw_input(prompt, buf, cursor)
+                else:
+                    raise _TabEscape()
+
+            elif ch == '\t':
+                raise _TabEscape()
+
+            elif ch in ('\r', '\n'):
+                sys.stdout.write('\r\n')
+                sys.stdout.flush()
+                return ''.join(buf)
+
+            elif ch == '\x03':
+                raise KeyboardInterrupt()
+
+            elif ch == '\x04' and not buf:
+                raise EOFError()
+
+            elif ch in ('\x7f', '\b') and cursor > 0:
+                buf.pop(cursor - 1)
+                cursor -= 1
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch == '\x01':
+                cursor = 0
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch == '\x05':
+                cursor = len(buf)
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch == '\x0b':
+                buf = buf[:cursor]
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch == '\x15':
+                buf = buf[cursor:]
+                cursor = 0
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch == '\x17':
+                while cursor > 0 and buf[cursor - 1] == ' ':
+                    buf.pop(cursor - 1)
+                    cursor -= 1
+                while cursor > 0 and buf[cursor - 1] != ' ':
+                    buf.pop(cursor - 1)
+                    cursor -= 1
+                _redraw_input(prompt, buf, cursor)
+
+            elif ch.isprintable():
+                buf.insert(cursor, ch)
+                cursor += 1
+                _redraw_input(prompt, buf, cursor)
+    except _TabEscape:
+        sys.stdout.write('\r\033[K')
+        sys.stdout.flush()
+        raise
+    except (KeyboardInterrupt, EOFError):
+        sys.stdout.write('\r\n')
+        sys.stdout.flush()
+        raise
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def interactive_model_menu(available_models: List[Dict[str, Any]], current_mapping: Dict[str, str],
                            pricing_lookup: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
     """Full-screen interactive model selector."""
@@ -165,7 +305,6 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         short_w = max(10, int(short_w * ratio))
         id_w = max(10, avail - short_w)
 
-    from llm_benchmarks.tui.styles import _vlen
     last_menu_lines = page_size + 5
 
     def _page_count() -> int:
@@ -273,7 +412,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         render(first=True)
         while True:
             key = _read_key()
-            if key in ('escape', 'ctrl-c'):
+            if key in ('escape', 'ctrl-c', 'tab'):
                 sys.stdout.write("\033[?25h")
                 print()
                 return None
@@ -379,6 +518,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         })
 
     REASONING_CHOICES = ["high", "medium", "low", "off"]
+    SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens"]
 
     settings_items = [
         {
@@ -393,6 +533,13 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             "value": current_config.get("reasoning_effort", "high"),
             "type": "cycle",
             "choices": REASONING_CHOICES,
+        },
+        {
+            "key": "analytics_sort",
+            "label": "Analytics sort",
+            "value": current_config.get("analytics_sort", "runs"),
+            "type": "cycle",
+            "choices": SORT_CHOICES,
         },
     ]
 
@@ -410,18 +557,16 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     short_w = max(len(it['short']) for it in model_items) + 2
     id_w = max(len(it['id']) for it in model_items) + 2
 
-    term_w = shutil.get_terminal_size((80, 24)).columns
     max_price_w = max((len(it['pricing']) for it in model_items if it['pricing']), default=0)
-    overhead = 9 + (2 + max_price_w if max_price_w else 0)
-    avail = max(24, term_w - overhead)
+    overhead = 7 + (2 + max_price_w if max_price_w else 0)
+    avail = max(24, (_tw() - 8) - overhead)
     if short_w + id_w > avail:
         ratio = avail / (short_w + id_w)
         short_w = max(10, int(short_w * ratio))
         id_w = max(10, avail - short_w)
 
-    from llm_benchmarks.tui.styles import _tw, _vlen
     content_height = max(model_page_size, len(settings_items))
-    total_lines = content_height + 6
+    total_lines = content_height + 8
     last_rendered_lines = total_lines
 
     def _model_page_count() -> int:
@@ -461,6 +606,13 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             sys.stdout.write(f"\033[{last_rendered_lines}A")
 
         screen_lines = 0
+        w = _tw() - 4
+
+        sys.stdout.write(f"{_box_top('Configuration', w)}\033[K\n")
+        screen_lines += 1
+
+        sys.stdout.write(f"{_box_row('', w)}\033[K\n")
+        screen_lines += 1
 
         tab_parts = []
         for i, name in enumerate(tabs):
@@ -468,33 +620,18 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 tab_parts.append(f"{S.BOLD}{S.HCYN}[{name}]{S.RST}")
             else:
                 tab_parts.append(f"{S.DIM} {name} {S.RST}")
-        sys.stdout.write(f"\033[K  {'   '.join(tab_parts)}\n")
-        screen_lines += 1
-
         sys.stdout.write(
-            f"\033[K  {S.DIM}{'─' * min(50, _tw() - 4)}{S.RST}\n")
+            f"{_box_row('   '.join(tab_parts), w)}\033[K\n")
         screen_lines += 1
 
-        hl = (f"{S.DIM}←→{S.RST} switch tab  {_dot}  "
-              f"{S.DIM}↑↓{S.RST} navigate  {_dot}  "
-              f"{S.DIM}Space{S.RST} toggle  {_dot}  "
-              f"{S.DIM}Enter{S.RST} confirm")
         if active_tab == 0:
-            hl += (f"  {_dot}  {S.DIM}^A{S.RST} all"
-                   f"  {_dot}  {S.DIM}^N{S.RST} none"
-                   f"  {_dot}  {S.DIM}[ ]{S.RST} page")
-        hl += f"  {_dot}  {S.DIM}Tab{S.RST}/{S.DIM}Esc{S.RST} cancel"
-        sys.stdout.write(f"\033[K  {hl}\n")
-        tw = _tw()
-        hl_visible_len = _vlen(f"  {hl}")
-        screen_lines += max(1, (hl_visible_len + tw - 1) // tw) if tw > 0 else 1
-
-        if active_tab == 0:
-            search_label = f"{S.HCYN}search{S.RST}" if model_search_query else "search"
+            search_label = (f"{S.HCYN}search{S.RST}"
+                            if model_search_query else "search")
             query = model_search_query or f"{S.DIM}type to filter{S.RST}"
-            sys.stdout.write(f"\033[K  {search_label}: {query}\n")
+            sys.stdout.write(
+                f"{_box_row(f'{search_label}: {query}', w)}\033[K\n")
         else:
-            sys.stdout.write("\033[K\n")
+            sys.stdout.write(f"{_box_row('', w)}\033[K\n")
         screen_lines += 1
 
         for row in range(content_height):
@@ -518,27 +655,33 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     ps = (f"  {S.DIM}{item['pricing']}{S.RST}"
                           if item['pricing'] else "")
                     sys.stdout.write(
-                        f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
+                        f"{_box_row(f'{mk} [{chk}] {ns} {ids}{ps}', w)}"
+                        f"\033[K\n")
                 elif row == 0 and not filtered_model_indices:
                     sys.stdout.write(
-                        f"\033[K  {S.DIM}No models match the current search.{S.RST}\n")
+                        f"{_box_row(f'{S.DIM}No models match the current search.{S.RST}', w)}"
+                        f"\033[K\n")
                 else:
-                    sys.stdout.write("\033[K\n")
+                    sys.stdout.write(f"{_box_row('', w)}\033[K\n")
             else:
                 if row < len(settings_items):
                     item = settings_items[row]
                     is_cur = (row == settings_cursor)
                     if item.get("type") == "cycle":
                         val = item["value"]
-                        if val == "off":
-                            val_s = f"{S.HRED}{val}{S.RST}"
-                            chk = " "
-                        elif val == "high":
-                            val_s = f"{S.HGRN}{val}{S.RST}"
-                            chk = f"{S.HGRN}✓{S.RST}"
+                        if item.get("key") == "reasoning_effort":
+                            if val == "off":
+                                val_s = f"{S.HRED}{val}{S.RST}"
+                                chk = " "
+                            elif val == "high":
+                                val_s = f"{S.HGRN}{val}{S.RST}"
+                                chk = f"{S.HGRN}✓{S.RST}"
+                            else:
+                                val_s = f"{S.HYEL}{val}{S.RST}"
+                                chk = f"{S.HYEL}~{S.RST}"
                         else:
-                            val_s = f"{S.HYEL}{val}{S.RST}"
-                            chk = f"{S.HYEL}~{S.RST}"
+                            val_s = f"{S.HCYN}{val}{S.RST}"
+                            chk = f"{S.HCYN}✓{S.RST}"
                     else:
                         val_s = (f"{S.HGRN}ON{S.RST}" if item["value"]
                                  else f"{S.HRED}OFF{S.RST}")
@@ -551,33 +694,48 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                         mk = " "
                         label = item['label']
                     sys.stdout.write(
-                        f"\033[K  {mk} [{chk}] {label}  {val_s}\n")
+                        f"{_box_row(f'{mk} [{chk}] {label}  {val_s}', w)}"
+                        f"\033[K\n")
                 else:
-                    sys.stdout.write("\033[K\n")
+                    sys.stdout.write(f"{_box_row('', w)}\033[K\n")
 
         screen_lines += content_height
 
-        sys.stdout.write("\033[K\n")
+        sys.stdout.write(f"{_box_row('', w)}\033[K\n")
         screen_lines += 1
 
         if active_tab == 0:
             sel = sum(1 for it in model_items if it['selected'])
             pcount = _model_page_count()
-            sys.stdout.write(
-                f"\033[K  {S.BOLD}{sel}{S.RST} of "
+            status = (
+                f"{S.BOLD}{sel}{S.RST} of "
                 f"{len(model_items)} selected  "
                 f"{S.DIM}{len(filtered_model_indices)} shown{S.RST}  "
-                f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}\n")
+                f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}")
         else:
-            defaults = {"auto_use_venv": True, "reasoning_effort": "high"}
+            defaults = {"auto_use_venv": True, "reasoning_effort": "high",
+                        "analytics_sort": "runs"}
             changed = any(
-                it["value"] != current_config.get(it["key"], defaults.get(it["key"]))
+                it["value"] != current_config.get(
+                    it["key"], defaults.get(it["key"]))
                 for it in settings_items)
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
-            sys.stdout.write(
-                f"\033[K  {S.DIM}{len(settings_items)} "
-                f"setting(s){S.RST}{tag}\n")
+            status = (f"{S.DIM}{len(settings_items)} "
+                      f"setting(s){S.RST}{tag}")
+        sys.stdout.write(f"{_box_row(status, w)}\033[K\n")
         screen_lines += 1
+
+        hl_parts = ["←→ tab", "↑↓", "Space", "Enter"]
+        if active_tab == 0:
+            hl_parts.extend(["^A all", "^N none", "[ ] page"])
+        hl_parts.append("Esc")
+        hl = f"{S.DIM}{' · '.join(hl_parts)}{S.RST}"
+        sys.stdout.write(f"{_box_row(hl, w)}\033[K\n")
+        screen_lines += 1
+
+        sys.stdout.write(f"{_box_bot(w)}\033[K\n")
+        screen_lines += 1
+
         last_rendered_lines = screen_lines
         sys.stdout.flush()
 
@@ -664,16 +822,22 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     print()
     return selected, new_config
 
-def run_config_menu(api_key: str, current_mapping: Optional[Dict[str, str]] = None, current_config: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, Any]]]:
-    """Fetch models from OpenRouter and open the tabbed config menu."""
+def run_config_menu(api_key: str, current_mapping: Optional[Dict[str, str]] = None, current_config: Optional[Dict[str, Any]] = None,
+                    prefetched: Optional[Tuple[List[Dict[str, Any]], Dict[str, Any]]] = None) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, Any]]]:
+    """Fetch models from OpenRouter and open the tabbed config menu.
+
+    If *prefetched* is supplied as ``(available, pricing_lookup)`` the
+    network call is skipped entirely.
+    """
     from llm_benchmarks.storage import load_config
-    print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
-    available, pricing_lookup = fetch_top_models(api_key, count=100)
+    if prefetched is not None:
+        available, pricing_lookup = prefetched
+    else:
+        print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
+        available, pricing_lookup = fetch_top_models(api_key, count=100)
     if not available:
         print(f"  {S.DIM}Could not fetch remote models — "
               f"showing local config only.{S.RST}")
-    print()
-    _rule("Configuration")
     print()
     if current_mapping is None:
         current_mapping = MODEL_MAPPING

@@ -79,33 +79,37 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
 
     except asyncio.CancelledError:
         elapsed = time.monotonic() - start
-        print(f"  {_skip} {model_name:<{pad}}  "
-              f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_skip} {model_name:<{pad}}  "
+                  f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "cancelled", "time_s": elapsed, "file": None, "usage": {}}
         return
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - start
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}timeout{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}timeout{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
     except aiohttp.ClientError as exc:
         elapsed = time.monotonic() - start
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}API error: {exc}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}API error: {exc}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
     except Exception as exc:
         elapsed = time.monotonic() - start
         exc_str = str(exc) or exc.__class__.__name__
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}{exc_str}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}{exc_str}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
@@ -116,9 +120,10 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
     elapsed = time.monotonic() - start
 
     if not content:
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}no response{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}no response{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
@@ -145,16 +150,18 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
             fh.write(parsed["code"])
 
         elapsed = time.monotonic() - start
-        print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
-              f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
+                  f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
     else:
         elapsed = time.monotonic() - start
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}parse failed{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}parse failed{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": usage}
 
@@ -188,33 +195,37 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
 
     except asyncio.CancelledError:
         elapsed = time.monotonic() - start
-        print(f"  {_skip} {model_name:<{pad}}  "
-              f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_skip} {model_name:<{pad}}  "
+                  f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "cancelled", "time_s": elapsed, "file": None, "usage": {}}
         return
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - start
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}timeout{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}timeout{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
     except aiohttp.ClientError as exc:
         elapsed = time.monotonic() - start
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}API error: {exc}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}API error: {exc}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
     except Exception as exc:
         elapsed = time.monotonic() - start
         exc_str = str(exc) or exc.__class__.__name__
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}{exc_str}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}{exc_str}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
@@ -225,9 +236,10 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
     elapsed = time.monotonic() - start
 
     if not content:
-        print(f"  {_fail} {model_name:<{pad}}  "
-              f"{S.RED}no response{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        if not registered:
+            print(f"  {_fail} {model_name:<{pad}}  "
+                  f"{S.RED}no response{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
         results[model_name] = {
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
@@ -240,9 +252,10 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
         fh.write(content)
 
     elapsed = time.monotonic() - start
-    print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
-          f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
-          f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+    if not registered:
+        print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
+              f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
+              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
     results[model_name] = {
         "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
 
@@ -337,7 +350,7 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
                         fh.write(user_prompt)
 
                 output_dir_final[0] = out
-                print(f"  {S.DIM}{'OUTPUT':>8}{S.RST}  {out}")
+                tracker.set_output_dir(out)
                 return out
 
             output_dir_task = asyncio.create_task(resolve_output_dir())
@@ -376,61 +389,72 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
 
     # ── Run results ────────────────────────────────────────────────────────
     total_time = time.monotonic() - t0
-    ok   = sum(1 for v in results.values() if v["status"] == "success")
-    fail = sum(1 for v in results.values() if v["status"] == "failed")
-    canc = sum(1 for v in results.values() if v["status"] == "cancelled")
 
-    inner_w = w - 4
+    if not tracker.rendered_final:
+        ok   = sum(1 for v in results.values() if v["status"] == "success")
+        fail = sum(1 for v in results.values() if v["status"] == "failed")
+        canc = sum(1 for v in results.values() if v["status"] == "cancelled")
+        inner_w = w - 4
 
-    print()
-    print(_box_top("Run Results", w))
-    print(_box_row("", w))
+        print()
+        print(_box_top("Run Results", w))
+        if output_dir_final[0]:
+            out_path = output_dir_final[0]
+            max_path = inner_w - 10
+            if len(out_path) > max_path:
+                out_path = "…" + out_path[-(max_path - 1):]
+            print(_box_row(
+                f"{S.DIM}{'OUTPUT':>8}  {out_path}{S.RST}", w))
+        print(_box_row("", w))
 
-    # Ranked leaderboard — successes first (fastest wins), then failures
-    def _rank_key(item: Any) -> Any:
-        _, v = item
-        order = {"success": 0, "failed": 1, "cancelled": 2}
-        return (order.get(v["status"], 3), v["time_s"])
+        def _rank_key(item: Any) -> Any:
+            _, v = item
+            order = {"success": 0, "failed": 1, "cancelled": 2}
+            return (order.get(v["status"], 3), v["time_s"])
 
-    for i, (name, info) in enumerate(
-        sorted(results.items(), key=_rank_key), 1
-    ):
-        st = info["status"]
-        t = format_duration(info["time_s"])
-
-        if st == "success":
-            sym = _ok
-            usage = info.get("usage", {})
-            tokens = usage.get("total_tokens")
-            if tokens:
-                detail = f"saved {_arrow} {S.GRN}{info['file']}{S.RST}  {S.DIM}{tokens:,} tk{S.RST}"
+        for i, (name, info) in enumerate(
+            sorted(results.items(), key=_rank_key), 1
+        ):
+            st = info["status"]
+            t = format_duration(info["time_s"])
+            if st == "success":
+                sym = _ok
+                usage_d = info.get("usage", {})
+                tokens = usage_d.get("total_tokens")
+                fname = info['file']
+                tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+            elif st == "cancelled":
+                sym = _skip
+                detail = f"{S.DIM}cancelled{S.RST}"
             else:
-                detail = f"saved {_arrow} {S.GRN}{info['file']}{S.RST}"
-        elif st == "cancelled":
-            sym = _skip
-            detail = f"{S.DIM}cancelled{S.RST}"
-        else:
-            sym = _fail
-            detail = f"{S.RED}failed{S.RST}"
+                sym = _fail
+                detail = f"{S.RED}failed{S.RST}"
+            rank = f"{S.DIM}{i:>2}.{S.RST}"
+            content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
+            if st == "success" and _vlen(content) + 2 + len(t) > inner_w:
+                overflow = _vlen(content) + 2 + len(t) - inner_w
+                max_fname = max(8, len(fname) - overflow)
+                fname = _truncate(fname, max_fname)
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+                content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
+            gap = max(inner_w - _vlen(content) - len(t), 2)
+            print(_box_row(
+                f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
 
-        rank = f"{S.DIM}{i:>2}.{S.RST}"
-        content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
-        gap = max(inner_w - _vlen(content) - len(t), 2)
-        print(_box_row(
-            f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
-
-    print(_box_row("", w))
-    parts = []
-    if ok:   parts.append(f"{S.HGRN}{ok} passed{S.RST}")
-    if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
-    if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
-    parts.append(f"{format_duration(total_time)} total")
-    sep = f" {_dot} "
-    print(_box_row(sep.join(parts), w))
-    print(_box_bot(w))
+        print(_box_row("", w))
+        parts: list[str] = []
+        if ok:   parts.append(f"{S.HGRN}{ok} passed{S.RST}")
+        if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
+        if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
+        parts.append(f"{format_duration(total_time)} total")
+        sep = f" {_dot} "
+        print(_box_row(sep.join(parts), w))
+        print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
     record_run(history, user_prompt, output_dir_final[0],
                total_time, results)
-    display_analytics(history, compact=True, pad=pad)
+    display_analytics(history, compact=True, pad=pad,
+                      sort_by=config.get("analytics_sort", "runs"))
     print()

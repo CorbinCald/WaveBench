@@ -7,59 +7,69 @@ from typing import Dict, Any, Optional
 
 from llm_benchmarks.tui.styles import (
     S, _SPIN, format_duration, _tw, _truncate, _dot,
+    _ok, _fail, _skip, _arrow, _rpad, _vlen,
     _box_top, _box_row, _box_sep, _box_bot,
     PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM,
 )
 
 BAR_WIDTH = 20
 
-_PULSE_CHARS: list = [
-    ['⠀'],                          # 0: blank
-    ['⡀', '⢀', '⣀'],              # 1: bottom row
-    ['⡄', '⢠', '⣤', '⣄'],        # 2: bottom 2 rows
-    ['⡆', '⢰', '⣶', '⣦'],        # 3: bottom 3 rows
-    ['⡇', '⢸', '⣏', '⣼'],        # 4: all 4 rows, partial
-    ['⣷', '⣾', '⣻', '⣯'],        # 5: near-full (7/8 dots)
-    ['⣿'],                          # 6: full block
+_WAVE_CHARS: list = [
+    ['⠀'],                          # 0: empty
+    ['⡀', '⢀'],                    # 1: single bottom dot
+    ['⣀'],                          # 2: full bottom row
+    ['⣄', '⣠'],                    # 3: bottom row + half of row 3
+    ['⣤'],                          # 4: bottom 2 rows
+    ['⣦', '⣴'],                    # 5: bottom 2 rows + half of row 2
+    ['⣶'],                          # 6: bottom 3 rows
+    ['⣷', '⣾'],                    # 7: bottom 3 rows + half of top
+    ['⣿'],                          # 8: full block
 ]
 
 
-def _render_pulse_bar(chars: int, scale: float, tick: int) -> str:
-    """Animated braille pulse-wave progress bar.
+def _title_wave(tick: int, width: int = 5) -> str:
+    """Animated braille wave for the 'Generating' box title."""
+    parts: list[str] = []
+    for i in range(width):
+        val = math.sin(tick * 0.15 - i * 0.7) * 0.5 + 0.5
+        level = max(1, min(8, round(val * 8)))
+        pool = _WAVE_CHARS[level]
+        parts.append(pool[(i + tick) % len(pool)])
+    return ''.join(parts)
 
-    Density builds from the bottom row of each braille cell upward,
-    creating a waveform that rises and falls as packets scroll right.
-    A density floor keeps the baseline alive between peaks.
+
+def _render_pulse_bar(chars: int, scale: float, tick: int,
+                      phase: float = 0.0) -> str:
+    """Animated braille wave progress bar.
+
+    Height builds from the bottom row of each braille cell upward
+    following a sine wave that scrolls right.  *phase* is accumulated
+    externally (driven by token rate) so scroll speed tracks throughput.
+    Amplitude scales with token progress so the wave grows as output fills.
     """
     ratio = min(chars / max(scale, 1), 1.0)
     filled = round(ratio * BAR_WIDTH)
     empty = BAR_WIDTH - filled
 
-    phase = tick * 0.35
+    t = tick * 0.008
+    bandwidth = 0.70 + 0.15 * math.sin(t * 2.3 + 1.0)
+    amplitude = (0.35 + 0.65 * ratio) * (0.92 + 0.08 * math.sin(t * 1.7 + 2.0))
     parts: list[str] = []
     prev_level = -1
 
-    densities: list[float] = []
     for i in range(filled):
-        w1 = max(0.0, math.cos(i * 0.9 - phase)) ** 1.5
-        w2 = max(0.0, math.cos(i * 1.5 - phase * 0.7 + 1.5)) ** 1.8
-        d = min(1.0, w1 * 0.65 + w2 * 0.35 + 0.12)
+        w = math.sin(i * bandwidth - phase)
+        w2 = math.sin(i * bandwidth * 1.8 - phase * 0.6 + 1.2) * 0.25
+        val = max(0.0, min(1.0, (w + w2) * 0.5 + 0.5)) * amplitude
+        val = max(0.12, val)
 
         edge = filled - 1 - i
         if edge < 3 and filled > 4:
-            d = min(1.0, d + (3 - edge) * 0.2)
-        densities.append(d)
+            val = min(1.0, val + (3 - edge) * 0.15)
 
-    for i, d in enumerate(densities):
-        level = max(1, min(6, round(d * 6)))
+        level = max(1, min(8, round(val * 8)))
 
-        if level >= 6:
-            prev_d = densities[i - 1] if i > 0 else 0.0
-            next_d = densities[i + 1] if i < filled - 1 else 0.0
-            if not (d > prev_d and d >= next_d):
-                level = 5
-
-        pool = _PULSE_CHARS[level]
+        pool = _WAVE_CHARS[level]
         ch = pool[(i + tick) % len(pool)]
 
         if level != prev_level:
@@ -85,7 +95,7 @@ def _render_pulse_bar(chars: int, scale: float, tick: int) -> str:
                 sl = 2
             else:
                 sl = 1
-            pool = _PULSE_CHARS[sl]
+            pool = _WAVE_CHARS[sl]
             stray.append(pool[(pos + tick) % len(pool)])
         else:
             stray.append('⠀')
@@ -126,13 +136,23 @@ class ProgressTracker:
         self._original_print = None
         self._active: Dict[str, Dict[str, Any]] = {}
         self._parsing: Dict[str, Dict[str, Any]] = {}
+        self._phases: Dict[str, float] = {}
         self._drawn_lines = 0
         self._model_names = model_names or []
         self._avg_tokens = avg_tokens or {}
+        self._output_dir: Optional[str] = None
+        self._rendered = False
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def rendered_final(self) -> bool:
+        return self._rendered
+
+    def set_output_dir(self, path: str) -> None:
+        self._output_dir = path
 
     def register(self, model_name: str) -> None:
         """Mark a model as actively streaming."""
@@ -140,6 +160,7 @@ class ProgressTracker:
             "chars": 0, "start": time.monotonic(),
             "last_chars": 0, "last_rate_time": 0.0, "smoothed_rate": 0.0,
         }
+        self._phases[model_name] = 0.0
 
     def update(self, model_name: str, chars: int) -> None:
         """Update the character count for an active model."""
@@ -149,6 +170,7 @@ class ProgressTracker:
     def unregister(self, model_name: str) -> None:
         """Remove a model from the active set."""
         self._active.pop(model_name, None)
+        self._phases.pop(model_name, None)
 
     def mark_parsing(self, model_name: str) -> None:
         """Move a model into the parsing state (shown in animated section)."""
@@ -180,7 +202,7 @@ class ProgressTracker:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        self._clear_drawn()
+        self._render_final()
         sys.stdout.flush()
         self._uninstall_hook()
 
@@ -215,12 +237,100 @@ class ProgressTracker:
         sys.stdout.write("\r\033[J")
         self._drawn_lines = 0
 
+    def _format_output_dir(self, inner_w: int) -> Optional[str]:
+        if not self._output_dir:
+            return None
+        out = self._output_dir
+        max_path = inner_w - 10
+        if len(out) > max_path:
+            out = "…" + out[-(max_path - 1):]
+        return f"{S.DIM}{'OUTPUT':>8}  {out}{S.RST}"
+
+    def _format_result_row(self, name: str, info: Dict[str, Any],
+                           rank: int, inner_w: int) -> str:
+        st = info.get("status", "failed")
+        t = format_duration(info.get("time_s", 0))
+        if st == "success":
+            sym = _ok
+            usage = info.get("usage", {})
+            tokens = usage.get("total_tokens")
+            fname = info.get("file", "")
+            tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+        elif st == "cancelled":
+            sym = _skip
+            detail = f"{S.DIM}cancelled{S.RST}"
+            tk_part = ""
+            fname = ""
+        else:
+            sym = _fail
+            detail = f"{S.RED}failed{S.RST}"
+            tk_part = ""
+            fname = ""
+        rank_s = f"{S.DIM}{rank:>2}.{S.RST}"
+        content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
+        if st == "success" and _vlen(content) + 2 + len(t) > inner_w:
+            overflow = _vlen(content) + 2 + len(t) - inner_w
+            max_fname = max(8, len(fname) - overflow)
+            fname = _truncate(fname, max_fname)
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+            content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
+        gap = max(inner_w - _vlen(content) - len(t), 2)
+        return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
+
+    def _render_final(self) -> None:
+        """Render the completed Run Results box (permanent output)."""
+        self._clear_drawn()
+        w = _tw() - 4
+        inner_w = w - 4
+        total_time = time.monotonic() - self._start
+
+        buf: list[str] = []
+        buf.append(_box_top("Run Results", w))
+        od = self._format_output_dir(inner_w)
+        if od:
+            buf.append(_box_row(od, w))
+        buf.append(_box_row("", w))
+
+        def _rank_key(item: Any) -> Any:
+            _, v = item
+            order = {"success": 0, "failed": 1, "cancelled": 2}
+            return (order.get(v.get("status", "failed"), 3),
+                    v.get("time_s", 0))
+
+        for i, (name, info) in enumerate(
+            sorted(self._results.items(), key=_rank_key), 1
+        ):
+            buf.append(_box_row(
+                self._format_result_row(name, info, i, inner_w), w))
+
+        buf.append(_box_row("", w))
+        ok = sum(1 for v in self._results.values()
+                 if v.get("status") == "success")
+        fail = sum(1 for v in self._results.values()
+                   if v.get("status") == "failed")
+        canc = sum(1 for v in self._results.values()
+                   if v.get("status") == "cancelled")
+        parts: list[str] = []
+        if ok:   parts.append(f"{S.HGRN}{ok} passed{S.RST}")
+        if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
+        if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
+        parts.append(f"{format_duration(total_time)} total")
+        sep = f" {_dot} "
+        buf.append(_box_row(sep.join(parts), w))
+        buf.append(_box_bot(w))
+
+        sys.stdout.write('\n'.join(buf) + '\n')
+        self._rendered = True
+
     async def _animate(self) -> None:
         idx = 0
         try:
             while self._running:
                 self._clear_drawn()
 
+                w = _tw() - 4
+                inner_w = w - 4
                 done = len(self._results)
                 elapsed = format_duration(time.monotonic() - self._start)
                 frame = _SPIN[idx % len(_SPIN)]
@@ -228,76 +338,116 @@ class ProgressTracker:
                 buf: list[str] = []
                 lines = 0
 
-                for name, info in list(self._parsing.items()):
-                    mel = format_duration(
-                        time.monotonic() - info["start"])
-                    dots = "·" * (1 + (idx // 4) % 3)
-                    boxes = self._token_boxes(name, info.get("chars", 0))
-                    buf.append(
-                        f"  {boxes} "
-                        f"{name:<{self._pad}}  "
-                        f"{S.DIM}parsing{dots:<4}"
-                        f"  {mel:>7}{S.RST}\033[K\n")
+                wave = _title_wave(idx)
+                buf.append(_box_top(f"Generating  {wave}", w) + "\033[K\n")
+                lines += 1
+
+                od = self._format_output_dir(inner_w)
+                if od:
+                    buf.append(_box_row(od, w) + "\033[K\n")
                     lines += 1
 
-                if self._active:
-                    for name, info in self._active.items():
+                buf.append(_box_row("", w) + "\033[K\n")
+                lines += 1
+
+                completed_idx = 0
+                for name in self._model_names:
+                    if name in self._results:
+                        completed_idx += 1
+                        row = self._format_result_row(
+                            name, self._results[name],
+                            completed_idx, inner_w)
+                    elif name in self._parsing:
+                        pinfo = self._parsing[name]
                         mel = format_duration(
-                            time.monotonic() - info["start"])
-                        if info["chars"] == 0:
+                            time.monotonic() - pinfo["start"])
+                        dots = "·" * (1 + (idx // 4) % 3)
+                        boxes = self._token_boxes(
+                            name, pinfo.get("chars", 0))
+                        row = (f"{boxes}   "
+                               f"{_rpad(name, self._pad)}  "
+                               f"{S.DIM}parsing{dots:<4}"
+                               f"  {mel:>7}{S.RST}")
+                    elif name in self._active:
+                        ainfo = self._active[name]
+                        mel = format_duration(
+                            time.monotonic() - ainfo["start"])
+                        if ainfo["chars"] == 0:
                             dots = "·" * (1 + (idx // 4) % 3)
                             boxes = self._token_boxes(name, 0)
-                            buf.append(
-                                f"  {boxes} "
-                                f"{name:<{self._pad}}  "
-                                f"{S.DIM}reasoning{dots:<4}"
-                                f" {mel:>7}{S.RST}\033[K\n")
+                            row = (f"{boxes}   "
+                                   f"{_rpad(name, self._pad)}  "
+                                   f"{S.DIM}reasoning{dots:<4}"
+                                   f" {mel:>7}{S.RST}")
                         else:
                             now = time.monotonic()
-                            dt = now - info["last_rate_time"]
+                            dt = now - ainfo["last_rate_time"]
                             if dt >= 0.5:
-                                if info["last_rate_time"] == 0.0:
-                                    info["last_chars"] = info["chars"]
-                                    info["last_rate_time"] = now
+                                if ainfo["last_rate_time"] == 0.0:
+                                    ainfo["last_chars"] = ainfo["chars"]
+                                    ainfo["last_rate_time"] = now
                                 else:
-                                    d_chars = info["chars"] - info["last_chars"]
+                                    d_chars = (ainfo["chars"]
+                                               - ainfo["last_chars"])
                                     instant_tks = (d_chars / 4) / dt
-                                    if info["smoothed_rate"] <= 0:
-                                        info["smoothed_rate"] = instant_tks
+                                    if ainfo["smoothed_rate"] <= 0:
+                                        ainfo["smoothed_rate"] = instant_tks
                                     else:
-                                        info["smoothed_rate"] = (
+                                        ainfo["smoothed_rate"] = (
                                             0.3 * instant_tks
-                                            + 0.7 * info["smoothed_rate"])
-                                    info["last_chars"] = info["chars"]
-                                    info["last_rate_time"] = now
+                                            + 0.7 * ainfo["smoothed_rate"])
+                                    ainfo["last_chars"] = ainfo["chars"]
+                                    ainfo["last_rate_time"] = now
 
-                            boxes = self._token_boxes(name, info["chars"])
+                            boxes = self._token_boxes(
+                                name, ainfo["chars"])
                             avg_tk = self._avg_tokens.get(
                                 name, self.DEFAULT_AVG_TOKENS)
                             model_scale = avg_tk * 4
+
+                            rate = ainfo["smoothed_rate"]
+                            rf = min(1.0, math.sqrt(rate / 200.0))
+                            spd = (0.12 + 0.33 * rf
+                                   + 0.05 * math.sin(idx * 0.025))
+                            self._phases[name] = (
+                                self._phases.get(name, 0.0) + spd)
                             bar = _render_pulse_bar(
-                                info["chars"], model_scale, idx)
-                            est_tk = info["chars"] // 4
+                                ainfo["chars"], model_scale, idx,
+                                self._phases[name])
+                            est_tk = ainfo["chars"] // 4
                             rate_s = ""
-                            if info["smoothed_rate"] > 0:
+                            if ainfo["smoothed_rate"] > 0:
                                 rate_s = (
                                     f"  {S.CYN}"
-                                    f"{int(info['smoothed_rate']):,} tk/s"
-                                    f"{S.RST}")
-                            buf.append(
-                                f"  {boxes} "
-                                f"{name:<{self._pad}}  "
-                                f"{bar}  "
-                                f"{S.DIM}~{est_tk:,} tk{S.RST}"
-                                f"{rate_s}"
-                                f"  {S.DIM}{mel}{S.RST}\033[K\n")
-                        lines += 1
+                                    f"{int(ainfo['smoothed_rate']):,}"
+                                    f" tk/s{S.RST}")
+                            row = (f"{boxes}   "
+                                   f"{_rpad(name, self._pad)}  "
+                                   f"{bar}  "
+                                   f"{S.DIM}~{est_tk:,} tk{S.RST}"
+                                   f"{rate_s}"
+                                   f"  {S.DIM}{mel}{S.RST}")
+                    else:
+                        boxes = self._phase_boxes(0)
+                        row = (f"{boxes}   "
+                               f"{_rpad(name, self._pad)}  "
+                               f"{S.DIM}waiting…{S.RST}")
 
-                buf.append(
-                    f"  {S.HCYN}{frame}{S.RST} "
+                    buf.append(_box_row(row, w) + "\033[K\n")
+                    lines += 1
+
+                buf.append(_box_row("", w) + "\033[K\n")
+                lines += 1
+
+                summary = (
+                    f"{S.HCYN}{frame}{S.RST} "
                     f"{self._label}  "
                     f"{S.DIM}{done}/{self._total} complete · "
-                    f"{elapsed}{S.RST}\033[K")
+                    f"{elapsed}{S.RST}")
+                buf.append(_box_row(summary, w) + "\033[K\n")
+                lines += 1
+
+                buf.append(_box_bot(w) + "\033[K")
                 lines += 1
 
                 sys.stdout.write("\r" + "".join(buf))
@@ -330,7 +480,8 @@ class ProgressTracker:
             self._original_print = None
 
 
-def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int = 16) -> None:
+def display_analytics(history: Dict[str, Any], compact: bool = False,
+                      pad: int = 16, sort_by: str = "runs") -> None:
     """Print lifetime model performance analytics."""
     runs = history.get("runs", [])
     if not runs:
@@ -364,12 +515,22 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
             else:
                 s["fail"] += 1
 
-    # Sort: success-rate desc, then average time asc
-    ranked = sorted(stats.items(), key=lambda x: (
-        -(x[1]["ok"] / x[1]["runs"] if x[1]["runs"] else 0),
-        (sum(x[1]["times"]) / len(x[1]["times"])
-         if x[1]["times"] else float("inf")),
-    ))
+    def _sort_key(item: Any) -> Any:
+        _, s = item
+        rate = s["ok"] / s["runs"] if s["runs"] else 0
+        avg_t = sum(s["times"]) / len(s["times"]) if s["times"] else float("inf")
+        avg_tk = sum(s["tokens"]) / len(s["tokens"]) if s["tokens"] else 0
+        if sort_by == "runs":
+            return (-s["runs"], -rate, avg_t)
+        elif sort_by == "avg_time":
+            return (avg_t, -rate)
+        elif sort_by == "rate":
+            return (-rate, avg_t)
+        elif sort_by == "avg_tokens":
+            return (-avg_tk, -rate)
+        return (-s["runs"], -rate, avg_t)
+
+    ranked = sorted(stats.items(), key=_sort_key)
 
     n = len(runs)
     col = max((len(name) for name, _ in ranked), default=12) + 2
@@ -386,11 +547,19 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
     print(_box_row(hdr, w))
     print(_box_row(f"{S.DIM}{'─' * min(col + 51, inner)}{S.RST}", w))
 
-    # ── Table rows ─────────────────────────────────────────────────────────
+    # ── Table rows (top 10 by usage, totals from all) ───────────────────────
     total_calls = total_ok = 0
     all_times: list[float] = []
 
-    for name, s in ranked:
+    MAX_DISPLAY = 10
+    for idx, (name, s) in enumerate(ranked):
+        total_calls += s["runs"]
+        total_ok += s["ok"]
+        all_times.extend(s["times"])
+
+        if idx >= MAX_DISPLAY:
+            continue
+
         rate = (s["ok"] / s["runs"] * 100) if s["runs"] else 0
         avg_v  = sum(s["times"]) / len(s["times"]) if s["times"] else None
         best_v = min(s["times"]) if s["times"] else None
@@ -414,9 +583,10 @@ def display_analytics(history: Dict[str, Any], compact: bool = False, pad: int =
             f"  {S.DIM}{format_duration(wrst_v):>8}{S.RST}"
             f"  {S.DIM}{avg_tk_s:>9}{S.RST}", w))
 
-        total_calls += s["runs"]
-        total_ok += s["ok"]
-        all_times.extend(s["times"])
+    if len(ranked) > MAX_DISPLAY:
+        hidden = len(ranked) - MAX_DISPLAY
+        print(_box_row(
+            f"{S.DIM}+{hidden} more model{'s' if hidden != 1 else ''}{S.RST}", w))
 
     # ── Totals ─────────────────────────────────────────────────────────────
     overall = (total_ok / total_calls * 100) if total_calls else 0
