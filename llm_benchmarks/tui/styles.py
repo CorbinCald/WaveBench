@@ -64,8 +64,8 @@ def _rpad(text: str, width: int) -> str:
     return text + " " * max(0, width - _vlen(text))
 
 def _tw() -> int:
-    """Terminal width, clamped to [60, 120]."""
-    return max(60, min(120, shutil.get_terminal_size((80, 24)).columns))
+    """Terminal width, clamped to [20, 120]."""
+    return max(20, min(120, shutil.get_terminal_size((80, 24)).columns))
 
 def _rule(label: str = "", heavy: bool = False) -> None:
     """Print a horizontal rule with an optional section label."""

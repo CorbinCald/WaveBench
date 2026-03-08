@@ -1,6 +1,7 @@
 import sys
 import math
 import time
+import shutil
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -388,7 +389,8 @@ class ProgressTracker:
             while self._running:
                 self._clear_drawn()
 
-                w = _tw() - 4
+                term = shutil.get_terminal_size((80, 24))
+                w = max(20, min(120, term.columns)) - 4
                 inner_w = w - 4
                 done = len(self._results)
                 elapsed = format_duration(time.monotonic() - self._start)
@@ -409,8 +411,19 @@ class ProgressTracker:
                 buf.append(_box_row("", w) + "\033[K\n")
                 lines += 1
 
+                _chrome = lines + 3
+                max_model_rows = max(1, term.lines - _chrome)
+
                 completed_idx = 0
+                visible = 0
+                hidden = 0
                 for name in self._model_names:
+                    if visible >= max_model_rows:
+                        hidden += 1
+                        if name in self._results:
+                            completed_idx += 1
+                        continue
+
                     if name in self._results:
                         completed_idx += 1
                         row = self._format_result_row(
@@ -497,6 +510,12 @@ class ProgressTracker:
                                f"{S.DIM}waiting…{S.RST}")
 
                     buf.append(_box_row(row, w) + "\033[K\n")
+                    lines += 1
+                    visible += 1
+
+                if hidden > 0:
+                    buf.append(_box_row(
+                        f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")
                     lines += 1
 
                 buf.append(_box_row("", w) + "\033[K\n")
