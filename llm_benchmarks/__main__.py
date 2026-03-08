@@ -242,8 +242,10 @@ def main() -> None:
     else:
         print()
 
+    _, run_pricing = _resolve_models_future()
     try:
-        asyncio.run(main_async(args, api_key, model_mapping=selected_models, config=config))
+        asyncio.run(main_async(args, api_key, model_mapping=selected_models,
+                               config=config, pricing_lookup=run_pricing))
     except KeyboardInterrupt:
         print(f"\n\n  {S.DIM}Interrupted.{S.RST}\n")
 

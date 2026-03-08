@@ -140,3 +140,15 @@ def format_duration(seconds: float | None) -> str:
 def _truncate(text: str, length: int = 60) -> str:
     """Truncate *text* with an ellipsis if needed."""
     return text if len(text) <= length else text[:length - 1] + "…"
+
+def format_cost(dollars: float | None) -> str:
+    """Format a dollar amount into a compact cost string."""
+    if dollars is None or dollars <= 0:
+        return ""
+    if dollars < 0.001:
+        return f"${dollars:.4f}"
+    if dollars < 0.10:
+        return f"${dollars:.3f}"
+    if dollars < 10:
+        return f"${dollars:.2f}"
+    return f"${dollars:,.2f}"

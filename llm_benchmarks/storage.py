@@ -83,8 +83,10 @@ def save_history(history: Dict[str, Any]) -> None:
         print(f"    {_tri} {S.DIM}could not save history: {exc}{S.RST}")
 
 def record_run(history: Dict[str, Any], prompt: str, output_dir: Optional[str],
-               total_time: float, model_results: Dict[str, Any]) -> None:
+               total_time: float, model_results: Dict[str, Any],
+               costs: Optional[Dict[str, Optional[float]]] = None) -> None:
     """Append the results of a benchmark run to *history* and save."""
+    costs = costs or {}
     run = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "prompt": prompt,
@@ -95,7 +97,9 @@ def record_run(history: Dict[str, Any], prompt: str, output_dir: Optional[str],
                 "status": info["status"],
                 "time_s": round(info["time_s"], 2),
                 "file": info.get("file"),
-                "usage": info.get("usage", {})
+                "usage": info.get("usage", {}),
+                **({"cost": round(costs[name], 6)}
+                   if costs.get(name) is not None else {}),
             }
             for name, info in model_results.items()
         },

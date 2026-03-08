@@ -1,6 +1,9 @@
+import os
 import sys
 import re
 import shutil
+import select
+import signal
 from typing import Dict, Any, Optional, List, Tuple
 
 try:
@@ -10,8 +13,10 @@ try:
 except ImportError:
     _HAS_TTY = False
 
+_HAS_SIGWINCH = hasattr(signal, 'SIGWINCH')
+
 from llm_benchmarks.tui.styles import (
-    S, _dot, _rule, _work, _tw, _vlen, _box_top, _box_row, _box_bot,
+    S, _dot, _rule, _work, _vlen, _box_top, _box_row, _box_bot,
 )
 from llm_benchmarks.api import fetch_top_models
 from llm_benchmarks.models import MODEL_MAPPING
@@ -105,6 +110,62 @@ def _read_key() -> str:
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_key_or_resize(winch_r: int = -1) -> str:
+    """Read a single keypress, returning ``'resize'`` if SIGWINCH fires."""
+    if not _HAS_TTY:
+        ch = input()[:1]
+        return ch or 'enter'
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        watch: list = [fd]
+        if winch_r >= 0:
+            watch.append(winch_r)
+        try:
+            ready, _, _ = select.select(watch, [], [])
+        except (OSError, ValueError):
+            return 'resize'
+        if winch_r >= 0 and winch_r in ready:
+            try:
+                os.read(winch_r, 1024)
+            except OSError:
+                pass
+            return 'resize'
+        ch = os.read(fd, 1)
+        if not ch:
+            return ''
+        ch = ch.decode('utf-8', errors='replace')
+        if ch == '\x1b':
+            esc_ready, _, _ = select.select([fd], [], [], 0.05)
+            if not esc_ready:
+                return 'escape'
+            ch2 = os.read(fd, 1).decode('utf-8', errors='replace')
+            if ch2 == '[':
+                ch3 = os.read(fd, 1).decode('utf-8', errors='replace')
+                return {'A': 'up', 'B': 'down', 'C': 'right',
+                        'D': 'left'}.get(ch3, '')
+            return 'escape'
+        if ch in ('\r', '\n'):
+            return 'enter'
+        if ch == '\t':
+            return 'tab'
+        if ch == ' ':
+            return 'space'
+        if ch == '\x03':
+            return 'ctrl-c'
+        if ch == '\x01':
+            return 'ctrl-a'
+        if ch == '\x0e':
+            return 'ctrl-n'
+        if ch in ('\x7f', '\b'):
+            return 'backspace'
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
 
 class _TabEscape(Exception):
     """Raised when Tab or Escape is pressed to navigate back."""
@@ -289,23 +350,18 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         return None
 
     cursor_pos = 0
-    page_size = max(6, min(14, shutil.get_terminal_size((80, 24)).lines - 12))
+    _CHROME_LINES = 5
+    page_size = max(1, min(14, shutil.get_terminal_size((80, 24)).lines - _CHROME_LINES))
     page_index = 0
     search_query = ""
     filtered_indices = list(range(len(items)))
-    short_w = max(len(it['short']) for it in items) + 2
-    id_w = max(len(it['id']) for it in items) + 2
+    _nat_short_w = max(len(it['short']) for it in items) + 2
+    _nat_id_w = max(len(it['id']) for it in items) + 2
+    short_w = _nat_short_w
+    id_w = _nat_id_w
 
-    term_w = shutil.get_terminal_size((80, 24)).columns
-    max_price_w = max((len(it['pricing']) for it in items if it['pricing']), default=0)
-    overhead = 9 + (2 + max_price_w if max_price_w else 0)
-    avail = max(24, term_w - overhead)
-    if short_w + id_w > avail:
-        ratio = avail / (short_w + id_w)
-        short_w = max(10, int(short_w * ratio))
-        id_w = max(10, avail - short_w)
-
-    last_menu_lines = page_size + 5
+    _max_price_w = max((len(it['pricing']) for it in items if it['pricing']), default=0)
+    _overhead = 9 + (2 + _max_price_w if _max_price_w else 0)
 
     def _page_count() -> int:
         return max(1, (len(filtered_indices) + page_size - 1) // page_size)
@@ -337,12 +393,25 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
             cursor_pos = filtered_indices[0]
         _sync_page_from_cursor()
 
-    def render(first: bool = False) -> None:
-        nonlocal last_menu_lines
-        if not first:
-            sys.stdout.write(f"\033[{last_menu_lines}A")
+    def render() -> None:
+        nonlocal page_size, short_w, id_w, page_index
+        term = shutil.get_terminal_size((80, 24))
+        new_ps = max(1, min(14, term.lines - _CHROME_LINES))
+        if new_ps != page_size:
+            page_size = new_ps
+            if filtered_indices and cursor_pos in filtered_indices:
+                page_index = filtered_indices.index(cursor_pos) // page_size
+        cols = min(120, term.columns)
+        _avail = max(10, cols - _overhead)
+        short_w, id_w = _nat_short_w, _nat_id_w
+        if short_w + id_w > _avail:
+            ratio = _avail / (short_w + id_w)
+            short_w = max(6, int(_nat_short_w * ratio))
+            id_w = max(6, _avail - short_w)
 
-        screen_lines = 0
+        sys.stdout.write("\033[H")
+        buf: list[str] = []
+
         pcount = _page_count()
         hl = (f"  {S.DIM}↑↓{S.RST} navigate  {_dot}  "
               f"{S.DIM}Space{S.RST} toggle  {_dot}  "
@@ -351,19 +420,15 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
               f"{S.DIM}^N{S.RST} none  {_dot}  "
               f"{S.DIM}[ ]{S.RST} page  {_dot}  "
               f"{S.DIM}Esc{S.RST} cancel")
-        sys.stdout.write(f"\033[K{hl}\n")
-        tw = shutil.get_terminal_size((80, 24)).columns
-        hl_vis = _vlen(hl)
-        screen_lines += max(1, (hl_vis + tw - 1) // tw) if tw > 0 else 1
+        buf.append(f"\033[K{hl}\n")
 
-        search_label = f"{S.HCYN}search{S.RST}" if search_query else "search"
-        query = search_query or f"{S.DIM}type to filter{S.RST}"
-        sys.stdout.write(f"\033[K  {search_label}: {query}\n")
-        screen_lines += 1
+        search_label = (f"{S.HCYN}search{S.RST}"
+                        if search_query else "search")
+        query_display = search_query or f"{S.DIM}type to filter{S.RST}"
+        buf.append(f"\033[K  {search_label}: {query_display}\n")
 
-        sys.stdout.write(
+        buf.append(
             f"\033[K  {S.DIM}page {page_index + 1}/{pcount}{S.RST}\n")
-        screen_lines += 1
 
         start, end = _page_bounds()
         visible_indices = filtered_indices[start:end]
@@ -385,35 +450,50 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
 
             ps = (f"  {S.DIM}{item['pricing']}{S.RST}"
                   if item['pricing'] else "")
-            sys.stdout.write(
-                f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
+            buf.append(f"\033[K  {mk} [{chk}] {ns} {ids}{ps}\n")
         if not visible_indices:
-            sys.stdout.write(
-                f"\033[K  {S.DIM}No models match the current search.{S.RST}\n")
+            buf.append(
+                f"\033[K  {S.DIM}No models match the current search."
+                f"{S.RST}\n")
             blank_rows = page_size - 1
         else:
             blank_rows = page_size - len(visible_indices)
         for _ in range(blank_rows):
-            sys.stdout.write("\033[K\n")
-        screen_lines += page_size
+            buf.append("\033[K\n")
 
-        sys.stdout.write("\033[K\n")
-        screen_lines += 1
+        buf.append("\033[K\n")
         sel = sum(1 for it in items if it['selected'])
-        sys.stdout.write(
+        buf.append(
             f"\033[K  {S.BOLD}{sel}{S.RST} of {len(items)} selected  "
             f"{S.DIM}{len(filtered_indices)} shown{S.RST}\n")
-        screen_lines += 1
-        last_menu_lines = screen_lines
+        buf.append("\033[J")
+
+        sys.stdout.write("".join(buf))
         sys.stdout.flush()
 
-    sys.stdout.write("\033[?25l")
+    if _HAS_SIGWINCH:
+        _wr, _ww = os.pipe()
+        os.set_blocking(_wr, False)
+        os.set_blocking(_ww, False)
+        def _on_winch(sig, frame):
+            try:
+                os.write(_ww, b'\x00')
+            except OSError:
+                pass
+        _old_sigwinch = signal.signal(signal.SIGWINCH, _on_winch)
+    else:
+        _wr = -1
+
+    sys.stdout.write("\033[?1049h\033[?25l")
     try:
-        render(first=True)
+        render()
         while True:
-            key = _read_key()
+            key = _read_key_or_resize(_wr)
+            if key == 'resize':
+                render()
+                continue
             if key in ('escape', 'ctrl-c', 'tab'):
-                sys.stdout.write("\033[?25h")
+                sys.stdout.write("\033[?25h\033[?1049l")
                 print()
                 return None
             elif key == 'up' and filtered_indices:
@@ -452,7 +532,11 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
                 _refresh_filter(preserve_current=False)
             render()
     finally:
-        sys.stdout.write("\033[?25h")
+        sys.stdout.write("\033[?25h\033[?1049l")
+        if _HAS_SIGWINCH:
+            signal.signal(signal.SIGWINCH, _old_sigwinch)
+            os.close(_wr)
+            os.close(_ww)
 
     selected = {it['short']: it['id'] for it in items if it['selected']}
     if not selected:
@@ -538,7 +622,8 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     ]
 
     model_cursor = 0
-    model_page_size = max(6, min(14, shutil.get_terminal_size((80, 24)).lines - 14))
+    _CHROME_LINES = 8
+    model_page_size = max(1, min(14, shutil.get_terminal_size((80, 24)).lines - _CHROME_LINES))
     model_page = 0
     model_search_query = ""
     filtered_model_indices = list(range(len(model_items)))
@@ -548,20 +633,15 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         print(f"  {S.DIM}No models available.{S.RST}")
         return None, None
 
-    short_w = max(len(it['short']) for it in model_items) + 2
-    id_w = max(len(it['id']) for it in model_items) + 2
+    _nat_short_w = max(len(it['short']) for it in model_items) + 2
+    _nat_id_w = max(len(it['id']) for it in model_items) + 2
+    short_w = _nat_short_w
+    id_w = _nat_id_w
 
-    max_price_w = max((len(it['pricing']) for it in model_items if it['pricing']), default=0)
-    overhead = 7 + (2 + max_price_w if max_price_w else 0)
-    avail = max(24, (_tw() - 8) - overhead)
-    if short_w + id_w > avail:
-        ratio = avail / (short_w + id_w)
-        short_w = max(10, int(short_w * ratio))
-        id_w = max(10, avail - short_w)
+    _max_price_w = max((len(it['pricing']) for it in model_items if it['pricing']), default=0)
+    _overhead = 7 + (2 + _max_price_w if _max_price_w else 0)
 
     content_height = max(model_page_size, len(settings_items))
-    total_lines = content_height + 8
-    last_rendered_lines = total_lines
 
     def _model_page_count() -> int:
         return max(1, (len(filtered_model_indices) + model_page_size - 1) // model_page_size)
@@ -594,19 +674,28 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             model_cursor = filtered_model_indices[0]
         _sync_model_page_from_cursor()
 
-    def render(first: bool = False) -> None:
-        nonlocal last_rendered_lines
-        if not first:
-            sys.stdout.write(f"\033[{last_rendered_lines}A")
+    def render() -> None:
+        nonlocal model_page_size, content_height, short_w, id_w, model_page
+        term = shutil.get_terminal_size((80, 24))
+        new_ps = max(1, min(14, term.lines - _CHROME_LINES))
+        if new_ps != model_page_size:
+            model_page_size = new_ps
+            content_height = max(model_page_size, len(settings_items))
+            if filtered_model_indices and model_cursor in filtered_model_indices:
+                model_page = filtered_model_indices.index(model_cursor) // model_page_size
+        w = max(20, min(120, term.columns) - 4)
+        _avail = max(10, (w - 4) - _overhead)
+        short_w, id_w = _nat_short_w, _nat_id_w
+        if short_w + id_w > _avail:
+            ratio = _avail / (short_w + id_w)
+            short_w = max(6, int(_nat_short_w * ratio))
+            id_w = max(6, _avail - short_w)
 
-        screen_lines = 0
-        w = _tw() - 4
+        sys.stdout.write("\033[H")
+        buf: list[str] = []
 
-        sys.stdout.write(f"{_box_top('Configuration', w)}\033[K\n")
-        screen_lines += 1
-
-        sys.stdout.write(f"{_box_row('', w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_top('Configuration', w) + "\033[K\n")
+        buf.append(_box_row('', w) + "\033[K\n")
 
         tab_parts = []
         for i, name in enumerate(tabs):
@@ -614,19 +703,16 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 tab_parts.append(f"{S.BOLD}{S.HCYN}[{name}]{S.RST}")
             else:
                 tab_parts.append(f"{S.DIM} {name} {S.RST}")
-        sys.stdout.write(
-            f"{_box_row('   '.join(tab_parts), w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_row('   '.join(tab_parts), w) + "\033[K\n")
 
         if active_tab == 0:
             search_label = (f"{S.HCYN}search{S.RST}"
                             if model_search_query else "search")
             query = model_search_query or f"{S.DIM}type to filter{S.RST}"
-            sys.stdout.write(
-                f"{_box_row(f'{search_label}: {query}', w)}\033[K\n")
+            buf.append(
+                _box_row(f'{search_label}: {query}', w) + "\033[K\n")
         else:
-            sys.stdout.write(f"{_box_row('', w)}\033[K\n")
-        screen_lines += 1
+            buf.append(_box_row('', w) + "\033[K\n")
 
         for row in range(content_height):
             if active_tab == 0:
@@ -648,15 +734,15 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                         ids = f"{S.DIM}{mi:<{id_w}}{S.RST}"
                     ps = (f"  {S.DIM}{item['pricing']}{S.RST}"
                           if item['pricing'] else "")
-                    sys.stdout.write(
-                        f"{_box_row(f'{mk} [{chk}] {ns} {ids}{ps}', w)}"
-                        f"\033[K\n")
+                    buf.append(
+                        _box_row(f'{mk} [{chk}] {ns} {ids}{ps}', w)
+                        + "\033[K\n")
                 elif row == 0 and not filtered_model_indices:
-                    sys.stdout.write(
-                        f"{_box_row(f'{S.DIM}No models match the current search.{S.RST}', w)}"
-                        f"\033[K\n")
+                    buf.append(
+                        _box_row(f'{S.DIM}No models match the current search.{S.RST}', w)
+                        + "\033[K\n")
                 else:
-                    sys.stdout.write(f"{_box_row('', w)}\033[K\n")
+                    buf.append(_box_row('', w) + "\033[K\n")
             else:
                 if row < len(settings_items):
                     item = settings_items[row]
@@ -687,16 +773,13 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     else:
                         mk = " "
                         label = item['label']
-                    sys.stdout.write(
-                        f"{_box_row(f'{mk} [{chk}] {label}  {val_s}', w)}"
-                        f"\033[K\n")
+                    buf.append(
+                        _box_row(f'{mk} [{chk}] {label}  {val_s}', w)
+                        + "\033[K\n")
                 else:
-                    sys.stdout.write(f"{_box_row('', w)}\033[K\n")
+                    buf.append(_box_row('', w) + "\033[K\n")
 
-        screen_lines += content_height
-
-        sys.stdout.write(f"{_box_row('', w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_row('', w) + "\033[K\n")
 
         if active_tab == 0:
             sel = sum(1 for it in model_items if it['selected'])
@@ -715,30 +798,44 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
             status = (f"{S.DIM}{len(settings_items)} "
                       f"setting(s){S.RST}{tag}")
-        sys.stdout.write(f"{_box_row(status, w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_row(status, w) + "\033[K\n")
 
         hl_parts = ["←→ tab", "↑↓", "Space", "Enter"]
         if active_tab == 0:
             hl_parts.extend(["^A all", "^N none", "[ ] page"])
         hl_parts.append("Esc")
         hl = f"{S.DIM}{' · '.join(hl_parts)}{S.RST}"
-        sys.stdout.write(f"{_box_row(hl, w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_row(hl, w) + "\033[K\n")
 
-        sys.stdout.write(f"{_box_bot(w)}\033[K\n")
-        screen_lines += 1
+        buf.append(_box_bot(w) + "\033[K")
+        buf.append("\033[J")
 
-        last_rendered_lines = screen_lines
+        sys.stdout.write("".join(buf))
         sys.stdout.flush()
 
-    sys.stdout.write("\033[?25l")
+    if _HAS_SIGWINCH:
+        _wr, _ww = os.pipe()
+        os.set_blocking(_wr, False)
+        os.set_blocking(_ww, False)
+        def _on_winch(sig, frame):
+            try:
+                os.write(_ww, b'\x00')
+            except OSError:
+                pass
+        _old_sigwinch = signal.signal(signal.SIGWINCH, _on_winch)
+    else:
+        _wr = -1
+
+    sys.stdout.write("\033[?1049h\033[?25l")
     try:
-        render(first=True)
+        render()
         while True:
-            key = _read_key()
+            key = _read_key_or_resize(_wr)
+            if key == 'resize':
+                render()
+                continue
             if key in ('escape', 'ctrl-c', 'tab'):
-                sys.stdout.write("\033[?25h")
+                sys.stdout.write("\033[?25h\033[?1049l")
                 print()
                 return None, None
             elif key == 'left':
@@ -800,7 +897,11 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 _refresh_model_filter(preserve_current=False)
             render()
     finally:
-        sys.stdout.write("\033[?25h")
+        sys.stdout.write("\033[?25h\033[?1049l")
+        if _HAS_SIGWINCH:
+            signal.signal(signal.SIGWINCH, _old_sigwinch)
+            os.close(_wr)
+            os.close(_ww)
 
     selected = {it['short']: it['id'] for it in model_items if it['selected']}
     if not selected:

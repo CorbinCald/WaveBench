@@ -8,11 +8,11 @@ from typing import Dict, Any, Optional
 from llm_benchmarks.api import call_model_streaming
 from llm_benchmarks.parsers import parse_llm_output, get_directory_name
 from llm_benchmarks.tui.styles import (
-    S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration,
+    S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, format_cost,
     _truncate, _dot, _rpad, _tw, _vlen,
     _box, _box_top, _box_row, _box_bot,
 )
-from llm_benchmarks.tui.components import ProgressTracker, display_analytics
+from llm_benchmarks.tui.components import ProgressTracker, display_analytics, compute_cost
 from llm_benchmarks.storage import load_history, record_run
 
 OUTPUT_DIR       = "benchmarkResults"
@@ -260,7 +260,8 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
         "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
 
 async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, str]] = None,
-                     config: Optional[Dict[str, Any]] = None) -> None:
+                     config: Optional[Dict[str, Any]] = None,
+                     pricing_lookup: Optional[Dict[str, Any]] = None) -> None:
     from llm_benchmarks.models import MODEL_MAPPING
     mapping = model_mapping if model_mapping is not None else MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 4
@@ -332,9 +333,12 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
         timeout=timeout, connector=connector,
     ) as session:
         model_names = [name for name, _ in targets]
+        model_id_map = {name: mid for name, mid in targets}
         tracker = ProgressTracker(
             len(targets), results, pad=pad, model_names=model_names,
-            avg_tokens=avg_tokens)
+            avg_tokens=avg_tokens,
+            pricing_lookup=pricing_lookup or {},
+            model_id_map=model_id_map)
         try:
             async def resolve_output_dir() -> str:
                 dir_name = await get_directory_name(
@@ -389,6 +393,12 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
 
     # ── Run results ────────────────────────────────────────────────────────
     total_time = time.monotonic() - t0
+    _pricing = pricing_lookup or {}
+    _id_map = {name: mid for name, mid in targets}
+
+    def _result_cost(name: str, info: Dict[str, Any]) -> Optional[float]:
+        mid = _id_map.get(name, "")
+        return compute_cost(info.get("usage", {}), _pricing.get(mid, {}))
 
     if not tracker.rendered_final:
         ok   = sum(1 for v in results.values() if v["status"] == "success")
@@ -412,31 +422,40 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
             order = {"success": 0, "failed": 1, "cancelled": 2}
             return (order.get(v["status"], 3), v["time_s"])
 
+        _total_run_cost = 0.0
+        _has_any_cost = False
+
         for i, (name, info) in enumerate(
             sorted(results.items(), key=_rank_key), 1
         ):
             st = info["status"]
             t = format_duration(info["time_s"])
+            model_cost = _result_cost(name, info)
+            if model_cost is not None:
+                _total_run_cost += model_cost
+                _has_any_cost = True
+            cost_s = (f"  {S.HYEL}{format_cost(model_cost)}{S.RST}"
+                      if model_cost else "")
             if st == "success":
                 sym = _ok
                 usage_d = info.get("usage", {})
                 tokens = usage_d.get("total_tokens")
                 fname = info['file']
                 tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
             elif st == "cancelled":
                 sym = _skip
                 detail = f"{S.DIM}cancelled{S.RST}"
             else:
                 sym = _fail
-                detail = f"{S.RED}failed{S.RST}"
+                detail = f"{S.RED}failed{S.RST}{cost_s}"
             rank = f"{S.DIM}{i:>2}.{S.RST}"
             content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             if st == "success" and _vlen(content) + 2 + len(t) > inner_w:
                 overflow = _vlen(content) + 2 + len(t) - inner_w
                 max_fname = max(8, len(fname) - overflow)
                 fname = _truncate(fname, max_fname)
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
                 content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             gap = max(inner_w - _vlen(content) - len(t), 2)
             print(_box_row(
@@ -448,13 +467,16 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
         if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
         if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
         parts.append(f"{format_duration(total_time)} total")
+        if _has_any_cost:
+            parts.append(f"{S.HYEL}{format_cost(_total_run_cost)}{S.RST}")
         sep = f" {_dot} "
         print(_box_row(sep.join(parts), w))
         print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
+    run_costs = {name: _result_cost(name, info) for name, info in results.items()}
     record_run(history, user_prompt, output_dir_final[0],
-               total_time, results)
+               total_time, results, costs=run_costs)
     display_analytics(history, compact=True, pad=pad,
                       sort_by=config.get("analytics_sort", "runs"))
     print()
