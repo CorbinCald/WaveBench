@@ -602,7 +602,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         })
 
     REASONING_CHOICES = ["high", "medium", "low", "off"]
-    SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens"]
+    SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens", "cost"]
 
     settings_items = [
         {

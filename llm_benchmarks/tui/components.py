@@ -6,6 +6,11 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+try:
+    import termios
+except ImportError:
+    termios = None  # type: ignore[assignment]
+
 from llm_benchmarks.tui.styles import (
     S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
@@ -168,6 +173,7 @@ class ProgressTracker:
         self._model_id_map = model_id_map or {}
         self._alt_screen = alt_screen and self._is_tty
         self._entered_alt_screen = False
+        self._saved_termios = None
 
     @property
     def is_running(self) -> bool:
@@ -247,6 +253,15 @@ class ProgressTracker:
         if not self._is_tty:
             return
         if self._alt_screen:
+            if termios is not None:
+                try:
+                    fd = sys.stdin.fileno()
+                    self._saved_termios = termios.tcgetattr(fd)
+                    new = termios.tcgetattr(fd)
+                    new[3] &= ~termios.ECHO
+                    termios.tcsetattr(fd, termios.TCSANOW, new)
+                except Exception:
+                    self._saved_termios = None
             sys.stdout.write("\033[?1049h\033[?25l\033[H")
             sys.stdout.flush()
             self._entered_alt_screen = True
@@ -255,12 +270,25 @@ class ProgressTracker:
         self._install_hook()
         self._task = asyncio.create_task(self._animate())
 
+    def _exit_alt_screen(self) -> None:
+        """Leave the alternate screen buffer and restore terminal settings."""
+        if not self._entered_alt_screen:
+            return
+        self._drawn_lines = 0
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
+        self._entered_alt_screen = False
+        if self._saved_termios is not None and termios is not None:
+            try:
+                termios.tcsetattr(
+                    sys.stdin.fileno(), termios.TCSANOW, self._saved_termios)
+            except Exception:
+                pass
+            self._saved_termios = None
+
     async def stop(self) -> None:
         if not self._running:
-            if self._entered_alt_screen:
-                sys.stdout.write("\033[?25h\033[?1049l")
-                sys.stdout.flush()
-                self._entered_alt_screen = False
+            self._exit_alt_screen()
             return
         self._running = False
         if self._task:
@@ -270,11 +298,7 @@ class ProgressTracker:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        if self._entered_alt_screen:
-            self._drawn_lines = 0
-            sys.stdout.write("\033[?25h\033[?1049l")
-            sys.stdout.flush()
-            self._entered_alt_screen = False
+        self._exit_alt_screen()
         self._render_final()
         sys.stdout.flush()
         self._uninstall_hook()
@@ -617,7 +641,8 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
         for name, res in run.get("models", {}).items():
             if name not in stats:
                 stats[name] = {"runs": 0, "ok": 0, "fail": 0,
-                               "cancel": 0, "times": [], "tokens": []}
+                               "cancel": 0, "times": [], "tokens": [],
+                               "costs": []}
             s = stats[name]
             s["runs"] += 1
             status = res.get("status", "failed")
@@ -630,6 +655,9 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
                 tkns = usage.get("total_tokens")
                 if tkns is not None:
                     s["tokens"].append(tkns)
+                c = res.get("cost")
+                if c is not None and c > 0:
+                    s["costs"].append(c)
             elif status == "cancelled":
                 s["cancel"] += 1
             else:
@@ -640,6 +668,7 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
         rate = s["ok"] / s["runs"] if s["runs"] else 0
         avg_t = sum(s["times"]) / len(s["times"]) if s["times"] else float("inf")
         avg_tk = sum(s["tokens"]) / len(s["tokens"]) if s["tokens"] else 0
+        total_cost = sum(s["costs"]) if s["costs"] else float("inf")
         if sort_by == "runs":
             return (-s["runs"], -rate, avg_t)
         elif sort_by == "avg_time":
@@ -648,6 +677,8 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
             return (-rate, avg_t)
         elif sort_by == "avg_tokens":
             return (-avg_tk, -rate)
+        elif sort_by == "cost":
+            return (total_cost, -rate)
         return (-s["runs"], -rate, avg_t)
 
     ranked = sorted(stats.items(), key=_sort_key)
@@ -663,28 +694,31 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
 
     # ── Table header ───────────────────────────────────────────────────────
     hdr = (f"{S.BOLD}{'MODEL':<{col}}{'RUNS':>5}  {'RATE':>5}"
-           f"  {'AVG':>8}  {'BEST':>8}  {'WORST':>8}  {'AVG TKNS':>9}{S.RST}")
+           f"  {'AVG':>8}  {'AVG TKNS':>9}"
+           f"  {'AVG COST':>9}  {'TOTAL':>9}{S.RST}")
     print(_box_row(hdr, w))
-    print(_box_row(f"{S.DIM}{'─' * min(col + 51, inner)}{S.RST}", w))
+    print(_box_row(f"{S.DIM}{'─' * min(col + 52, inner)}{S.RST}", w))
 
     # ── Table rows (top 10 by usage, totals from all) ───────────────────────
     total_calls = total_ok = 0
     all_times: list[float] = []
+    all_costs: list[float] = []
 
     MAX_DISPLAY = 10
     for idx, (name, s) in enumerate(ranked):
         total_calls += s["runs"]
         total_ok += s["ok"]
         all_times.extend(s["times"])
+        all_costs.extend(s["costs"])
 
         if idx >= MAX_DISPLAY:
             continue
 
         rate = (s["ok"] / s["runs"] * 100) if s["runs"] else 0
         avg_v  = sum(s["times"]) / len(s["times"]) if s["times"] else None
-        best_v = min(s["times"]) if s["times"] else None
-        wrst_v = max(s["times"]) if s["times"] else None
         avg_tk = sum(s["tokens"]) / len(s["tokens"]) if s["tokens"] else None
+        avg_cost = sum(s["costs"]) / len(s["costs"]) if s["costs"] else None
+        total_cost = sum(s["costs"]) if s["costs"] else None
 
         rate_s = f"{rate:>4.0f}%"
         if rate >= 90:
@@ -695,13 +729,15 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
             rate_c = f"{S.HRED}{rate_s}{S.RST}"
 
         avg_tk_s = f"{int(avg_tk):,}" if avg_tk is not None else "—"
+        avg_cost_s = format_cost(avg_cost) if avg_cost else "—"
+        total_cost_s = format_cost(total_cost) if total_cost else "—"
 
         print(_box_row(
             f"{name:<{col}}{s['runs']:>5}  {rate_c}"
             f"  {S.CYN}{format_duration(avg_v):>8}{S.RST}"
-            f"  {S.GRN}{format_duration(best_v):>8}{S.RST}"
-            f"  {S.DIM}{format_duration(wrst_v):>8}{S.RST}"
-            f"  {S.DIM}{avg_tk_s:>9}{S.RST}", w))
+            f"  {S.DIM}{avg_tk_s:>9}{S.RST}"
+            f"  {S.YEL}{avg_cost_s:>9}{S.RST}"
+            f"  {S.YEL}{total_cost_s:>9}{S.RST}", w))
 
     if len(ranked) > MAX_DISPLAY:
         hidden = len(ranked) - MAX_DISPLAY
@@ -715,12 +751,19 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
     )
     all_tokens = [t for s in stats.values() for t in s["tokens"]]
     avg_tk_all = f"{int(sum(all_tokens) / len(all_tokens)):,}" if all_tokens else "—"
+    total_spend = sum(all_costs) if all_costs else None
+    avg_cost_all = (sum(all_costs) / len(all_costs)) if all_costs else None
+    total_spend_s = format_cost(total_spend) if total_spend else "—"
+    avg_cost_all_s = format_cost(avg_cost_all) if avg_cost_all else "—"
 
     print(_box_row("", w))
     print(_box_row(
         f"{total_calls} calls {_dot} {total_ok} passed {_dot} "
         f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {S.CYN}{avg_all}{S.RST} "
         f"{_dot} avg tkns {S.DIM}{avg_tk_all}{S.RST}", w))
+    print(_box_row(
+        f"avg cost {S.YEL}{avg_cost_all_s}{S.RST} {_dot} "
+        f"total spend {S.BOLD}{S.YEL}{total_spend_s}{S.RST}", w))
 
     # ── Recent prompts (full view only) ────────────────────────────────────
     if not compact and runs:
