@@ -338,7 +338,8 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
             len(targets), results, pad=pad, model_names=model_names,
             avg_tokens=avg_tokens,
             pricing_lookup=pricing_lookup or {},
-            model_id_map=model_id_map)
+            model_id_map=model_id_map,
+            alt_screen=True)
         try:
             async def resolve_output_dir() -> str:
                 dir_name = await get_directory_name(
