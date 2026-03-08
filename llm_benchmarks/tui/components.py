@@ -14,8 +14,8 @@ except ImportError:
 from llm_benchmarks.tui.styles import (
     S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
-    _box_top, _box_row, _box_sep, _box_bot,
-    PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM,
+    _box_top, _box_row, _box_sep, _box_bot, _box_divider,
+    PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM, _NO_COLOR,
 )
 
 BAR_WIDTH = 20
@@ -45,7 +45,8 @@ def _title_wave(tick: int, width: int = 5) -> str:
 
 
 def _render_pulse_bar(chars: int, scale: float, tick: int,
-                      phase: float = 0.0) -> str:
+                      phase: float = 0.0,
+                      bar_width: int = BAR_WIDTH) -> str:
     """Animated braille wave progress bar.
 
     Height builds from the bottom row of each braille cell upward
@@ -54,8 +55,8 @@ def _render_pulse_bar(chars: int, scale: float, tick: int,
     Amplitude scales with token progress so the wave grows as output fills.
     """
     ratio = min(chars / max(scale, 1), 1.0)
-    filled = round(ratio * BAR_WIDTH)
-    empty = BAR_WIDTH - filled
+    filled = round(ratio * bar_width)
+    empty = bar_width - filled
 
     t = tick * 0.008
     bandwidth = 0.70 + 0.15 * math.sin(t * 2.3 + 1.0)
@@ -88,29 +89,53 @@ def _render_pulse_bar(chars: int, scale: float, tick: int,
     if filled:
         parts.append(S.RST)
 
-    stray: list[str] = []
-    for i in range(empty):
-        pos = filled + i
-        prox = 1.0 - i / max(empty, 1)
-        scatter_val = (pos * 7 + tick * 3) % 17
-        if scatter_val < 2 + int(prox * 4):
-            level_val = (pos * 11 + tick * 5) % 11
-            if level_val < 1 and prox > 0.5:
-                sl = 3
-            elif level_val < 3 and prox > 0.2:
-                sl = 2
-            else:
-                sl = 1
-            pool = _WAVE_CHARS[sl]
-            stray.append(pool[(pos + tick) % len(pool)])
-        else:
-            stray.append('⠀')
+    if empty > 0:
+        parts.append(_render_pre_wave_bar(empty, tick))
 
-    if stray:
-        parts.append(PULSE_DIM)
-        parts.extend(stray)
+    return ''.join(parts)
+
+
+def _render_pre_wave_bar(width: int, tick: int) -> str:
+    """Mini braille wave shown during pre-generation 'reasoning' state.
+
+    Same wave style as the main progress bar but constrained to 1-3 dots
+    high, with a per-character gradient from bright green (matching the
+    leading edge of the main bar) to grey-blue, pulsing over time.
+    """
+    parts: list[str] = []
+    t = tick * 0.06
+    phase = tick * 0.10
+
+    for i in range(width):
+        pos = i / max(width - 1, 1)
+
+        w = math.sin(i * 0.6 - phase)
+        w2 = math.sin(i * 1.05 - phase * 0.65 + 1.3) * 0.28
+        val = max(0.0, min(1.0, (w + w2) * 0.5 + 0.5))
+        level = max(1, min(3, round(val * 3)))
+
+        pool = _WAVE_CHARS[level]
+        ch = pool[(i + tick) % len(pool)]
+
+        if _NO_COLOR:
+            parts.append(ch)
+            continue
+
+        p1 = math.sin(t + i * 0.35) * 0.5 + 0.5
+        p2 = math.sin(t * 0.6 + i * 0.2 + 2.0) * 0.3 + 0.5
+        p = p1 * 0.65 + p2 * 0.35
+
+        sr, sg, sb = 30 + p * 35, 225 + p * 18, 72 + p * 22
+        tr, tg, tb = 60 + p * 15, 88 + p * 14, 130 + p * 20
+
+        r = max(0, min(255, int(sr + (tr - sr) * pos)))
+        g = max(0, min(255, int(sg + (tg - sg) * pos)))
+        b = max(0, min(255, int(sb + (tb - sb) * pos)))
+
+        parts.append(f"\033[38;2;{r};{g};{b}m{ch}")
+
+    if not _NO_COLOR:
         parts.append(S.RST)
-
     return ''.join(parts)
 
 
@@ -391,7 +416,9 @@ class ProgressTracker:
         od = self._format_output_dir(inner_w)
         if od:
             buf.append(_box_row(od, w))
-        buf.append(_box_row("", w))
+            buf.append(_box_sep("", w))
+        else:
+            buf.append(_box_row("", w))
 
         def _rank_key(item: Any) -> Any:
             _, v = item
@@ -405,7 +432,7 @@ class ProgressTracker:
             buf.append(_box_row(
                 self._format_result_row(name, info, i, inner_w), w))
 
-        buf.append(_box_row("", w))
+        buf.append(_box_sep("", w))
         ok = sum(1 for v in self._results.values()
                  if v.get("status") == "success")
         fail = sum(1 for v in self._results.values()
@@ -444,16 +471,17 @@ class ProgressTracker:
                 lines = 0
 
                 wave = _title_wave(idx)
-                buf.append(_box_top(f"Generating  {wave}", w) + "\033[K\n")
+                buf.append(_box_top(f"Generating {wave}", w) + "\033[K\n")
                 lines += 1
 
                 od = self._format_output_dir(inner_w)
                 if od:
                     buf.append(_box_row(od, w) + "\033[K\n")
+                    buf.append(_box_sep("", w) + "\033[K\n")
+                    lines += 2
+                else:
+                    buf.append(_box_row("", w) + "\033[K\n")
                     lines += 1
-
-                buf.append(_box_row("", w) + "\033[K\n")
-                lines += 1
 
                 _chrome = lines + 3
                 max_model_rows = max(1, term.lines - _chrome)
@@ -489,12 +517,18 @@ class ProgressTracker:
                         mel = format_duration(
                             time.monotonic() - ainfo["start"])
                         if ainfo["chars"] == 0:
-                            dots = "·" * (1 + (idx // 4) % 3)
                             boxes = self._token_boxes(name, 0)
+                            dots = "·" * (1 + (idx // 4) % 3)
+                            suffix = (f"{S.DIM}reasoning{dots:<4}"
+                                      f" {mel:>7}{S.RST}")
+                            pfx = 5 + 3 + self._pad + 2 + 2
+                            bw = max(5, min(
+                                BAR_WIDTH,
+                                inner_w - pfx - _vlen(suffix)))
+                            bar = _render_pre_wave_bar(bw, idx)
                             row = (f"{boxes}   "
                                    f"{_rpad(name, self._pad)}  "
-                                   f"{S.DIM}reasoning{dots:<4}"
-                                   f" {mel:>7}{S.RST}")
+                                   f"{bar}  {suffix}")
                         else:
                             now = time.monotonic()
                             dt = now - ainfo["last_rate_time"]
@@ -527,9 +561,7 @@ class ProgressTracker:
                                    + 0.05 * math.sin(idx * 0.025))
                             self._phases[name] = (
                                 self._phases.get(name, 0.0) + spd)
-                            bar = _render_pulse_bar(
-                                ainfo["chars"], model_scale, idx,
-                                self._phases[name])
+
                             est_tk = ainfo["chars"] // 4
                             rate_s = ""
                             if ainfo["smoothed_rate"] > 0:
@@ -541,12 +573,28 @@ class ProgressTracker:
                                 name, ainfo["chars"])
                             cost_s = (f"  {S.HYEL}{format_cost(live_c)}{S.RST}"
                                       if live_c else "")
+                            meta = f"{S.DIM}~{est_tk:,} tk{S.RST}"
+                            time_s = f"  {S.DIM}{mel}{S.RST}"
+
+                            pfx = 5 + 3 + self._pad + 2 + 2
+                            suffix = f"{meta}{rate_s}{cost_s}{time_s}"
+                            avail = inner_w - pfx - _vlen(suffix)
+                            if avail < 5 and rate_s:
+                                rate_s = ""
+                                suffix = f"{meta}{cost_s}{time_s}"
+                                avail = inner_w - pfx - _vlen(suffix)
+                            if avail < 5 and cost_s:
+                                cost_s = ""
+                                suffix = f"{meta}{time_s}"
+                                avail = inner_w - pfx - _vlen(suffix)
+                            bw = max(5, min(BAR_WIDTH, avail))
+
+                            bar = _render_pulse_bar(
+                                ainfo["chars"], model_scale, idx,
+                                self._phases[name], bw)
                             row = (f"{boxes}   "
                                    f"{_rpad(name, self._pad)}  "
-                                   f"{bar}  "
-                                   f"{S.DIM}~{est_tk:,} tk{S.RST}"
-                                   f"{rate_s}{cost_s}"
-                                   f"  {S.DIM}{mel}{S.RST}")
+                                   f"{bar}  {suffix}")
                     else:
                         boxes = self._phase_boxes(0)
                         row = (f"{boxes}   "
@@ -562,7 +610,7 @@ class ProgressTracker:
                         f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")
                     lines += 1
 
-                buf.append(_box_row("", w) + "\033[K\n")
+                buf.append(_box_sep("", w) + "\033[K\n")
                 lines += 1
 
                 running_cost = 0.0
@@ -692,12 +740,11 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
     print(_box_top(f"Lifetime Analytics ({n} run{'s' if n != 1 else ''})", w))
     print(_box_row("", w))
 
-    # ── Table header ───────────────────────────────────────────────────────
     hdr = (f"{S.BOLD}{'MODEL':<{col}}{'RUNS':>5}  {'RATE':>5}"
            f"  {'AVG':>8}  {'AVG TKNS':>9}"
            f"  {'AVG COST':>9}  {'TOTAL':>9}{S.RST}")
     print(_box_row(hdr, w))
-    print(_box_row(f"{S.DIM}{'─' * min(col + 52, inner)}{S.RST}", w))
+    print(_box_sep("", w))
 
     # ── Table rows (top 10 by usage, totals from all) ───────────────────────
     total_calls = total_ok = 0
@@ -744,7 +791,6 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
         print(_box_row(
             f"{S.DIM}+{hidden} more model{'s' if hidden != 1 else ''}{S.RST}", w))
 
-    # ── Totals ─────────────────────────────────────────────────────────────
     overall = (total_ok / total_calls * 100) if total_calls else 0
     avg_all = format_duration(
         sum(all_times) / len(all_times) if all_times else None
@@ -756,7 +802,7 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
     total_spend_s = format_cost(total_spend) if total_spend else "—"
     avg_cost_all_s = format_cost(avg_cost_all) if avg_cost_all else "—"
 
-    print(_box_row("", w))
+    print(_box_sep("Totals", w))
     print(_box_row(
         f"{total_calls} calls {_dot} {total_ok} passed {_dot} "
         f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {S.CYN}{avg_all}{S.RST} "

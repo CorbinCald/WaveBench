@@ -128,6 +128,31 @@ def _box(title: str, lines: list, width: int = 0, heavy: bool = False) -> None:
         print(_box_row(line, width, heavy))
     print(_box_bot(width, heavy))
 
+def _banner(title: str, width: int = 0) -> str:
+    """Render a centered title in a heavy box — used for the main app header."""
+    if not width:
+        width = _tw() - 4
+    inner = width - 4
+    tlen = _vlen(title)
+    lp = (inner - tlen) // 2
+    rp = inner - tlen - lp
+    return '\n'.join([
+        f"  {S.DIM}┏{'━' * (width - 2)}┓{S.RST}",
+        f"  {S.DIM}┃{S.RST}{' ' * lp}{S.BOLD}{S.CYN}{title}{S.RST}"
+        f"{' ' * rp}{S.DIM}┃{S.RST}",
+        f"  {S.DIM}┗{'━' * (width - 2)}┛{S.RST}",
+    ])
+
+
+def _box_divider(width: int = 0, heavy: bool = False) -> str:
+    """A light dotted divider inside a box (does not connect to the walls)."""
+    if not width:
+        width = _tw() - 4
+    sc = "┃" if heavy else "│"
+    inner = width - 4
+    return f"  {S.DIM}{sc}  {'┄' * (inner - 4)}  {sc}{S.RST}"
+
+
 def format_duration(seconds: float | None) -> str:
     """Format *seconds* into a concise human-readable string."""
     if seconds is None:
