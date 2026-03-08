@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from llm_benchmarks.tui.styles import (
-    S, _SPIN, format_duration, _tw, _truncate, _dot,
+    S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
     _box_top, _box_row, _box_sep, _box_bot,
     PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM,
@@ -108,6 +108,24 @@ def _render_pulse_bar(chars: int, scale: float, tick: int,
     return ''.join(parts)
 
 
+def compute_cost(usage: Dict[str, Any], pricing: Dict[str, Any]) -> Optional[float]:
+    """Compute the dollar cost of a single model call from usage + pricing.
+
+    Returns None when pricing data is unavailable or the cost is zero.
+    """
+    if not pricing or not usage:
+        return None
+    try:
+        pp = float(pricing.get("prompt") or 0)
+        cp = float(pricing.get("completion") or 0)
+    except (TypeError, ValueError):
+        return None
+    prompt_tokens = usage.get("prompt_tokens") or 0
+    completion_tokens = usage.get("completion_tokens") or 0
+    cost = prompt_tokens * pp + completion_tokens * cp
+    return cost if cost > 0 else None
+
+
 class ProgressTracker:
     """Multi-line animated progress display with live token bars.
 
@@ -124,7 +142,9 @@ class ProgressTracker:
     def __init__(self, total: int, results: Dict[str, Any],
                  pad: int = 16, label: str = "Generating",
                  model_names: Optional[list] = None,
-                 avg_tokens: Optional[Dict[str, float]] = None):
+                 avg_tokens: Optional[Dict[str, float]] = None,
+                 pricing_lookup: Optional[Dict[str, Any]] = None,
+                 model_id_map: Optional[Dict[str, str]] = None):
         self._total = total
         self._results = results
         self._label = label
@@ -142,6 +162,8 @@ class ProgressTracker:
         self._avg_tokens = avg_tokens or {}
         self._output_dir: Optional[str] = None
         self._rendered = False
+        self._pricing_lookup = pricing_lookup or {}
+        self._model_id_map = model_id_map or {}
 
     @property
     def is_running(self) -> bool:
@@ -153,6 +175,40 @@ class ProgressTracker:
 
     def set_output_dir(self, path: str) -> None:
         self._output_dir = path
+
+    def _model_pricing(self, model_name: str) -> Dict[str, Any]:
+        """Return the pricing dict for a model, or empty dict."""
+        mid = self._model_id_map.get(model_name, "")
+        return self._pricing_lookup.get(mid, {})
+
+    def _model_cost(self, model_name: str, info: Dict[str, Any]) -> Optional[float]:
+        """Compute cost for a completed model result."""
+        return compute_cost(info.get("usage", {}), self._model_pricing(model_name))
+
+    def _total_cost(self) -> Optional[float]:
+        """Sum costs across all completed results that have pricing."""
+        total = 0.0
+        any_cost = False
+        for name, info in self._results.items():
+            c = self._model_cost(name, info)
+            if c is not None:
+                total += c
+                any_cost = True
+        return total if any_cost else None
+
+    def _live_cost_for_active(self, model_name: str, chars: int) -> Optional[float]:
+        """Estimate live cost for an in-progress model from streamed chars."""
+        pricing = self._model_pricing(model_name)
+        if not pricing:
+            return None
+        try:
+            cp = float(pricing.get("completion") or 0)
+        except (TypeError, ValueError):
+            return None
+        if cp <= 0:
+            return None
+        est_tokens = chars / 4
+        return est_tokens * cp
 
     def register(self, model_name: str) -> None:
         """Mark a model as actively streaming."""
@@ -250,22 +306,22 @@ class ProgressTracker:
                            rank: int, inner_w: int) -> str:
         st = info.get("status", "failed")
         t = format_duration(info.get("time_s", 0))
+        cost = self._model_cost(name, info)
+        cost_s = f"  {S.HYEL}{format_cost(cost)}{S.RST}" if cost else ""
         if st == "success":
             sym = _ok
             usage = info.get("usage", {})
             tokens = usage.get("total_tokens")
             fname = info.get("file", "")
             tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
         elif st == "cancelled":
             sym = _skip
             detail = f"{S.DIM}cancelled{S.RST}"
-            tk_part = ""
             fname = ""
         else:
             sym = _fail
-            detail = f"{S.RED}failed{S.RST}"
-            tk_part = ""
+            detail = f"{S.RED}failed{S.RST}{cost_s}"
             fname = ""
         rank_s = f"{S.DIM}{rank:>2}.{S.RST}"
         content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
@@ -273,7 +329,7 @@ class ProgressTracker:
             overflow = _vlen(content) + 2 + len(t) - inner_w
             max_fname = max(8, len(fname) - overflow)
             fname = _truncate(fname, max_fname)
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
             content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
         gap = max(inner_w - _vlen(content) - len(t), 2)
         return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
@@ -316,6 +372,9 @@ class ProgressTracker:
         if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")
         if canc: parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
         parts.append(f"{format_duration(total_time)} total")
+        total_cost = self._total_cost()
+        if total_cost is not None:
+            parts.append(f"{S.HYEL}{format_cost(total_cost)}{S.RST}")
         sep = f" {_dot} "
         buf.append(_box_row(sep.join(parts), w))
         buf.append(_box_bot(w))
@@ -421,11 +480,15 @@ class ProgressTracker:
                                     f"  {S.CYN}"
                                     f"{int(ainfo['smoothed_rate']):,}"
                                     f" tk/s{S.RST}")
+                            live_c = self._live_cost_for_active(
+                                name, ainfo["chars"])
+                            cost_s = (f"  {S.HYEL}{format_cost(live_c)}{S.RST}"
+                                      if live_c else "")
                             row = (f"{boxes}   "
                                    f"{_rpad(name, self._pad)}  "
                                    f"{bar}  "
                                    f"{S.DIM}~{est_tk:,} tk{S.RST}"
-                                   f"{rate_s}"
+                                   f"{rate_s}{cost_s}"
                                    f"  {S.DIM}{mel}{S.RST}")
                     else:
                         boxes = self._phase_boxes(0)
@@ -439,11 +502,27 @@ class ProgressTracker:
                 buf.append(_box_row("", w) + "\033[K\n")
                 lines += 1
 
+                running_cost = 0.0
+                has_cost = False
+                for rn, ri in self._results.items():
+                    c = self._model_cost(rn, ri)
+                    if c is not None:
+                        running_cost += c
+                        has_cost = True
+                for an, ai in self._active.items():
+                    c = self._live_cost_for_active(an, ai["chars"])
+                    if c is not None:
+                        running_cost += c
+                        has_cost = True
+                cost_part = ""
+                if has_cost:
+                    cost_part = f" · {S.RST}{S.HYEL}{format_cost(running_cost)}{S.RST}{S.DIM}"
+
                 summary = (
                     f"{S.HCYN}{frame}{S.RST} "
                     f"{self._label}  "
                     f"{S.DIM}{done}/{self._total} complete · "
-                    f"{elapsed}{S.RST}")
+                    f"{elapsed}{cost_part}{S.RST}")
                 buf.append(_box_row(summary, w) + "\033[K\n")
                 lines += 1
 

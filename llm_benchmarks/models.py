@@ -11,11 +11,11 @@ MODEL_MAPPING: Dict[str, str] = {
 
 _TIER1_PROVIDERS: FrozenSet[str] = frozenset({
     "anthropic", "openai", "google", "deepseek", "x-ai",
-    "moonshotai", "minimax", "qwen",
+    "moonshotai", "minimax",
 })
 _TIER2_PROVIDERS: FrozenSet[str] = frozenset({
     "z-ai", "meta-llama", "mistralai", "bytedance-seed",
-    "microsoft", "cohere",
+    "microsoft", "cohere", "qwen",
 })
 
 def _model_score(m: dict) -> float:
