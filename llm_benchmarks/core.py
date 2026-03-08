@@ -10,7 +10,7 @@ from llm_benchmarks.parsers import parse_llm_output, get_directory_name
 from llm_benchmarks.tui.styles import (
     S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, format_cost,
     _truncate, _dot, _rpad, _tw, _vlen,
-    _box, _box_top, _box_row, _box_bot,
+    _box, _box_top, _box_row, _box_sep, _box_bot, _box_divider,
 )
 from llm_benchmarks.tui.components import ProgressTracker, display_analytics, compute_cost
 from llm_benchmarks.storage import load_history, record_run
@@ -264,7 +264,7 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
                      pricing_lookup: Optional[Dict[str, Any]] = None) -> None:
     from llm_benchmarks.models import MODEL_MAPPING
     mapping = model_mapping if model_mapping is not None else MODEL_MAPPING
-    pad = max((len(n) for n in mapping), default=12) + 4
+    pad = max((len(n) for n in mapping), default=12) + 1
 
     if config is None:
         from llm_benchmarks.storage import load_config
@@ -296,20 +296,24 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
 
     mode_label = f"{S.HYEL}TEXT{S.RST}" if text_mode else f"{S.HCYN}CODE{S.RST}"
 
-    # ── Config display ─────────────────────────────────────────────────────
     w = _tw() - 4
     if reasoning_effort:
         reasoning_label = f"{S.HGRN}{reasoning_effort}{S.RST}"
     else:
         reasoning_label = f"{S.HRED}off{S.RST}"
     print()
-    _box("", [
-        f"{S.DIM}{'MODE':>8}{S.RST}  {mode_label}",
+    print(_box_top("", w, heavy=True))
+    print(_box_row(
+        f"{S.DIM}{'MODE':>8}{S.RST}  {mode_label}", w, heavy=True))
+    print(_box_row(
         f"{S.DIM}{'PROMPT':>8}{S.RST}  "
-        f"{S.BOLD}{_truncate(user_prompt, w - 16)}{S.RST}",
-        f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active",
-        f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}",
-    ], w, heavy=True)
+        f"{S.BOLD}{_truncate(user_prompt, w - 16)}{S.RST}", w, heavy=True))
+    print(_box_divider(w, heavy=True))
+    print(_box_row(
+        f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active", w, heavy=True))
+    print(_box_row(
+        f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
+    print(_box_bot(w, heavy=True))
     print()
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -416,7 +420,9 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
                 out_path = "…" + out_path[-(max_path - 1):]
             print(_box_row(
                 f"{S.DIM}{'OUTPUT':>8}  {out_path}{S.RST}", w))
-        print(_box_row("", w))
+            print(_box_sep("", w))
+        else:
+            print(_box_row("", w))
 
         def _rank_key(item: Any) -> Any:
             _, v = item
@@ -462,7 +468,7 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
             print(_box_row(
                 f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
 
-        print(_box_row("", w))
+        print(_box_sep("", w))
         parts: list[str] = []
         if ok:   parts.append(f"{S.HGRN}{ok} passed{S.RST}")
         if fail: parts.append(f"{S.HRED}{fail} failed{S.RST}")

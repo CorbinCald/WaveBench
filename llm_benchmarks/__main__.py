@@ -12,7 +12,10 @@ except ImportError:
 from llm_benchmarks.api import load_api_key, fetch_top_models
 from llm_benchmarks.models import MODEL_MAPPING
 from llm_benchmarks.storage import load_models, save_models, load_config, save_config, load_history, _history_path
-from llm_benchmarks.tui.styles import _rule, S, _ok, _fail
+from llm_benchmarks.tui.styles import (
+    _banner, S, _ok, _fail, _dot, _tw,
+    _box_top, _box_row, _box_bot,
+)
 from llm_benchmarks.tui.components import display_analytics
 from llm_benchmarks.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape
 from llm_benchmarks.core import main_async
@@ -73,13 +76,11 @@ def main() -> None:
     # ── Stats-only mode ────────────────────────────────────────────────────
     if args.stats:
         print()
-        _rule("LLM BENCHMARK", heavy=True)
+        print(_banner("LLM BENCHMARK"))
         history = load_history()
         cfg = load_config()
         display_analytics(history, compact=False,
                           sort_by=cfg.get("analytics_sort", "runs"))
-        print()
-        _rule(heavy=True)
         print()
         return
 
@@ -121,7 +122,7 @@ def main() -> None:
 
     if args.config:
         print()
-        _rule("LLM BENCHMARK", heavy=True)
+        print(_banner("LLM BENCHMARK"))
         print()
         new_models, new_config = run_config_menu(
             api_key, current_mapping=selected_models,
@@ -139,7 +140,7 @@ def main() -> None:
     if not args.prompt:
         if not args.config:
             print()
-            _rule("LLM BENCHMARK", heavy=True)
+            print(_banner("LLM BENCHMARK"))
             print()
 
         text_from_cli = args.text
@@ -148,17 +149,21 @@ def main() -> None:
             active = (selected_models
                       if selected_models is not None
                       else MODEL_MAPPING)
-            print(f"  {S.DIM}Select mode:{S.RST}  "
-                  f"{S.HCYN}[1]{S.RST} Code  "
-                  f"{S.HYEL}[2]{S.RST} Text")
-            print(f"  {S.DIM}{len(active)} models active{S.RST}  "
-                  f"{S.BLU}[c]{S.RST} config")
+            w = _tw() - 4
+            row = (f"{S.HCYN}[1]{S.RST} Code  "
+                   f"{S.HYEL}[2]{S.RST} Text"
+                   f"  {_dot}  "
+                   f"{S.DIM}{len(active)} models{S.RST}  "
+                   f"{S.BLU}[c]{S.RST} config")
+            print(_box_top("Select Mode", w))
+            print(_box_row(row, w))
+            print(_box_bot(w))
 
         def _refresh_header() -> None:
             sys.stdout.write('\033[2J\033[H')
             sys.stdout.flush()
             print()
-            _rule("LLM BENCHMARK", heavy=True)
+            print(_banner("LLM BENCHMARK"))
             print()
 
         while True:
@@ -205,14 +210,16 @@ def main() -> None:
                         mode_done = True
                 print()
 
-            # Show active models summary
             active = (selected_models
                       if selected_models is not None else MODEL_MAPPING)
             names = list(active.keys())
             summary = ", ".join(names[:6])
             if len(names) > 6:
                 summary += f", … (+{len(names) - 6})"
-            print(f"  {S.DIM}{len(active)} models:{S.RST} {summary}")
+            w = _tw() - 4
+            print(_box_top(f"{len(active)} Models", w))
+            print(_box_row(summary, w))
+            print(_box_bot(w))
             print()
 
             # ── Prompt input ──────────────────────────────────────────
