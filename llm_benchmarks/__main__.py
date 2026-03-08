@@ -115,6 +115,10 @@ def main() -> None:
         except Exception:
             return [], {}
 
+    if sys.stdout.isatty():
+        sys.stdout.write('\033[2J\033[H')
+        sys.stdout.flush()
+
     if args.config:
         print()
         _rule("LLM BENCHMARK", heavy=True)
@@ -150,6 +154,13 @@ def main() -> None:
             print(f"  {S.DIM}{len(active)} models active{S.RST}  "
                   f"{S.BLU}[c]{S.RST} config")
 
+        def _refresh_header() -> None:
+            sys.stdout.write('\033[2J\033[H')
+            sys.stdout.flush()
+            print()
+            _rule("LLM BENCHMARK", heavy=True)
+            print()
+
         while True:
             text_mode = text_from_cli
 
@@ -171,7 +182,6 @@ def main() -> None:
                         return
                     if key == 'c':
                         sys.stdout.write('c\n')
-                        print()
                         new_m, new_c = run_config_menu(
                             api_key, current_mapping=selected_models,
                             current_config=config,
@@ -181,10 +191,7 @@ def main() -> None:
                             config = new_c
                             save_models(selected_models)
                             save_config(config)
-                        else:
-                            print(f"  {S.DIM}Cancelled — "
-                                  f"keeping current config.{S.RST}")
-                        print()
+                        _refresh_header()
                         _print_mode_menu()
                         sys.stdout.write(mode_prompt)
                         sys.stdout.flush()
@@ -222,14 +229,13 @@ def main() -> None:
                 user_prompt = _read_line(rl_prompt, history=history_entries)
 
                 if not user_prompt.strip():
-                    print(f"  {S.DIM}No prompt provided.{S.RST}")
-                    print()
+                    _refresh_header()
                     continue
                 _save_query_history(user_prompt)
             except _TabEscape:
                 if text_from_cli:
                     return
-                print()
+                _refresh_header()
                 continue
             except (KeyboardInterrupt, EOFError):
                 print(f"  {S.DIM}Interrupted.{S.RST}\n")
