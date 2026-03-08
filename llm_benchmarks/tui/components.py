@@ -145,7 +145,8 @@ class ProgressTracker:
                  model_names: Optional[list] = None,
                  avg_tokens: Optional[Dict[str, float]] = None,
                  pricing_lookup: Optional[Dict[str, Any]] = None,
-                 model_id_map: Optional[Dict[str, str]] = None):
+                 model_id_map: Optional[Dict[str, str]] = None,
+                 alt_screen: bool = False):
         self._total = total
         self._results = results
         self._label = label
@@ -165,6 +166,8 @@ class ProgressTracker:
         self._rendered = False
         self._pricing_lookup = pricing_lookup or {}
         self._model_id_map = model_id_map or {}
+        self._alt_screen = alt_screen and self._is_tty
+        self._entered_alt_screen = False
 
     @property
     def is_running(self) -> bool:
@@ -243,6 +246,10 @@ class ProgressTracker:
     async def start(self) -> None:
         if not self._is_tty:
             return
+        if self._alt_screen:
+            sys.stdout.write("\033[?1049h\033[?25l\033[H")
+            sys.stdout.flush()
+            self._entered_alt_screen = True
         self._running = True
         self._start = time.monotonic()
         self._install_hook()
@@ -250,6 +257,10 @@ class ProgressTracker:
 
     async def stop(self) -> None:
         if not self._running:
+            if self._entered_alt_screen:
+                sys.stdout.write("\033[?25h\033[?1049l")
+                sys.stdout.flush()
+                self._entered_alt_screen = False
             return
         self._running = False
         if self._task:
@@ -259,6 +270,11 @@ class ProgressTracker:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self._entered_alt_screen:
+            self._drawn_lines = 0
+            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.flush()
+            self._entered_alt_screen = False
         self._render_final()
         sys.stdout.flush()
         self._uninstall_hook()
@@ -287,6 +303,10 @@ class ProgressTracker:
 
     def _clear_drawn(self) -> None:
         """Erase all previously drawn progress lines."""
+        if self._entered_alt_screen:
+            sys.stdout.write("\033[H")
+            self._drawn_lines = 0
+            return
         if self._drawn_lines <= 0:
             return
         if self._drawn_lines > 1:
@@ -547,6 +567,8 @@ class ProgressTracker:
 
                 buf.append(_box_bot(w) + "\033[K")
                 lines += 1
+                if self._entered_alt_screen:
+                    buf.append("\033[J")
 
                 sys.stdout.write("\r" + "".join(buf))
                 sys.stdout.flush()
