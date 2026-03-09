@@ -1,4 +1,4 @@
-# LLM Benchmark Generator
+# WaveBench
 
 A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send a single prompt to multiple models in parallel, compare their generated code or prose, and track lifetime performance analytics from your terminal.
 
@@ -11,7 +11,7 @@ A terminal-based tool for benchmarking Large Language Models side-by-side via th
 
 ```bash
 git clone <repository-url>
-cd LLM-Benchmarks
+cd WaveBench
 
 python -m venv .venv
 source .venv/bin/activate   # macOS / Linux
@@ -33,9 +33,9 @@ OPENROUTER_API_KEY=your_key_here
 ## Quick Start
 
 ```bash
-llm-benchmarks
+wavebench
 # or
-python -m llm_benchmarks
+python -m wavebench
 # or
 ./run_benchmarks.sh
 ```
@@ -55,10 +55,10 @@ You'll be greeted with an interactive mode selector (**Code** or **Text**), a su
 Examples:
 
 ```bash
-llm-benchmarks --prompt "Create a snake game in Python"
-llm-benchmarks --prompt "Explain quantum computing" --text
-llm-benchmarks --config
-llm-benchmarks --stats
+wavebench --prompt "Create a snake game in Python"
+wavebench --prompt "Explain quantum computing" --text
+wavebench --config
+wavebench --stats
 ```
 
 ## How It Works
@@ -67,8 +67,8 @@ llm-benchmarks --stats
 2. **Directory naming** — A async LLM call generates a short `snake_case` directory name from your prompt.
 3. **Parallel execution** — All selected models are queried concurrently (up to 12 at a time) with streaming responses and a live progress display.
 4. **Parsing** — In code mode, responses are parsed to extract the code block and detect the file extension. In text mode, raw Markdown is saved directly.
-5. **Results** — A ranked leaderboard shows pass/fail status, file names, token counts, and timing for each model.
-6. **Analytics** — Every run is recorded and lifetime stats (success rate, average time, token usage) are displayed.
+5. **Results** — A ranked leaderboard shows pass/fail status, file names, token counts, timing, and cost for each model.
+6. **Analytics** — Every run is recorded and lifetime stats (success rate, average time, token usage, and cost) are displayed.
 
 ## Configuration Menu
 
@@ -98,7 +98,7 @@ In text mode, outputs are saved as `.md` files instead.
 ## Project Structure
 
 ```
-llm_benchmarks/
+wavebench/
 ├── __init__.py
 ├── __main__.py        # CLI entry point & argument parsing
 ├── api.py             # OpenRouter API client (streaming & non-streaming)

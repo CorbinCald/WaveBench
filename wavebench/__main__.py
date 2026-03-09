@@ -1,6 +1,7 @@
 import argparse
 import sys
 import os
+import shutil
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, Future
 
@@ -9,16 +10,16 @@ try:
 except ImportError:
     readline = None  # type: ignore[assignment]
 
-from llm_benchmarks.api import load_api_key, fetch_top_models
-from llm_benchmarks.models import MODEL_MAPPING
-from llm_benchmarks.storage import load_models, save_models, load_config, save_config, load_history, _history_path
-from llm_benchmarks.tui.styles import (
+from wavebench.api import load_api_key, fetch_top_models
+from wavebench.models import MODEL_MAPPING
+from wavebench.storage import load_models, save_models, load_config, save_config, load_history, _history_path
+from wavebench.tui.styles import (
     _banner, S, _ok, _fail, _dot, _tw,
     _box_top, _box_row, _box_bot,
 )
-from llm_benchmarks.tui.components import display_analytics
-from llm_benchmarks.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape
-from llm_benchmarks.core import main_async
+from wavebench.tui.components import display_analytics, render_idle_wave
+from wavebench.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape, _read_key_timeout
+from wavebench.core import main_async
 
 QUERY_HISTORY_FILE = ".benchmark_query_history"
 
@@ -76,7 +77,7 @@ def main() -> None:
     # ── Stats-only mode ────────────────────────────────────────────────────
     if args.stats:
         print()
-        print(_banner("LLM BENCHMARK"))
+        print(_banner("WAVEBENCH"))
         history = load_history()
         cfg = load_config()
         display_analytics(history, compact=False,
@@ -122,7 +123,7 @@ def main() -> None:
 
     if args.config:
         print()
-        print(_banner("LLM BENCHMARK"))
+        print(_banner("WAVEBENCH"))
         print()
         new_models, new_config = run_config_menu(
             api_key, current_mapping=selected_models,
@@ -138,11 +139,6 @@ def main() -> None:
 
     # ── Interactive prompt ─────────────────────────────────────────────────
     if not args.prompt:
-        if not args.config:
-            print()
-            print(_banner("LLM BENCHMARK"))
-            print()
-
         text_from_cli = args.text
 
         def _print_mode_menu() -> None:
@@ -163,8 +159,11 @@ def main() -> None:
             sys.stdout.write('\033[2J\033[H')
             sys.stdout.flush()
             print()
-            print(_banner("LLM BENCHMARK"))
+            print(_banner("WAVEBENCH"))
             print()
+
+        _PROMPT_ROW = 9
+        _refresh_header()
 
         while True:
             text_mode = text_from_cli
@@ -174,11 +173,36 @@ def main() -> None:
                 _print_mode_menu()
                 mode_prompt = f"  {S.DIM}mode{S.RST} {S.HCYN}›{S.RST} "
                 sys.stdout.write(mode_prompt)
+                sys.stdout.write('\x1b7')
                 sys.stdout.flush()
 
                 mode_done = False
+                _wave_tick = 0
                 while not mode_done:
-                    key = _read_key()
+                    key = _read_key_timeout(0.07)
+
+                    if key is None:
+                        term = shutil.get_terminal_size((80, 24))
+                        _wt = _PROMPT_ROW + 1
+                        _wh = term.lines - _wt
+                        _ww = term.columns - 2
+                        if _wh >= 3 and _ww >= 10:
+                            _wf = render_idle_wave(
+                                _wave_tick, _ww, _wh)
+                            _buf = []
+                            for _i, _rs in enumerate(_wf):
+                                _buf.append(
+                                    f'\x1b[{_wt + _i};2H{_rs}')
+                            _buf.append('\x1b8')
+                            sys.stdout.write(''.join(_buf))
+                            sys.stdout.flush()
+                        _wave_tick += 1
+                        continue
+
+                    sys.stdout.write(
+                        f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J\x1b8')
+                    sys.stdout.flush()
+
                     if key in ('tab', 'escape'):
                         sys.stdout.write('\n')
                         return
@@ -199,7 +223,9 @@ def main() -> None:
                         _refresh_header()
                         _print_mode_menu()
                         sys.stdout.write(mode_prompt)
+                        sys.stdout.write('\x1b7')
                         sys.stdout.flush()
+                        _wave_tick = 0
                         continue
                     if key == '2':
                         sys.stdout.write('2\n')
