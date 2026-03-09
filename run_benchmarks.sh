@@ -3,4 +3,4 @@
 # Wrapper script to run the benchmarks
 # It will use the current python environment and execute the module
 
-python3 -m llm_benchmarks "$@"
+python3 -m wavebench "$@"

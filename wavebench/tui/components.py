@@ -11,7 +11,7 @@ try:
 except ImportError:
     termios = None  # type: ignore[assignment]
 
-from llm_benchmarks.tui.styles import (
+from wavebench.tui.styles import (
     S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
     _box_top, _box_row, _box_sep, _box_bot, _box_divider,
@@ -137,6 +137,79 @@ def _render_pre_wave_bar(width: int, tick: int) -> str:
     if not _NO_COLOR:
         parts.append(S.RST)
     return ''.join(parts)
+
+
+def render_idle_wave(tick: int, width: int, height: int) -> list[str]:
+    """Render one frame of an animated ocean wave for the idle screen.
+
+    Returns *height* ANSI-colored strings, each *width* visible characters
+    wide, built from braille glyphs and the PULSE_GRADIENT palette.
+    Four wave harmonics follow deep-water dispersion (phase speed
+    proportional to 1/sqrt(k)) with a second-order Stokes correction
+    to sharpen crests and flatten troughs.
+    """
+    if _NO_COLOR or height <= 0 or width <= 0:
+        return [' ' * width] * max(height, 0)
+
+    total_sp = height * 8
+    amp = total_sp * 0.34 * (1.0 + 0.15 * math.sin(tick * 0.019 + 1.0))
+    center = total_sp * 0.58 + amp * 0.30 * math.sin(tick * 0.024)
+
+    surfaces: list[float] = []
+    for col in range(width):
+        nx = col / max(width - 1, 1)
+        h = (0.62 * math.sin(nx * 14.0 - tick * 0.107)
+             + 0.22 * math.sin(nx * 26.0 - tick * 0.147 + 1.7)
+             + 0.10 * math.sin(nx * 44.0 - tick * 0.187 + 3.1)
+             + 0.04 * math.sin(nx * 68.0 - tick * 0.240 + 0.9))
+        h += 0.24 * h * h
+        if h > 0:
+            h = h ** 1.8
+            h /= 1.0 + 0.20 * h
+        else:
+            h = -(abs(h) ** 1.3)
+        surfaces.append(center - h * amp)
+
+    rows: list[str] = []
+    for row in range(height):
+        cell_top = row * 8
+        cell_bot = cell_top + 8
+        parts: list[str] = []
+        prev_gi = -1
+
+        for col in range(width):
+            s = surfaces[col]
+
+            if s <= cell_top:
+                level = 8
+            elif s >= cell_bot:
+                level = 0
+            else:
+                level = max(1, min(7, round(cell_bot - s)))
+
+            if level == 0:
+                if prev_gi >= 0:
+                    parts.append(S.RST)
+                    prev_gi = -1
+                parts.append(' ')
+                continue
+
+            pool = _WAVE_CHARS[level]
+            ch = pool[(col + tick) % len(pool)]
+
+            gi = 8
+            if gi != prev_gi:
+                if prev_gi >= 0:
+                    parts.append(S.RST)
+                parts.append(PULSE_GRADIENT[gi])
+                prev_gi = gi
+            parts.append(ch)
+
+        if prev_gi >= 0:
+            parts.append(S.RST)
+        rows.append(''.join(parts))
+
+    return rows
 
 
 def compute_cost(usage: Dict[str, Any], pricing: Dict[str, Any]) -> Optional[float]:

@@ -15,11 +15,11 @@ except ImportError:
 
 _HAS_SIGWINCH = hasattr(signal, 'SIGWINCH')
 
-from llm_benchmarks.tui.styles import (
+from wavebench.tui.styles import (
     S, _dot, _rule, _work, _vlen, _box_top, _box_row, _box_bot,
 )
-from llm_benchmarks.api import fetch_top_models
-from llm_benchmarks.models import MODEL_MAPPING
+from wavebench.api import fetch_top_models
+from wavebench.models import MODEL_MAPPING
 
 MODEL_MENU_LIMIT = 100
 
@@ -137,6 +137,51 @@ def _read_key_or_resize(winch_r: int = -1) -> str:
         ch = os.read(fd, 1)
         if not ch:
             return ''
+        ch = ch.decode('utf-8', errors='replace')
+        if ch == '\x1b':
+            esc_ready, _, _ = select.select([fd], [], [], 0.05)
+            if not esc_ready:
+                return 'escape'
+            ch2 = os.read(fd, 1).decode('utf-8', errors='replace')
+            if ch2 == '[':
+                ch3 = os.read(fd, 1).decode('utf-8', errors='replace')
+                return {'A': 'up', 'B': 'down', 'C': 'right',
+                        'D': 'left'}.get(ch3, '')
+            return 'escape'
+        if ch in ('\r', '\n'):
+            return 'enter'
+        if ch == '\t':
+            return 'tab'
+        if ch == ' ':
+            return 'space'
+        if ch == '\x03':
+            return 'ctrl-c'
+        if ch == '\x01':
+            return 'ctrl-a'
+        if ch == '\x0e':
+            return 'ctrl-n'
+        if ch in ('\x7f', '\b'):
+            return 'backspace'
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_key_timeout(timeout_s: float = 0.08) -> Optional[str]:
+    """Read a single keypress, returning ``None`` if *timeout_s* elapses."""
+    if not _HAS_TTY or not sys.stdin.isatty():
+        ch = input()[:1]
+        return ch or 'enter'
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ready, _, _ = select.select([fd], [], [], timeout_s)
+        if not ready:
+            return None
+        ch = os.read(fd, 1)
+        if not ch:
+            return None
         ch = ch.decode('utf-8', errors='replace')
         if ch == '\x1b':
             esc_ready, _, _ = select.select([fd], [], [], 0.05)
@@ -923,7 +968,7 @@ def run_config_menu(api_key: str, current_mapping: Optional[Dict[str, str]] = No
     If *prefetched* is supplied as ``(available, pricing_lookup)`` the
     network call is skipped entirely.
     """
-    from llm_benchmarks.storage import load_config
+    from wavebench.storage import load_config
     if prefetched is not None:
         available, pricing_lookup = prefetched
     else:

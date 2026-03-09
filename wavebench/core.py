@@ -5,15 +5,15 @@ import asyncio
 import aiohttp
 from typing import Dict, Any, Optional
 
-from llm_benchmarks.api import call_model_streaming
-from llm_benchmarks.parsers import parse_llm_output, get_directory_name
-from llm_benchmarks.tui.styles import (
+from wavebench.api import call_model_streaming
+from wavebench.parsers import parse_llm_output, get_directory_name
+from wavebench.tui.styles import (
     S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, format_cost,
     _truncate, _dot, _rpad, _tw, _vlen,
     _box, _box_top, _box_row, _box_sep, _box_bot, _box_divider,
 )
-from llm_benchmarks.tui.components import ProgressTracker, display_analytics, compute_cost
-from llm_benchmarks.storage import load_history, record_run
+from wavebench.tui.components import ProgressTracker, display_analytics, compute_cost
+from wavebench.storage import load_history, record_run
 
 OUTPUT_DIR       = "benchmarkResults"
 MAX_CONCURRENCY  = 12
@@ -262,12 +262,12 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
 async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, str]] = None,
                      config: Optional[Dict[str, Any]] = None,
                      pricing_lookup: Optional[Dict[str, Any]] = None) -> None:
-    from llm_benchmarks.models import MODEL_MAPPING
+    from wavebench.models import MODEL_MAPPING
     mapping = model_mapping if model_mapping is not None else MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 1
 
     if config is None:
-        from llm_benchmarks.storage import load_config
+        from wavebench.storage import load_config
         config = load_config()
 
     raw_effort = config.get("reasoning_effort", "high")
