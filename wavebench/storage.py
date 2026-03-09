@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-from llm_benchmarks.tui.styles import _tri, S
+from wavebench.tui.styles import _tri, S
 
 HISTORY_FILE: str = ".benchmark_history.json"
 MODELS_FILE: str = ".benchmark_models.json"

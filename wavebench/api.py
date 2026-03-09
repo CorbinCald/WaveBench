@@ -7,8 +7,8 @@ import re
 import aiohttp
 from typing import Optional, Tuple, Any, Dict, List, Callable
 
-from llm_benchmarks.tui.styles import _tri, S
-from llm_benchmarks.models import _model_score
+from wavebench.tui.styles import _tri, S
+from wavebench.models import _model_score
 
 API_URL = "https://openrouter.ai/api/v1"
 _MODEL_CONTEXT_CACHE: Dict[str, int] = {}

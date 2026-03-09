@@ -3,8 +3,8 @@ import json
 import aiohttp
 from typing import Optional, Dict, Any, List, Tuple
 
-from llm_benchmarks.api import call_model_async
-from llm_benchmarks.tui.styles import _tri, S
+from wavebench.api import call_model_async
+from wavebench.tui.styles import _tri, S
 
 async def get_directory_name(session: aiohttp.ClientSession, api_key: str, prompt: str) -> str:
     """Use a fast model to derive a short directory name from the prompt."""
