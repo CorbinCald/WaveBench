@@ -138,8 +138,8 @@ def _banner(title: str, width: int = 0) -> str:
     rp = inner - tlen - lp
     return '\n'.join([
         f"  {S.DIM}┏{'━' * (width - 2)}┓{S.RST}",
-        f"  {S.DIM}┃{S.RST}{' ' * lp}{S.BOLD}{S.CYN}{title}{S.RST}"
-        f"{' ' * rp}{S.DIM}┃{S.RST}",
+        f"  {S.DIM}┃{S.RST} {' ' * lp}{S.BOLD}{S.CYN}{title}{S.RST}"
+        f"{' ' * rp} {S.DIM}┃{S.RST}",
         f"  {S.DIM}┗{'━' * (width - 2)}┛{S.RST}",
     ])
 
