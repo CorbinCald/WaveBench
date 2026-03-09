@@ -163,6 +163,24 @@ def main() -> None:
             print()
 
         _PROMPT_ROW = 9
+        _wave_tick = 0
+
+        def _wave_idle() -> None:
+            nonlocal _wave_tick
+            term = shutil.get_terminal_size((80, 24))
+            _wt = _PROMPT_ROW + 1
+            _wh = term.lines - _wt
+            _ww = term.columns - 2
+            if _wh >= 3 and _ww >= 10:
+                _wf = render_idle_wave(_wave_tick, _ww, _wh)
+                _buf = ['\x1b7']
+                for _i, _rs in enumerate(_wf):
+                    _buf.append(f'\x1b[{_wt + _i};2H{_rs}')
+                _buf.append('\x1b8')
+                sys.stdout.write(''.join(_buf))
+                sys.stdout.flush()
+            _wave_tick += 1
+
         _refresh_header()
 
         while True:
@@ -177,26 +195,11 @@ def main() -> None:
                 sys.stdout.flush()
 
                 mode_done = False
-                _wave_tick = 0
                 while not mode_done:
                     key = _read_key_timeout(0.07)
 
                     if key is None:
-                        term = shutil.get_terminal_size((80, 24))
-                        _wt = _PROMPT_ROW + 1
-                        _wh = term.lines - _wt
-                        _ww = term.columns - 2
-                        if _wh >= 3 and _ww >= 10:
-                            _wf = render_idle_wave(
-                                _wave_tick, _ww, _wh)
-                            _buf = []
-                            for _i, _rs in enumerate(_wf):
-                                _buf.append(
-                                    f'\x1b[{_wt + _i};2H{_rs}')
-                            _buf.append('\x1b8')
-                            sys.stdout.write(''.join(_buf))
-                            sys.stdout.flush()
-                        _wave_tick += 1
+                        _wave_idle()
                         continue
 
                     sys.stdout.write(
@@ -225,7 +228,6 @@ def main() -> None:
                         sys.stdout.write(mode_prompt)
                         sys.stdout.write('\x1b7')
                         sys.stdout.flush()
-                        _wave_tick = 0
                         continue
                     if key == '2':
                         sys.stdout.write('2\n')
@@ -234,7 +236,8 @@ def main() -> None:
                     elif key == '1':
                         sys.stdout.write('1\n')
                         mode_done = True
-                print()
+                sys.stdout.write('\033[4A\r\033[J')
+                sys.stdout.flush()
 
             active = (selected_models
                       if selected_models is not None else MODEL_MAPPING)
@@ -246,7 +249,6 @@ def main() -> None:
             print(_box_top(f"{len(active)} Models", w))
             print(_box_row(summary, w))
             print(_box_bot(w))
-            print()
 
             # ── Prompt input ──────────────────────────────────────────
             try:
@@ -259,18 +261,25 @@ def main() -> None:
                             history_entries.append(entry)
 
                 rl_prompt = f"  {S.HCYN}›{S.RST} "
-                user_prompt = _read_line(rl_prompt, history=history_entries)
+                user_prompt = _read_line(rl_prompt, history=history_entries,
+                                         on_idle=_wave_idle)
+                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                sys.stdout.flush()
 
                 if not user_prompt.strip():
                     _refresh_header()
                     continue
                 _save_query_history(user_prompt)
             except _TabEscape:
+                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                sys.stdout.flush()
                 if text_from_cli:
                     return
                 _refresh_header()
                 continue
             except (KeyboardInterrupt, EOFError):
+                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                sys.stdout.flush()
                 print(f"  {S.DIM}Interrupted.{S.RST}\n")
                 return
             print()

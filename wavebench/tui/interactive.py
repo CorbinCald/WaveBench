@@ -4,7 +4,7 @@ import re
 import shutil
 import select
 import signal
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Callable, Dict, Any, Optional, List, Tuple
 
 try:
     import tty
@@ -226,11 +226,14 @@ def _redraw_input(prompt: str, buf: list, cursor: int) -> None:
     sys.stdout.flush()
 
 
-def _read_line(prompt: str, history: Optional[List[str]] = None) -> str:
+def _read_line(prompt: str, history: Optional[List[str]] = None,
+               on_idle: Optional[Callable] = None,
+               idle_timeout: float = 0.07) -> str:
     """Read a line with basic editing and history.
 
     Supports left/right, home/end, backspace/delete, Ctrl+A/E/K/U/W,
     up/down for history, and raises *_TabEscape* on Tab or Escape.
+    If *on_idle* is provided, it is called while waiting for input.
     """
     if not _HAS_TTY:
         return input(re.sub(r'\033\[[0-9;]*m', '', prompt))
@@ -246,15 +249,35 @@ def _read_line(prompt: str, history: Optional[List[str]] = None) -> str:
 
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
+    _idle_timeout = idle_timeout if on_idle else None
     try:
         tty.setraw(fd)
         while True:
-            ch = sys.stdin.read(1)
+            ready, _, _ = select.select([fd], [], [], _idle_timeout)
+            if not ready:
+                if on_idle:
+                    on_idle()
+                continue
+            raw = os.read(fd, 1)
+            if not raw:
+                continue
+            b = raw[0]
+            if b >= 0xC0:
+                if b < 0xE0:
+                    raw += os.read(fd, 1)
+                elif b < 0xF0:
+                    raw += os.read(fd, 2)
+                else:
+                    raw += os.read(fd, 3)
+            ch = raw.decode('utf-8', errors='replace')
 
             if ch == '\x1b':
-                ch2 = sys.stdin.read(1)
+                esc_ready, _, _ = select.select([fd], [], [], 0.05)
+                if not esc_ready:
+                    raise _TabEscape()
+                ch2 = os.read(fd, 1).decode('utf-8', errors='replace')
                 if ch2 == '[':
-                    ch3 = sys.stdin.read(1)
+                    ch3 = os.read(fd, 1).decode('utf-8', errors='replace')
                     if ch3 == 'A' and hist_pos > 0:
                         hist[hist_pos] = ''.join(buf)
                         hist_pos -= 1
@@ -282,7 +305,7 @@ def _read_line(prompt: str, history: Optional[List[str]] = None) -> str:
                         cursor = len(buf)
                         _redraw_input(prompt, buf, cursor)
                     elif ch3 in '345678':
-                        ch4 = sys.stdin.read(1)
+                        ch4 = os.read(fd, 1).decode('utf-8', errors='replace')
                         if ch3 == '3' and ch4 == '~' and cursor < len(buf):
                             buf.pop(cursor)
                             _redraw_input(prompt, buf, cursor)
