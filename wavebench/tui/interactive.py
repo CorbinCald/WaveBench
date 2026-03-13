@@ -218,9 +218,26 @@ class _TabEscape(Exception):
 
 
 def _redraw_input(prompt: str, buf: list, cursor: int) -> None:
-    """Redraw the input line and position the cursor."""
-    sys.stdout.write(f'\r{prompt}{"".join(buf)}\033[K')
-    back = len(buf) - cursor
+    """Redraw the input line, scrolling horizontally for long input."""
+    term_w = shutil.get_terminal_size((80, 24)).columns
+    prompt_w = _vlen(prompt)
+    avail = max(1, term_w - prompt_w - 1)
+
+    text = "".join(buf)
+
+    if len(text) <= avail:
+        visible = text
+        vis_cursor = cursor
+    else:
+        half = avail // 2
+        start = max(0, cursor - half)
+        if start + avail > len(text):
+            start = max(0, len(text) - avail)
+        visible = text[start:start + avail]
+        vis_cursor = cursor - start
+
+    sys.stdout.write(f'\r{prompt}{visible}\033[K')
+    back = len(visible) - vis_cursor
     if back > 0:
         sys.stdout.write(f'\033[{back}D')
     sys.stdout.flush()
@@ -483,7 +500,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
         pcount = _page_count()
         hl = (f"  {S.DIM}↑↓{S.RST} navigate  {_dot}  "
               f"{S.DIM}Space{S.RST} toggle  {_dot}  "
-              f"{S.DIM}Enter{S.RST} confirm  {_dot}  "
+              f"{S.DIM}Enter/Tab{S.RST} confirm  {_dot}  "
               f"{S.DIM}^A{S.RST} all  {_dot}  "
               f"{S.DIM}^N{S.RST} none  {_dot}  "
               f"{S.DIM}[ ]{S.RST} page  {_dot}  "
@@ -560,7 +577,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
             if key == 'resize':
                 render()
                 continue
-            if key in ('escape', 'ctrl-c', 'tab'):
+            if key in ('escape', 'ctrl-c'):
                 sys.stdout.write("\033[?25h\033[?1049l")
                 print()
                 return None
@@ -583,7 +600,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
                     page_index = (page_index + 1) % pcount
                 start, end = _page_bounds()
                 cursor_pos = filtered_indices[start if start < end else 0]
-            elif key == 'enter':
+            elif key in ('enter', 'tab'):
                 break
             elif key == 'ctrl-a':
                 for it in items:
@@ -868,7 +885,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                       f"setting(s){S.RST}{tag}")
         buf.append(_box_row(status, w) + "\033[K\n")
 
-        hl_parts = ["←→ tab", "↑↓", "Space", "Enter"]
+        hl_parts = ["←→ tab", "↑↓", "Space", "Enter/Tab"]
         if active_tab == 0:
             hl_parts.extend(["^A all", "^N none", "[ ] page"])
         hl_parts.append("Esc")
@@ -902,7 +919,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             if key == 'resize':
                 render()
                 continue
-            if key in ('escape', 'ctrl-c', 'tab'):
+            if key in ('escape', 'ctrl-c'):
                 sys.stdout.write("\033[?25h\033[?1049l")
                 print()
                 return None, None
@@ -940,7 +957,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                         item["value"] = choices[(idx + 1) % len(choices)]
                     else:
                         item['value'] = not item['value']
-            elif key == 'enter':
+            elif key in ('enter', 'tab'):
                 break
             elif key == 'ctrl-a' and active_tab == 0:
                 for it in model_items:

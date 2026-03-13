@@ -8,7 +8,7 @@ import aiohttp
 from typing import Optional, Tuple, Any, Dict, List, Callable
 
 from wavebench.tui.styles import _tri, S
-from wavebench.models import _model_score
+from wavebench.models import _model_score, is_stealth
 
 API_URL = "https://openrouter.ai/api/v1"
 _MODEL_CONTEXT_CACHE: Dict[str, int] = {}
@@ -548,8 +548,8 @@ def fetch_top_models(api_key: str, count: int = 12) -> Tuple[List[Dict[str, Any]
         # Skip :free duplicate variants (keep the paid original)
         if ":free" in mid:
             continue
-        # Skip routers and cloaked/anonymous models
-        if mid.startswith("openrouter/"):
+        # Skip OpenRouter utility models (routers, etc.) but keep stealth models
+        if mid.startswith("openrouter/") and not is_stealth(mid):
             continue
         # Skip roleplay / her-specific models
         name_lower = m.get("name", "").lower()
