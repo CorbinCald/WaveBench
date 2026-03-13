@@ -42,6 +42,18 @@ PULSE_GRADIENT: list[str] = [
     "" if _NO_COLOR else "\033[38;2;100;255;140m",
 ]
 
+TITLE_WAVE_GRADIENT: list[str] = [
+    "",                                                     # 0: unused
+    "" if _NO_COLOR else "\033[38;2;0;35;10m",              # 1: darkest forest green
+    "" if _NO_COLOR else "\033[38;2;0;50;14m",              # 2
+    "" if _NO_COLOR else "\033[38;2;0;70;20m",              # 3
+    "" if _NO_COLOR else "\033[38;2;5;95;28m",              # 4
+    "" if _NO_COLOR else "\033[38;2;10;120;36m",            # 5
+    "" if _NO_COLOR else "\033[38;2;18;148;44m",            # 6
+    "" if _NO_COLOR else "\033[38;2;28;178;55m",            # 7
+    "" if _NO_COLOR else "\033[38;2;45;210;72m",            # 8: brightest green
+]
+
 PULSE_DIM: str = "" if _NO_COLOR else "\033[38;2;0;30;8m"
 
 _ok    = f"{S.HGRN}✓{S.RST}"
