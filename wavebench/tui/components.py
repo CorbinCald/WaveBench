@@ -15,7 +15,7 @@ from wavebench.tui.styles import (
     S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
     _box_top, _box_row, _box_sep, _box_bot, _box_divider,
-    PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM, _NO_COLOR,
+    PHASE_GRADIENT, PULSE_GRADIENT, PULSE_DIM, TITLE_WAVE_GRADIENT, _NO_COLOR,
 )
 
 BAR_WIDTH = 20
@@ -36,11 +36,20 @@ _WAVE_CHARS: list = [
 def _title_wave(tick: int, width: int = 5) -> str:
     """Animated braille wave for the 'Generating' box title."""
     parts: list[str] = []
+    prev_level = -1
     for i in range(width):
         val = math.sin(tick * 0.15 - i * 0.7) * 0.5 + 0.5
         level = max(1, min(8, round(val * 8)))
         pool = _WAVE_CHARS[level]
-        parts.append(pool[(i + tick) % len(pool)])
+        ch = pool[(i + tick) % len(pool)]
+        if not _NO_COLOR and level != prev_level:
+            if prev_level >= 0:
+                parts.append(S.RST)
+            parts.append(TITLE_WAVE_GRADIENT[level])
+            prev_level = level
+        parts.append(ch)
+    if not _NO_COLOR and prev_level >= 0:
+        parts.append(S.RST)
     return ''.join(parts)
 
 
@@ -59,7 +68,7 @@ def _render_pulse_bar(chars: int, scale: float, tick: int,
     empty = bar_width - filled
 
     t = tick * 0.008
-    bandwidth = 0.70 + 0.15 * math.sin(t * 2.3 + 1.0)
+    bandwidth = 0.70
     amplitude = (0.35 + 0.65 * ratio) * (0.92 + 0.08 * math.sin(t * 1.7 + 2.0))
     parts: list[str] = []
     prev_level = -1
@@ -139,33 +148,64 @@ def _render_pre_wave_bar(width: int, tick: int) -> str:
     return ''.join(parts)
 
 
-def render_idle_wave(tick: int, width: int, height: int) -> list[str]:
-    """Render one frame of an animated ocean wave for the idle screen.
+def render_idle_wave(tick: int, width: int, height: int,
+                     intensity: float = 0.0,
+                     wave_phase: Optional[float] = None) -> list[str]:
+    """Render one frame of an animated ocean wave.
 
     Returns *height* ANSI-colored strings, each *width* visible characters
-    wide, built from braille glyphs and the PULSE_GRADIENT palette.
-    Four wave harmonics follow deep-water dispersion (phase speed
-    proportional to 1/sqrt(k)) with a second-order Stokes correction
-    to sharpen crests and flatten troughs.
+    wide.  *intensity* (0.0--1.0) controls wave energy: 0.0 gives a calm,
+    low swell; 1.0 gives tall, fast, sharply cresting waves.  All wave
+    physics -- amplitude, phase speed, harmonic content, Stokes nonlinearity,
+    and gradient color -- interpolate smoothly between those extremes.
     """
     if _NO_COLOR or height <= 0 or width <= 0:
         return [' ' * width] * max(height, 0)
 
+    intensity = max(0.0, min(1.0, intensity))
     total_sp = height * 8
-    amp = total_sp * 0.34 * (1.0 + 0.15 * math.sin(tick * 0.019 + 1.0))
-    center = total_sp * 0.58 + amp * 0.30 * math.sin(tick * 0.024)
+
+    amp_scale = 0.14 + 0.24 * intensity
+    amp_breath = 0.06 + 0.12 * intensity
+    amp = total_sp * amp_scale * (1.0 + amp_breath * math.sin(tick * 0.019 + 1.0))
+
+    center_norm = 0.75 - 0.20 * intensity
+    center_sway = 0.12 + 0.22 * intensity
+    center = total_sp * center_norm + amp * center_sway * math.sin(tick * 0.024)
+
+    spd = 0.35 + 0.75 * intensity
+    if wave_phase is None:
+        wave_phase = tick * spd
+
+    h1_amp = 0.62
+    h2_amp = 0.08 + 0.14 * intensity
+    h3_amp = 0.02 + 0.08 * intensity
+    h4_amp = 0.01 + 0.03 * intensity
+
+    stokes = 0.06 + 0.18 * intensity
+    crest_exp = 1.3 + 0.5 * intensity
+    limiter = 0.35 - 0.15 * intensity
+
+    ct = max(0.0, min(1.0, intensity + 0.03 * math.sin(tick * 0.03)))
+    if ct < 0.5:
+        f = ct * 2.0
+        cr, cg, cb = 10 * (1.0 - f), 48 + 107 * f, 90 - 30 * f
+    else:
+        f = (ct - 0.5) * 2.0
+        cr, cg, cb = 85 * f, 155 + 100 * f, 60 + 105 * f
+    wave_color = f"\033[38;2;{int(cr)};{int(cg)};{int(cb)}m"
 
     surfaces: list[float] = []
     for col in range(width):
         nx = col / max(width - 1, 1)
-        h = (0.62 * math.sin(nx * 14.0 - tick * 0.107)
-             + 0.22 * math.sin(nx * 26.0 - tick * 0.147 + 1.7)
-             + 0.10 * math.sin(nx * 44.0 - tick * 0.187 + 3.1)
-             + 0.04 * math.sin(nx * 68.0 - tick * 0.240 + 0.9))
-        h += 0.24 * h * h
+        h = (h1_amp * math.sin(nx * 14.0 - wave_phase * 0.107)
+             + h2_amp * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
+             + h3_amp * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
+             + h4_amp * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9))
+        h += stokes * h * h
         if h > 0:
-            h = h ** 1.8
-            h /= 1.0 + 0.20 * h
+            h = h ** crest_exp
+            h /= 1.0 + limiter * h
         else:
             h = -(abs(h) ** 1.3)
         surfaces.append(center - h * amp)
@@ -175,7 +215,7 @@ def render_idle_wave(tick: int, width: int, height: int) -> list[str]:
         cell_top = row * 8
         cell_bot = cell_top + 8
         parts: list[str] = []
-        prev_gi = -1
+        in_color = False
 
         for col in range(width):
             s = surfaces[col]
@@ -188,24 +228,21 @@ def render_idle_wave(tick: int, width: int, height: int) -> list[str]:
                 level = max(1, min(7, round(cell_bot - s)))
 
             if level == 0:
-                if prev_gi >= 0:
+                if in_color:
                     parts.append(S.RST)
-                    prev_gi = -1
+                    in_color = False
                 parts.append(' ')
                 continue
 
             pool = _WAVE_CHARS[level]
             ch = pool[(col + tick) % len(pool)]
 
-            gi = 8
-            if gi != prev_gi:
-                if prev_gi >= 0:
-                    parts.append(S.RST)
-                parts.append(PULSE_GRADIENT[gi])
-                prev_gi = gi
+            if not in_color:
+                parts.append(wave_color)
+                in_color = True
             parts.append(ch)
 
-        if prev_gi >= 0:
+        if in_color:
             parts.append(S.RST)
         rows.append(''.join(parts))
 
@@ -272,6 +309,12 @@ class ProgressTracker:
         self._alt_screen = alt_screen and self._is_tty
         self._entered_alt_screen = False
         self._saved_termios = None
+        self._wave_intensity = 0.0
+        self._wave_completed_chars = 0
+        self._wave_last_chars = 0
+        self._wave_rate_time = 0.0
+        self._wave_agg_rate = 0.0
+        self._wave_phase = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -333,7 +376,9 @@ class ProgressTracker:
 
     def unregister(self, model_name: str) -> None:
         """Remove a model from the active set."""
-        self._active.pop(model_name, None)
+        info = self._active.pop(model_name, None)
+        if info:
+            self._wave_completed_chars += info.get("chars", 0)
         self._phases.pop(model_name, None)
 
     def mark_parsing(self, model_name: str) -> None:
@@ -422,6 +467,17 @@ class ProgressTracker:
         if pct > 0 and filled == 0:
             filled = 1
         return self._phase_boxes(filled)
+
+    @staticmethod
+    def _flush_frame(frame: str) -> None:
+        """Write a rendered frame to stdout in a thread-safe way.
+
+        Called via ``run_in_executor`` so that PTY back-pressure (e.g.
+        terminal window in the background) blocks the worker thread
+        instead of the asyncio event loop.
+        """
+        sys.stdout.write(frame)
+        sys.stdout.flush()
 
     def _clear_drawn(self) -> None:
         """Erase all previously drawn progress lines."""
@@ -629,9 +685,8 @@ class ProgressTracker:
                             model_scale = avg_tk * 4
 
                             rate = ainfo["smoothed_rate"]
-                            rf = min(1.0, math.sqrt(rate / 200.0))
-                            spd = (0.12 + 0.33 * rf
-                                   + 0.05 * math.sin(idx * 0.025))
+                            rf = min(1.0, math.sqrt(max(0.0, rate) / 200.0))
+                            spd = 0.12 + 0.33 * rf
                             self._phases[name] = (
                                 self._phases.get(name, 0.0) + spd)
 
@@ -712,11 +767,50 @@ class ProgressTracker:
 
                 buf.append(_box_bot(w) + "\033[K")
                 lines += 1
+
                 if self._entered_alt_screen:
+                    gross_chars = self._wave_completed_chars + sum(
+                        ai["chars"] for ai in self._active.values())
+                    now = time.monotonic()
+                    dt = now - self._wave_rate_time
+                    if self._wave_rate_time <= 0.0:
+                        self._wave_rate_time = now
+                        self._wave_last_chars = gross_chars
+                    elif dt >= 0.4:
+                        delta = gross_chars - self._wave_last_chars
+                        instant = (delta / 4.0) / dt
+                        self._wave_agg_rate = (
+                            0.12 * instant + 0.88 * self._wave_agg_rate)
+                        self._wave_last_chars = gross_chars
+                        self._wave_rate_time = now
+                    gross_tokens = gross_chars / 4.0
+                    rate_target = min(1.0, math.sqrt(
+                        max(0.0, self._wave_agg_rate) / 1500.0))
+                    volume_factor = min(
+                        1.0, math.sqrt(gross_tokens / 20000.0))
+                    target = min(1.0, max(rate_target, volume_factor)
+                                 * 0.6 + volume_factor * 0.4)
+                    self._wave_intensity += (
+                        target - self._wave_intensity) * 0.04
+
+                    wave_spd = ((0.35 + 0.75 * self._wave_intensity)
+                                * (1.0 + 0.5 * volume_factor))
+                    self._wave_phase += wave_spd
+
+                    remaining = max(0, term.lines - lines)
+                    if remaining > 0:
+                        wave_w = max(10, term.columns - 2)
+                        wave_frames = render_idle_wave(
+                            idx, wave_w, remaining, self._wave_intensity,
+                            wave_phase=self._wave_phase)
+                        for wf in wave_frames:
+                            buf.append(f"\n {wf}\033[K")
                     buf.append("\033[J")
 
-                sys.stdout.write("\r" + "".join(buf))
-                sys.stdout.flush()
+                frame = "\r" + "".join(buf)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, self._flush_frame, frame)
                 self._drawn_lines = lines
                 idx += 1
                 await asyncio.sleep(0.08)

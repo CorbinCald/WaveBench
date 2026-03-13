@@ -18,6 +18,19 @@ _TIER2_PROVIDERS: FrozenSet[str] = frozenset({
     "microsoft", "cohere", "qwen",
 })
 
+_OPENROUTER_UTILITY: FrozenSet[str] = frozenset({
+    "openrouter/auto",
+    "openrouter/free",
+    "openrouter/bodybuilder",
+    "openrouter/cinematika-7b",
+})
+
+
+def is_stealth(model_id: str) -> bool:
+    """True for stealth/cloaked models published under the openrouter/ namespace."""
+    return model_id.startswith("openrouter/") and model_id not in _OPENROUTER_UTILITY
+
+
 def _model_score(m: dict) -> float:
     """Score a model for popularity ranking (higher = more prominent)."""
     mid = m.get("id", "")
@@ -25,8 +38,8 @@ def _model_score(m: dict) -> float:
 
     score = 0.0
 
-    # Provider tier
-    if provider in _TIER1_PROVIDERS:
+    # Provider tier (stealth models get T1-equivalent boost)
+    if provider in _TIER1_PROVIDERS or is_stealth(mid):
         score += 1000
     elif provider in _TIER2_PROVIDERS:
         score += 500
