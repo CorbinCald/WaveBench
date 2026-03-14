@@ -282,8 +282,6 @@ def main() -> None:
                 sys.stdout.flush()
                 print(f"  {S.DIM}Interrupted.{S.RST}\n")
                 return
-            print()
-
             args.prompt = user_prompt.strip()
             args.text = text_mode
             break
