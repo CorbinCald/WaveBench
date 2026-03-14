@@ -162,7 +162,7 @@ def _box_divider(width: int = 0, heavy: bool = False) -> str:
         width = _tw() - 4
     sc = "┃" if heavy else "│"
     inner = width - 4
-    return f"  {S.DIM}{sc}  {'┄' * (inner - 4)}  {sc}{S.RST}"
+    return f"  {S.DIM}{sc}  {'┄' * (inner - 2)}  {sc}{S.RST}"
 
 
 def format_duration(seconds: float | None) -> str:
