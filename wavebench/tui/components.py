@@ -454,8 +454,8 @@ class ProgressTracker:
         shifts from deep blue → bright neon cyan as more boxes fill."""
         filled = max(0, min(filled, 5))
         color = PHASE_GRADIENT[filled - 1] if filled > 0 else ""
-        on = f"{color}{'■' * filled}{S.RST}" if filled else ""
-        off = f"{S.DIM}{'□' * (5 - filled)}{S.RST}" if filled < 5 else ""
+        on = f"{color}{'▪' * filled}{S.RST}" if filled else ""
+        off = f"{S.DIM}{'▫' * (5 - filled)}{S.RST}" if filled < 5 else ""
         return f"{on}{off}"
 
     def _token_boxes(self, model_name: str, chars: int) -> str:
@@ -470,14 +470,22 @@ class ProgressTracker:
 
     @staticmethod
     def _flush_frame(frame: str) -> None:
-        """Write a rendered frame to stdout in a thread-safe way.
+        """Write a rendered frame to stdout atomically.
 
-        Called via ``run_in_executor`` so that PTY back-pressure (e.g.
-        terminal window in the background) blocks the worker thread
-        instead of the asyncio event loop.
+        Writes directly to the binary buffer to bypass TextIOWrapper's
+        line-buffered flushing, preventing the terminal from rendering
+        partial frames between newlines.  Called via ``run_in_executor``
+        so that PTY back-pressure blocks the worker thread instead of
+        the asyncio event loop.
         """
-        sys.stdout.write(frame)
-        sys.stdout.flush()
+        data = frame.encode()
+        try:
+            sys.stdout.flush()
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        except (AttributeError, OSError):
+            sys.stdout.write(frame)
+            sys.stdout.flush()
 
     def _clear_drawn(self) -> None:
         """Erase all previously drawn progress lines."""
@@ -587,7 +595,15 @@ class ProgressTracker:
         idx = 0
         try:
             while self._running:
-                self._clear_drawn()
+                if self._entered_alt_screen:
+                    _clear_seq = "\033[H"
+                elif self._drawn_lines > 0:
+                    _up = (f"\033[{self._drawn_lines - 1}A"
+                           if self._drawn_lines > 1 else "")
+                    _clear_seq = f"{_up}\r\033[J"
+                else:
+                    _clear_seq = "\r"
+                self._drawn_lines = 0
 
                 term = shutil.get_terminal_size((80, 24))
                 w = max(20, min(120, term.columns)) - 4
@@ -807,7 +823,9 @@ class ProgressTracker:
                             buf.append(f"\n {wf}\033[K")
                     buf.append("\033[J")
 
-                frame = "\r" + "".join(buf)
+                frame = (f"\033[?2026h{_clear_seq}"
+                         + "".join(buf)
+                         + "\033[?2026l")
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
                     None, self._flush_frame, frame)
