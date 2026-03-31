@@ -11,6 +11,7 @@ try:
 except ImportError:
     termios = None  # type: ignore[assignment]
 
+from wavebench.tui import styles as _styles
 from wavebench.tui.styles import (
     S, _SPIN, format_duration, format_cost, _tw, _truncate, _dot,
     _ok, _fail, _skip, _arrow, _rpad, _vlen,
@@ -115,6 +116,10 @@ def _render_pre_wave_bar(width: int, tick: int) -> str:
     t = tick * 0.06
     phase = tick * 0.10
 
+    _pw = _styles.PRE_WAVE_COLORS
+    _s0, _s1 = _pw["start_base"], _pw["start_amp"]
+    _t0, _t1 = _pw["target_base"], _pw["target_amp"]
+
     for i in range(width):
         pos = i / max(width - 1, 1)
 
@@ -134,8 +139,12 @@ def _render_pre_wave_bar(width: int, tick: int) -> str:
         p2 = math.sin(t * 0.6 + i * 0.2 + 2.0) * 0.3 + 0.5
         p = p1 * 0.65 + p2 * 0.35
 
-        sr, sg, sb = 30 + p * 35, 225 + p * 18, 72 + p * 22
-        tr, tg, tb = 60 + p * 15, 88 + p * 14, 130 + p * 20
+        sr = _s0[0] + p * _s1[0]
+        sg = _s0[1] + p * _s1[1]
+        sb = _s0[2] + p * _s1[2]
+        tr = _t0[0] + p * _t1[0]
+        tg = _t0[1] + p * _t1[1]
+        tb = _t0[2] + p * _t1[2]
 
         r = max(0, min(255, int(sr + (tr - sr) * pos)))
         g = max(0, min(255, int(sg + (tg - sg) * pos)))
@@ -187,12 +196,17 @@ def render_idle_wave(tick: int, width: int, height: int,
     limiter = 0.35 - 0.15 * intensity
 
     ct = max(0.0, min(1.0, intensity + 0.03 * math.sin(tick * 0.03)))
+    _low, _mid, _high = _styles.IDLE_WAVE_COLORS
     if ct < 0.5:
         f = ct * 2.0
-        cr, cg, cb = 10 * (1.0 - f), 48 + 107 * f, 90 - 30 * f
+        cr = _low[0] + (_mid[0] - _low[0]) * f
+        cg = _low[1] + (_mid[1] - _low[1]) * f
+        cb = _low[2] + (_mid[2] - _low[2]) * f
     else:
         f = (ct - 0.5) * 2.0
-        cr, cg, cb = 85 * f, 155 + 100 * f, 60 + 105 * f
+        cr = _mid[0] + (_high[0] - _mid[0]) * f
+        cg = _mid[1] + (_high[1] - _mid[1]) * f
+        cb = _mid[2] + (_high[2] - _mid[2]) * f
     wave_color = f"\033[38;2;{int(cr)};{int(cg)};{int(cb)}m"
 
     surfaces: list[float] = []
@@ -616,7 +630,7 @@ class ProgressTracker:
                 lines = 0
 
                 wave = _title_wave(idx)
-                buf.append(_box_top(f"Generating {wave}", w) + "\033[K\n")
+                buf.append(_box_top(f"Generating \033[22m{wave}", w) + "\033[K\n")
                 lines += 1
 
                 od = self._format_output_dir(inner_w)
@@ -710,7 +724,7 @@ class ProgressTracker:
                             rate_s = ""
                             if ainfo["smoothed_rate"] > 0:
                                 rate_s = (
-                                    f"  {S.CYN}"
+                                    f"  {_styles.ACCENT}"
                                     f"{int(ainfo['smoothed_rate']):,}"
                                     f" tk/s{S.RST}")
                             live_c = self._live_cost_for_active(
@@ -774,7 +788,7 @@ class ProgressTracker:
                     cost_part = f" · {S.RST}{S.HYEL}{format_cost(running_cost)}{S.RST}{S.DIM}"
 
                 summary = (
-                    f"{S.HCYN}{frame}{S.RST} "
+                    f"{_styles.ACCENT_HI}{frame}{S.RST} "
                     f"{self._label}  "
                     f"{S.DIM}{done}/{self._total} complete · "
                     f"{elapsed}{cost_part}{S.RST}")
@@ -966,7 +980,7 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
 
         print(_box_row(
             f"{name:<{col}}{s['runs']:>5}  {rate_c}"
-            f"  {S.CYN}{format_duration(avg_v):>8}{S.RST}"
+            f"  {_styles.ACCENT}{format_duration(avg_v):>8}{S.RST}"
             f"  {S.DIM}{avg_tk_s:>9}{S.RST}"
             f"  {S.YEL}{avg_cost_s:>9}{S.RST}"
             f"  {S.YEL}{total_cost_s:>9}{S.RST}", w))
@@ -990,7 +1004,7 @@ def display_analytics(history: Dict[str, Any], compact: bool = False,
     print(_box_sep("Totals", w))
     print(_box_row(
         f"{total_calls} calls {_dot} {total_ok} passed {_dot} "
-        f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {S.CYN}{avg_all}{S.RST} "
+        f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {_styles.ACCENT}{avg_all}{S.RST} "
         f"{_dot} avg tkns {S.DIM}{avg_tk_all}{S.RST}", w))
     print(_box_row(
         f"avg cost {S.YEL}{avg_cost_all_s}{S.RST} {_dot} "
