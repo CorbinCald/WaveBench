@@ -16,8 +16,9 @@ except ImportError:
 _HAS_SIGWINCH = hasattr(signal, 'SIGWINCH')
 
 from wavebench.tui.styles import (
-    S, _dot, _rule, _work, _vlen, _box_top, _box_row, _box_bot,
+    S, _dot, _rule, _work, _vlen, _box_top, _box_row, _box_bot, THEMES,
 )
+import wavebench.tui.styles as _styles
 from wavebench.api import fetch_top_models
 from wavebench.models import MODEL_MAPPING
 
@@ -507,7 +508,7 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
               f"{S.DIM}Esc{S.RST} cancel")
         buf.append(f"\033[K{hl}\n")
 
-        search_label = (f"{S.HCYN}search{S.RST}"
+        search_label = (f"{_styles.ACCENT_HI}search{S.RST}"
                         if search_query else "search")
         query_display = search_query or f"{S.DIM}type to filter{S.RST}"
         buf.append(f"\033[K  {search_label}: {query_display}\n")
@@ -525,9 +526,9 @@ def interactive_model_menu(available_models: List[Dict[str, Any]], current_mappi
             sn = _fit(item['short'], short_w)
             mi = _fit(item['id'], id_w)
             if is_cur:
-                mk = f"{S.HCYN}▸{S.RST}"
+                mk = f"{_styles.ACCENT_HI}▸{S.RST}"
                 ns = f"{S.BOLD}{sn:<{short_w}}{S.RST}"
-                ids = f"{S.CYN}{mi:<{id_w}}{S.RST}"
+                ids = f"{_styles.ACCENT}{mi:<{id_w}}{S.RST}"
             else:
                 mk = " "
                 ns = f"{sn:<{short_w}}"
@@ -654,6 +655,8 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         print(f"  {S.DIM}Interactive menu requires a terminal.{S.RST}")
         return None, None
 
+    _original_theme = current_config.get("theme", "default")
+
     pricing_lookup = pricing_lookup or {}
     tabs = ["Models", "Settings"]
     active_tab = 0
@@ -686,8 +689,11 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             'pricing': _format_price(pricing_lookup.get(mid, {})),
         })
 
+    from wavebench.tui.styles import THEME_NAMES
+
     REASONING_CHOICES = ["high", "medium", "low", "off"]
     SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens", "cost"]
+    AUTO_OPEN_CHOICES = ["off", "incremental", "after_all"]
 
     settings_items = [
         {
@@ -704,7 +710,43 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             "type": "cycle",
             "choices": SORT_CHOICES,
         },
+        {
+            "key": "theme",
+            "label": "Theme",
+            "value": current_config.get("theme", "default"),
+            "type": "cycle",
+            "choices": THEME_NAMES,
+        },
+        {
+            "key": "auto_open",
+            "label": "Auto-open files",
+            "value": current_config.get("auto_open", "off"),
+            "type": "cycle",
+            "choices": AUTO_OPEN_CHOICES,
+        },
+        {
+            "key": "auto_install",
+            "label": "Auto-install deps",
+            "value": current_config.get("auto_install", "off"),
+            "type": "cycle",
+            "choices": ["off", "on"],
+            "parent_key": "auto_open",
+            "parent_hidden_when": "off",
+        },
     ]
+
+    def _visible_settings() -> list:
+        """Return [(original_index, item), ...] for visible settings."""
+        values = {it["key"]: it["value"] for it in settings_items}
+        visible = []
+        for i, item in enumerate(settings_items):
+            parent = item.get("parent_key")
+            if parent:
+                hidden_val = item.get("parent_hidden_when")
+                if hidden_val is not None and values.get(parent) == hidden_val:
+                    continue
+            visible.append((i, item))
+        return visible
 
     model_cursor = 0
     _CHROME_LINES = 8
@@ -713,6 +755,8 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
     model_search_query = ""
     filtered_model_indices = list(range(len(model_items)))
     settings_cursor = 0
+    adding_model = False
+    add_model_buffer = ""
 
     if not model_items:
         print(f"  {S.DIM}No models available.{S.RST}")
@@ -785,17 +829,23 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
         tab_parts = []
         for i, name in enumerate(tabs):
             if i == active_tab:
-                tab_parts.append(f"{S.BOLD}{S.HCYN}[{name}]{S.RST}")
+                tab_parts.append(f"{S.BOLD}{_styles.ACCENT_HI}[{name}]{S.RST}")
             else:
                 tab_parts.append(f"{S.DIM} {name} {S.RST}")
         buf.append(_box_row('   '.join(tab_parts), w) + "\033[K\n")
 
         if active_tab == 0:
-            search_label = (f"{S.HCYN}search{S.RST}"
-                            if model_search_query else "search")
-            query = model_search_query or f"{S.DIM}type to filter{S.RST}"
-            buf.append(
-                _box_row(f'{search_label}: {query}', w) + "\033[K\n")
+            if adding_model:
+                add_label = f"{S.HGRN}add model{S.RST}"
+                add_query = add_model_buffer or f"{S.DIM}provider/model-id{S.RST}"
+                buf.append(
+                    _box_row(f'{add_label}: {add_query}', w) + "\033[K\n")
+            else:
+                search_label = (f"{_styles.ACCENT_HI}search{S.RST}"
+                                if model_search_query else "search")
+                query = model_search_query or f"{S.DIM}type to filter{S.RST}"
+                buf.append(
+                    _box_row(f'{search_label}: {query}', w) + "\033[K\n")
         else:
             buf.append(_box_row('', w) + "\033[K\n")
 
@@ -810,9 +860,9 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     sn = _fit(item['short'], short_w)
                     mi = _fit(item['id'], id_w)
                     if is_cur:
-                        mk = f"{S.HCYN}▸{S.RST}"
+                        mk = f"{_styles.ACCENT_HI}▸{S.RST}"
                         ns = f"{S.BOLD}{sn:<{short_w}}{S.RST}"
-                        ids = f"{S.CYN}{mi:<{id_w}}{S.RST}"
+                        ids = f"{_styles.ACCENT}{mi:<{id_w}}{S.RST}"
                     else:
                         mk = " "
                         ns = f"{sn:<{short_w}}"
@@ -829,8 +879,9 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 else:
                     buf.append(_box_row('', w) + "\033[K\n")
             else:
-                if row < len(settings_items):
-                    item = settings_items[row]
+                visible = _visible_settings()
+                if row < len(visible):
+                    _, item = visible[row]
                     is_cur = (row == settings_cursor)
                     if item.get("type") == "cycle":
                         val = item["value"]
@@ -844,20 +895,42 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                             else:
                                 val_s = f"{S.HYEL}{val}{S.RST}"
                                 chk = f"{S.HYEL}~{S.RST}"
+                        elif item.get("key") == "auto_open":
+                            if val == "off":
+                                val_s = f"{S.DIM}{val}{S.RST}"
+                                chk = " "
+                            elif val == "incremental":
+                                val_s = f"{S.HYEL}{val}{S.RST}"
+                                chk = f"{S.HYEL}~{S.RST}"
+                            else:  # after_all
+                                val_s = f"{S.HGRN}{val}{S.RST}"
+                                chk = f"{S.HGRN}✓{S.RST}"
+                        elif item.get("key") == "auto_install":
+                            if val == "off":
+                                val_s = f"{S.DIM}{val}{S.RST}"
+                                chk = " "
+                            else:  # on
+                                val_s = f"{S.HGRN}{val}{S.RST}"
+                                chk = f"{S.HGRN}✓{S.RST}"
+                        elif item.get("key") == "theme":
+                            tc = THEMES.get(val, {}).get("accent_hi", _styles.ACCENT_HI)
+                            val_s = f"{tc}{val}{S.RST}"
+                            chk = f"{tc}✓{S.RST}"
                         else:
-                            val_s = f"{S.HCYN}{val}{S.RST}"
-                            chk = f"{S.HCYN}✓{S.RST}"
+                            val_s = f"{_styles.ACCENT_HI}{val}{S.RST}"
+                            chk = f"{_styles.ACCENT_HI}✓{S.RST}"
                     else:
                         val_s = (f"{S.HGRN}ON{S.RST}" if item["value"]
                                  else f"{S.HRED}OFF{S.RST}")
                         chk = (f"{S.HGRN}✓{S.RST}" if item["value"]
                                else " ")
+                    indent = "  " if item.get("parent_key") else ""
                     if is_cur:
-                        mk = f"{S.HCYN}▸{S.RST}"
-                        label = f"{S.BOLD}{item['label']}{S.RST}"
+                        mk = f"{_styles.ACCENT_HI}▸{S.RST}"
+                        label = f"{S.BOLD}{indent}{item['label']}{S.RST}"
                     else:
                         mk = " "
-                        label = item['label']
+                        label = f"{indent}{item['label']}"
                     buf.append(
                         _box_row(f'{mk} [{chk}] {label}  {val_s}', w)
                         + "\033[K\n")
@@ -875,19 +948,20 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                 f"{S.DIM}{len(filtered_model_indices)} shown{S.RST}  "
                 f"{S.DIM}page {model_page + 1}/{pcount}{S.RST}")
         else:
-            defaults = {"reasoning_effort": "high", "analytics_sort": "runs"}
+            defaults = {"reasoning_effort": "high", "analytics_sort": "runs", "theme": "default", "auto_open": "off", "auto_install": "off"}
             changed = any(
                 it["value"] != current_config.get(
                     it["key"], defaults.get(it["key"]))
                 for it in settings_items)
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
-            status = (f"{S.DIM}{len(settings_items)} "
+            vis_count = len(_visible_settings())
+            status = (f"{S.DIM}{vis_count} "
                       f"setting(s){S.RST}{tag}")
         buf.append(_box_row(status, w) + "\033[K\n")
 
         hl_parts = ["←→ tab", "↑↓", "Space", "Enter/Tab"]
         if active_tab == 0:
-            hl_parts.extend(["^A all", "^N none", "[ ] page"])
+            hl_parts.extend(["^A all", "^N none", "[ ] page", "+ add"])
         hl_parts.append("Esc")
         hl = f"{S.DIM}{' · '.join(hl_parts)}{S.RST}"
         buf.append(_box_row(hl, w) + "\033[K\n")
@@ -919,7 +993,40 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
             if key == 'resize':
                 render()
                 continue
+            if adding_model:
+                if key in ('escape', 'ctrl-c'):
+                    adding_model = False
+                    add_model_buffer = ""
+                    sys.stdout.write("\033[?25l")
+                elif key == 'enter':
+                    mid = add_model_buffer.strip()
+                    if mid and mid not in seen_ids:
+                        short = _unique_short_name(mid, existing_names)
+                        existing_names.add(short)
+                        seen_ids.add(mid)
+                        model_items.append({
+                            'short': short, 'id': mid,
+                            'selected': True, 'pricing': '',
+                        })
+                        _nat_short_w = max(
+                            _nat_short_w, len(short) + 2)
+                        _nat_id_w = max(
+                            _nat_id_w, len(mid) + 2)
+                        _refresh_model_filter(preserve_current=False)
+                        model_cursor = len(model_items) - 1
+                        _sync_model_page_from_cursor()
+                    adding_model = False
+                    add_model_buffer = ""
+                    sys.stdout.write("\033[?25l")
+                elif key == 'backspace':
+                    add_model_buffer = add_model_buffer[:-1]
+                elif (_is_printable_search_char(key)
+                      or key in ('+', '/', '[', ']')):
+                    add_model_buffer += key
+                render()
+                continue
             if key in ('escape', 'ctrl-c'):
+                _styles.apply_theme(_original_theme)
                 sys.stdout.write("\033[?25h\033[?1049l")
                 print()
                 return None, None
@@ -933,30 +1040,42 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     model_cursor = filtered_model_indices[
                         (idx - 1) % len(filtered_model_indices)]
                     _sync_model_page_from_cursor()
-                elif active_tab != 0 and settings_items:
-                    settings_cursor = ((settings_cursor - 1)
-                                       % len(settings_items))
+                elif active_tab != 0:
+                    visible = _visible_settings()
+                    if visible:
+                        settings_cursor = ((settings_cursor - 1)
+                                           % len(visible))
             elif key == 'down':
                 if active_tab == 0 and filtered_model_indices:
                     idx = filtered_model_indices.index(model_cursor)
                     model_cursor = filtered_model_indices[
                         (idx + 1) % len(filtered_model_indices)]
                     _sync_model_page_from_cursor()
-                elif active_tab != 0 and settings_items:
-                    settings_cursor = ((settings_cursor + 1)
-                                       % len(settings_items))
+                elif active_tab != 0:
+                    visible = _visible_settings()
+                    if visible:
+                        settings_cursor = ((settings_cursor + 1)
+                                           % len(visible))
             elif key == 'space':
                 if active_tab == 0 and filtered_model_indices:
                     model_items[model_cursor]['selected'] = \
                         not model_items[model_cursor]['selected']
-                elif active_tab != 0 and settings_items:
-                    item = settings_items[settings_cursor]
-                    if item.get("type") == "cycle":
-                        choices = item["choices"]
-                        idx = choices.index(item["value"]) if item["value"] in choices else 0
-                        item["value"] = choices[(idx + 1) % len(choices)]
-                    else:
-                        item['value'] = not item['value']
+                elif active_tab != 0:
+                    visible = _visible_settings()
+                    if visible and settings_cursor < len(visible):
+                        _, item = visible[settings_cursor]
+                        if item.get("type") == "cycle":
+                            choices = item["choices"]
+                            idx = choices.index(item["value"]) if item["value"] in choices else 0
+                            item["value"] = choices[(idx + 1) % len(choices)]
+                            if item.get("key") == "theme":
+                                _styles.apply_theme(item["value"])
+                        else:
+                            item['value'] = not item['value']
+                        # Clamp cursor if visibility changed
+                        new_visible = _visible_settings()
+                        if settings_cursor >= len(new_visible):
+                            settings_cursor = max(0, len(new_visible) - 1)
             elif key in ('enter', 'tab'):
                 break
             elif key == 'ctrl-a' and active_tab == 0:
@@ -973,6 +1092,10 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                     model_page = (model_page + 1) % pcount
                 start, end = _model_page_bounds()
                 model_cursor = filtered_model_indices[start if start < end else 0]
+            elif key == '+' and active_tab == 0:
+                adding_model = True
+                add_model_buffer = ""
+                sys.stdout.write("\033[?25h")
             elif active_tab == 0 and key == 'backspace':
                 if model_search_query:
                     model_search_query = model_search_query[:-1]

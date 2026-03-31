@@ -42,7 +42,7 @@ def save_models(models: Dict[str, str]) -> None:
 def load_config() -> Dict[str, Any]:
     """Load the persistent configuration from disk."""
     path = _config_path()
-    defaults = {"reasoning_effort": "high", "analytics_sort": "runs"}
+    defaults = {"reasoning_effort": "high", "analytics_sort": "runs", "theme": "default", "auto_open": "off", "auto_install": "off"}
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as fh:

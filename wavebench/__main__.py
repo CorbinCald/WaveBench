@@ -16,7 +16,9 @@ from wavebench.storage import load_models, save_models, load_config, save_config
 from wavebench.tui.styles import (
     _banner, S, _ok, _fail, _dot, _tw,
     _box_top, _box_row, _box_bot,
+    apply_theme,
 )
+import wavebench.tui.styles as _styles
 from wavebench.tui.components import display_analytics, render_idle_wave
 from wavebench.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape, _read_key_timeout
 from wavebench.core import main_async
@@ -72,14 +74,23 @@ def main() -> None:
     parser.add_argument(
         "--config", "--models", action="store_true", dest="config",
         help="Open the configuration menu (models & settings)")
+    parser.add_argument(
+        "--open", "--auto-open", dest="auto_open",
+        choices=["incremental", "after_all"],
+        default=None,
+        help="Auto-open generated files (incremental or after_all)")
+    parser.add_argument(
+        "--auto-install", action="store_true", default=None,
+        help="Auto-install detected dependencies in a venv")
     args = parser.parse_args()
 
     # ── Stats-only mode ────────────────────────────────────────────────────
     if args.stats:
+        cfg = load_config()
+        apply_theme(cfg.get("theme", "default"))
         print()
         print(_banner("WAVEBENCH"))
         history = load_history()
-        cfg = load_config()
         display_analytics(history, compact=False,
                           sort_by=cfg.get("analytics_sort", "runs"))
         print()
@@ -109,6 +120,7 @@ def main() -> None:
     # ── Load persisted state ─────────────────────────────────────────────
     selected_models = load_models()
     config = load_config()
+    apply_theme(config.get("theme", "default"))
 
     def _resolve_models_future() -> tuple:
         """Block on the background fetch and return (available, pricing)."""
@@ -136,6 +148,7 @@ def main() -> None:
         config = new_config
         save_models(selected_models)
         save_config(config)
+        apply_theme(config.get("theme", "default"))
 
     # ── Interactive prompt ─────────────────────────────────────────────────
     if not args.prompt:
@@ -146,11 +159,11 @@ def main() -> None:
                       if selected_models is not None
                       else MODEL_MAPPING)
             w = _tw() - 4
-            row = (f"{S.HCYN}[1]{S.RST} Code  "
-                   f"{S.HYEL}[2]{S.RST} Text"
+            row = (f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
+                   f"{_styles.ACCENT}[2]{S.RST} Text"
                    f"  {_dot}  "
                    f"{S.DIM}{len(active)} models{S.RST}  "
-                   f"{S.BLU}[c]{S.RST} config")
+                   f"{_styles.ACCENT}[c]{S.RST} config")
             print(_box_top("Select Mode", w))
             print(_box_row(row, w))
             print(_box_bot(w))
@@ -189,7 +202,7 @@ def main() -> None:
             # ── Mode selection (skip if --text was passed on CLI) ─────
             if not text_from_cli:
                 _print_mode_menu()
-                mode_prompt = f"  {S.DIM}mode{S.RST} {S.HCYN}›{S.RST} "
+                mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                 sys.stdout.write(mode_prompt)
                 sys.stdout.write('\x1b7')
                 sys.stdout.flush()
@@ -223,8 +236,10 @@ def main() -> None:
                             config = new_c
                             save_models(selected_models)
                             save_config(config)
+                            apply_theme(config.get("theme", "default"))
                         _refresh_header()
                         _print_mode_menu()
+                        mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                         sys.stdout.write(mode_prompt)
                         sys.stdout.write('\x1b7')
                         sys.stdout.flush()
@@ -260,7 +275,7 @@ def main() -> None:
                         if entry:
                             history_entries.append(entry)
 
-                rl_prompt = f"  {S.HCYN}›{S.RST} "
+                rl_prompt = f"  {_styles.ACCENT_HI}›{S.RST} "
                 user_prompt = _read_line(rl_prompt, history=history_entries,
                                          on_idle=_wave_idle)
                 sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
