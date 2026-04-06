@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 import asyncio
@@ -104,6 +105,7 @@ def _credit_token_limit_from_error(err_text: str) -> Optional[int]:
 
 
 MAX_OUTPUT_TOKENS_DEFAULT = 32_000
+REASONING_STALL_TIMEOUT = 300  # 5 minutes with zero tokens → abort
 
 def load_api_key() -> Optional[str]:
     """Load API key from environment or .env file."""
@@ -371,21 +373,67 @@ async def call_model_streaming(
     if "gemini-3" in model_id.lower():
         base_data["temperature"] = 1.0
 
+    _stall_deadline = time.monotonic() + REASONING_STALL_TIMEOUT
+    _got_first_token = False
+
     async def _do_stream(data: dict) -> Tuple[Optional[str], dict, int, str]:
         """Execute one streaming request.  Returns (content, usage, status, err)."""
+        nonlocal _got_first_token
         parts: list[str] = []
         usage: dict = {}
         total_chars = 0
 
-        async with session.post(
-            f"{API_URL}/chat/completions", headers=headers, json=data,
-        ) as resp:
+        def _stall_remaining() -> float:
+            return _stall_deadline - time.monotonic()
+
+        def _raise_stall() -> None:
+            elapsed_m = int(REASONING_STALL_TIMEOUT / 60)
+            raise RuntimeError(
+                f"no tokens after {elapsed_m}m (reasoning stall)")
+
+        if not _got_first_token and _stall_remaining() <= 0:
+            _raise_stall()
+
+        post_timeout = (
+            _stall_remaining() if not _got_first_token else None)
+        resp_ctx = session.post(
+            f"{API_URL}/chat/completions", headers=headers, json=data)
+        try:
+            resp = await asyncio.wait_for(
+                resp_ctx.__aenter__(), timeout=post_timeout)
+        except asyncio.TimeoutError:
+            try:
+                await resp_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            _raise_stall()
+
+        try:
             if resp.status != 200:
                 err = await resp.text()
                 return None, {}, resp.status, err
 
             buf = ""
-            async for raw in resp.content.iter_any():
+            content_stream = resp.content
+            while True:
+                if not _got_first_token:
+                    remaining = _stall_remaining()
+                    if remaining <= 0:
+                        _raise_stall()
+                else:
+                    remaining = None
+
+                try:
+                    raw = await asyncio.wait_for(
+                        content_stream.readany(),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    _raise_stall()
+
+                if not raw:
+                    break
+
                 buf += raw.decode("utf-8", errors="replace")
                 while "\n" in buf:
                     line, buf = buf.split("\n", 1)
@@ -414,10 +462,13 @@ async def call_model_streaming(
                                 if txt:
                                     parts.append(txt)
                                 total_chars += len(txt) + len(reasoning)
+                                _got_first_token = True
                                 if on_progress:
                                     on_progress(total_chars)
                     except json.JSONDecodeError:
                         pass
+        finally:
+            await resp_ctx.__aexit__(None, None, None)
 
         return "".join(parts), usage, 200, ""
 

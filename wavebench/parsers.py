@@ -1,5 +1,6 @@
 import re
 import json
+import asyncio
 import aiohttp
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -16,10 +17,13 @@ async def get_directory_name(session: aiohttp.ClientSession, api_key: str, promp
     )
 
     try:
-        name = await call_model_async(
-            session, api_key, model, naming_prompt,
-            reasoning_effort=None,
-            max_tokens=64,
+        name = await asyncio.wait_for(
+            call_model_async(
+                session, api_key, model, naming_prompt,
+                reasoning_effort=None,
+                max_tokens=64,
+            ),
+            timeout=15.0
         )
         if name:
             clean = name.strip().replace('`', '').strip()
@@ -156,7 +160,14 @@ def _guess_language_from_code(code: str) -> str:
         return "html"
     if first.startswith("SELECT ") or "\nSELECT " in code.upper():
         return "sql"
-    if re.search(r"^\s*def\s+\w+\(", code, re.MULTILINE) or "import " in code and ":" in code:
+    has_js_import = bool(re.search(r"\bfrom\s+['\"]", code))
+    has_jsx = bool(re.search(r"<\w+[\s/>]", code)) and ("useState" in code or "React" in code or "export " in code)
+    if has_js_import or has_jsx:
+        if re.search(r":\s*(string|number|boolean|React\.)\b", code):
+            return "typescript"
+        return "javascript"
+    if re.search(r"^\s*def\s+\w+\(", code, re.MULTILINE) or (
+            "import " in code and ":" in code and not has_js_import):
         return "python"
     if re.search(r"^\s*function\s+\w+\(", code, re.MULTILINE) or "console.log(" in code:
         return "javascript"
@@ -164,7 +175,7 @@ def _guess_language_from_code(code: str) -> str:
         return "typescript"
     if "fmt.Println(" in code or re.search(r"^\s*package\s+\w+", code, re.MULTILINE):
         return "go"
-    if "public static void main" in code or "class " in code and ";" in code:
+    if "public static void main" in code or ("class " in code and ";" in code):
         return "java"
     if "fn main(" in code or "let mut " in code:
         return "rust"
