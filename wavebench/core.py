@@ -566,58 +566,64 @@ async def process_model(session: aiohttp.ClientSession, api_key: str, model_name
         print(f"  {_work} {model_name:<{pad}}  "
               f"{S.DIM}parsing…{S.RST}")
 
-    parsed = await parse_llm_output(
-        session, api_key, model_name, content)
+    try:
+        parsed = await parse_llm_output(
+            session, api_key, model_name, content)
 
-    if registered:
-        tracker.finish_parsing(model_name)
+        if parsed and parsed.get("code"):
+            ext = parsed.get("extension", default_ext)
+            output_dir = await output_dir_task
+            filename = get_unique_filename(output_dir, model_name, ext)
+            filepath = os.path.join(output_dir, filename)
 
-    if parsed and parsed.get("code"):
-        ext = parsed.get("extension", default_ext)
-        output_dir = await output_dir_task
-        filename = get_unique_filename(output_dir, model_name, ext)
-        filepath = os.path.join(output_dir, filename)
+            with open(filepath, "w", encoding="utf-8") as fh:
+                fh.write(parsed["code"])
 
-        with open(filepath, "w", encoding="utf-8") as fh:
-            fh.write(parsed["code"])
+            # Dependency detection + venv setup for Python files
+            venv_python = None
+            if auto_install == "on" and ext == ".py" and auto_open != "off":
+                try:
+                    packages = await asyncio.wait_for(
+                        _detect_dependencies(session, api_key, parsed["code"]),
+                        timeout=15.0
+                    )
+                    if packages:
+                        venv_python = await _ensure_venv(output_dir)
+                        await asyncio.wait_for(
+                            _install_packages(venv_python, packages),
+                            timeout=120.0
+                        )
+                except Exception:
+                    venv_python = None
 
-        # Dependency detection + venv setup for Python files
-        venv_python = None
-        if auto_install == "on" and ext == ".py" and auto_open != "off":
-            try:
-                packages = await _detect_dependencies(
-                    session, api_key, parsed["code"])
-                if packages:
-                    venv_python = await _ensure_venv(output_dir)
-                    await _install_packages(venv_python, packages)
-            except Exception:
-                venv_python = None
+                # Fall back to existing venv if one was created by another model
+                if venv_python is None:
+                    candidate = _venv_python_path(output_dir)
+                    if os.path.isfile(candidate):
+                        venv_python = candidate
 
-            # Fall back to existing venv if one was created by another model
-            if venv_python is None:
-                candidate = _venv_python_path(output_dir)
-                if os.path.isfile(candidate):
-                    venv_python = candidate
+            if auto_open == "incremental":
+                _open_file_in_tab(filepath, interp=venv_python)
 
-        if auto_open == "incremental":
-            _open_file_in_tab(filepath, interp=venv_python)
-
-        elapsed = time.monotonic() - start
-        if not registered:
-            print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
-                  f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
-                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
-        results[model_name] = {
-            "status": "success", "time_s": elapsed, "file": filename,
-            "usage": usage, "venv_python": venv_python}
-    else:
-        elapsed = time.monotonic() - start
-        if not registered:
-            print(f"  {_fail} {model_name:<{pad}}  "
-                  f"{S.RED}parse failed{S.RST}  "
-                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
-        results[model_name] = {
-            "status": "failed", "time_s": elapsed, "file": None, "usage": usage}
+            elapsed = time.monotonic() - start
+            if not registered:
+                print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
+                      f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
+                      f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+            results[model_name] = {
+                "status": "success", "time_s": elapsed, "file": filename,
+                "usage": usage, "venv_python": venv_python}
+        else:
+            elapsed = time.monotonic() - start
+            if not registered:
+                print(f"  {_fail} {model_name:<{pad}}  "
+                      f"{S.RED}parse failed{S.RST}  "
+                      f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+            results[model_name] = {
+                "status": "failed", "time_s": elapsed, "file": None, "usage": usage}
+    finally:
+        if registered:
+            tracker.finish_parsing(model_name)
 
 async def process_model_text(session: aiohttp.ClientSession, api_key: str, model_name: str, model_id: str, prompt: str,
                              output_dir_task: asyncio.Task, semaphore: asyncio.Semaphore,
@@ -699,23 +705,33 @@ async def process_model_text(session: aiohttp.ClientSession, api_key: str, model
             "status": "failed", "time_s": elapsed, "file": None, "usage": {}}
         return
 
-    output_dir = await output_dir_task
-    filename = get_unique_filename(output_dir, model_name, ".md")
-    filepath = os.path.join(output_dir, filename)
+    if registered:
+        tracker.mark_parsing(model_name)
+    else:
+        print(f"  {_work} {model_name:<{pad}}  "
+              f"{S.DIM}saving…{S.RST}")
 
-    with open(filepath, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    try:
+        output_dir = await output_dir_task
+        filename = get_unique_filename(output_dir, model_name, ".md")
+        filepath = os.path.join(output_dir, filename)
 
-    if auto_open == "incremental":
-        _open_file_in_tab(filepath)
+        with open(filepath, "w", encoding="utf-8") as fh:
+            fh.write(content)
 
-    elapsed = time.monotonic() - start
-    if not registered:
-        print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
-              f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
-              f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
-    results[model_name] = {
-        "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
+        if auto_open == "incremental":
+            _open_file_in_tab(filepath)
+
+        elapsed = time.monotonic() - start
+        if not registered:
+            print(f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
+                  f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
+                  f"{S.DIM}[{format_duration(elapsed)}]{S.RST}")
+        results[model_name] = {
+            "status": "success", "time_s": elapsed, "file": filename, "usage": usage}
+    finally:
+        if registered:
+            tracker.finish_parsing(model_name)
 
 async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, str]] = None,
                      config: Optional[Dict[str, Any]] = None,
