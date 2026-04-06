@@ -14,7 +14,7 @@ from wavebench.api import load_api_key, fetch_top_models
 from wavebench.models import MODEL_MAPPING
 from wavebench.storage import load_models, save_models, load_config, save_config, load_history, _history_path
 from wavebench.tui.styles import (
-    _banner, S, _ok, _fail, _dot, _tw,
+    _banner, S, _ok, _fail, _dot, _tw, _work,
     _box_top, _box_row, _box_bot,
     apply_theme,
 )
@@ -124,6 +124,9 @@ def main() -> None:
 
     def _resolve_models_future() -> tuple:
         """Block on the background fetch and return (available, pricing)."""
+        if not models_future.done():
+            print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
+            sys.stdout.flush()
         try:
             return models_future.result(timeout=30)
         except Exception:
