@@ -270,6 +270,8 @@ def _read_line(prompt: str, history: Optional[List[str]] = None,
     _idle_timeout = idle_timeout if on_idle else None
     try:
         tty.setraw(fd)
+        sys.stdout.write('\033[?2004h')  # enable bracketed paste
+        sys.stdout.flush()
         while True:
             ready, _, _ = select.select([fd], [], [], _idle_timeout)
             if not ready:
@@ -322,11 +324,50 @@ def _read_line(prompt: str, history: Optional[List[str]] = None,
                     elif ch3 == 'F':
                         cursor = len(buf)
                         _redraw_input(prompt, buf, cursor)
-                    elif ch3 in '345678':
+                    elif ch3 in '2345678':
                         ch4 = os.read(fd, 1).decode('utf-8', errors='replace')
                         if ch3 == '3' and ch4 == '~' and cursor < len(buf):
                             buf.pop(cursor)
                             _redraw_input(prompt, buf, cursor)
+                        elif ch3 == '2' and ch4 == '0':
+                            # Bracketed paste: \033[200~ ... \033[201~
+                            ch5 = os.read(fd, 1).decode('utf-8', errors='replace')
+                            ch6 = os.read(fd, 1).decode('utf-8', errors='replace')
+                            if ch5 == '0' and ch6 == '~':
+                                paste_chars: List[str] = []
+                                while True:
+                                    pr = os.read(fd, 1)
+                                    if not pr:
+                                        break
+                                    pb = pr[0]
+                                    if pb >= 0xC0:
+                                        if pb < 0xE0:
+                                            pr += os.read(fd, 1)
+                                        elif pb < 0xF0:
+                                            pr += os.read(fd, 2)
+                                        else:
+                                            pr += os.read(fd, 3)
+                                    pch = pr.decode('utf-8', errors='replace')
+                                    if pch == '\x1b':
+                                        p2 = os.read(fd, 1).decode('utf-8', errors='replace')
+                                        if p2 == '[':
+                                            p3 = os.read(fd, 1).decode('utf-8', errors='replace')
+                                            p4 = os.read(fd, 1).decode('utf-8', errors='replace')
+                                            p5 = os.read(fd, 1).decode('utf-8', errors='replace')
+                                            p6 = os.read(fd, 1).decode('utf-8', errors='replace')
+                                            if p3 + p4 + p5 + p6 == '201~':
+                                                break
+                                        continue
+                                    if pch == '\r':
+                                        continue  # skip CR (part of \r\n)
+                                    if pch == '\n':
+                                        paste_chars.append(' ')
+                                    elif pch.isprintable():
+                                        paste_chars.append(pch)
+                                if paste_chars:
+                                    buf[cursor:cursor] = paste_chars
+                                    cursor += len(paste_chars)
+                                    _redraw_input(prompt, buf, cursor)
                 else:
                     raise _TabEscape()
 
@@ -378,7 +419,10 @@ def _read_line(prompt: str, history: Optional[List[str]] = None,
             elif ch.isprintable():
                 buf.insert(cursor, ch)
                 cursor += 1
-                _redraw_input(prompt, buf, cursor)
+                # Defer redraw while more input is immediately available
+                # (batches rapid input like paste in non-bracketed terminals)
+                if not select.select([fd], [], [], 0)[0]:
+                    _redraw_input(prompt, buf, cursor)
     except _TabEscape:
         sys.stdout.write('\r\033[K')
         sys.stdout.flush()
@@ -388,6 +432,8 @@ def _read_line(prompt: str, history: Optional[List[str]] = None,
         sys.stdout.flush()
         raise
     finally:
+        sys.stdout.write('\033[?2004l')  # disable bracketed paste
+        sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
