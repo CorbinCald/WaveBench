@@ -84,14 +84,21 @@ def save_history(history: Dict[str, Any]) -> None:
 
 def record_run(history: Dict[str, Any], prompt: str, output_dir: Optional[str],
                total_time: float, model_results: Dict[str, Any],
-               costs: Optional[Dict[str, Optional[float]]] = None) -> None:
-    """Append the results of a benchmark run to *history* and save."""
+               costs: Optional[Dict[str, Optional[float]]] = None,
+               reasoning_effort: Optional[str] = None) -> None:
+    """Append the results of a benchmark run to *history* and save.
+
+    *reasoning_effort* is stamped on the record when provided so lifetime
+    analytics can later stratify runs by the effort level in force — past
+    runs (without this field) simply read as "unknown".
+    """
     costs = costs or {}
     run = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "prompt": prompt,
         "output_dir": output_dir or "",
         "total_time_s": round(total_time, 2),
+        **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
         "models": {
             name: {
                 "status": info["status"],

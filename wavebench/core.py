@@ -10,7 +10,10 @@ import subprocess
 import aiohttp
 from typing import Dict, Any, Optional, List
 
-from wavebench.api import call_model_streaming, call_model_async
+from wavebench.api import (
+    call_model_streaming, call_model_async,
+    _supported_efforts, _map_effort,
+)
 from wavebench.parsers import parse_llm_output, get_directory_name
 from wavebench.tui.styles import (
     S, _wait, _fail, _work, _ok, _skip, _arrow, format_duration, format_cost,
@@ -801,6 +804,24 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     print(_box_bot(w, heavy=True))
     print()
 
+    # Build per-model effort-adjustment notices; these get scrolled as a
+    # news-ticker on the summary line once the tracker starts rendering.
+    effort_ticker_msgs: list = []
+    if reasoning_effort:
+        for _name, model_id in targets:
+            supported = _supported_efforts(model_id)
+            short_id = model_id.split("/", 1)[-1]
+            if supported is None:
+                effort_ticker_msgs.append(
+                    f"{short_id}: effort {reasoning_effort} n/a → reasoning on"
+                )
+            else:
+                mapped = _map_effort(reasoning_effort, supported)
+                if mapped != reasoning_effort:
+                    effort_ticker_msgs.append(
+                        f"{short_id}: effort {reasoning_effort} → {mapped}"
+                    )
+
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
     connector = aiohttp.TCPConnector(limit=0, keepalive_timeout=30)
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
@@ -829,6 +850,8 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
             pricing_lookup=pricing_lookup or {},
             model_id_map=model_id_map,
             alt_screen=True)
+        if effort_ticker_msgs:
+            tracker.set_ticker(effort_ticker_msgs)
         try:
             async def resolve_output_dir() -> str:
                 dir_name = await get_directory_name(
@@ -995,7 +1018,8 @@ async def main_async(args: Any, api_key: str, model_mapping: Optional[Dict[str, 
     # ── Record run & show lifetime analytics ───────────────────────────────
     run_costs = {name: _result_cost(name, info) for name, info in results.items()}
     record_run(history, user_prompt, output_dir_final[0],
-               total_time, results, costs=run_costs)
+               total_time, results, costs=run_costs,
+               reasoning_effort=raw_effort)
     display_analytics(history, compact=True, pad=pad,
                       sort_by=config.get("analytics_sort", "runs"))
     print()

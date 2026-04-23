@@ -128,6 +128,61 @@ def load_api_key() -> Optional[str]:
     return None
 
 
+# Ordered low → max.  Only used for distance math when clamping an
+# unsupported effort choice down to the closest level the model accepts.
+_EFFORT_ORDER: List[str] = ["low", "medium", "high", "xhigh", "max"]
+
+# Per-model effort capabilities (as of 2026-04-22).  Patterns match as
+# substrings against the lower-cased OpenRouter model id; most-specific
+# entries first so "opus-4.7" wins over a hypothetical generic "opus".
+_CLAUDE_EFFORT_CAPABILITIES: List[tuple] = [
+    ("opus-4-7",   ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4.7",   ["low", "medium", "high", "xhigh", "max"]),
+    ("mythos",     ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4-6",   ["low", "medium", "high", "max"]),
+    ("opus-4.6",   ["low", "medium", "high", "max"]),
+    ("sonnet-4-6", ["low", "medium", "high", "max"]),
+    ("sonnet-4.6", ["low", "medium", "high", "max"]),
+    ("opus-4-5",   ["low", "medium", "high"]),
+    ("opus-4.5",   ["low", "medium", "high"]),
+]
+
+
+def _supported_efforts(model_id: str) -> Optional[List[str]]:
+    """Return the effort levels supported by *model_id*, or None if the
+    model accepts no ``effort`` parameter at all (older Claude variants).
+    """
+    lower = model_id.lower()
+    is_anthropic = "anthropic/" in lower or "claude" in lower
+    if is_anthropic:
+        for pat, levels in _CLAUDE_EFFORT_CAPABILITIES:
+            if pat in lower:
+                return levels
+        return None  # legacy Claude — only reasoning.enabled toggles work
+    return ["low", "medium", "high"]
+
+
+def _map_effort(effort: str, supported: List[str]) -> str:
+    """Clamp *effort* to the closest value in *supported*.  Ties (equal
+    distance — e.g. xhigh on a 4.6 model between high and max) resolve
+    upward, per the "highest effort closest to the set choice" rule.
+    """
+    if effort in supported:
+        return effort
+    if effort not in _EFFORT_ORDER:
+        return effort
+    target = _EFFORT_ORDER.index(effort)
+    best: Optional[tuple] = None
+    for level in supported:
+        if level not in _EFFORT_ORDER:
+            continue
+        idx = _EFFORT_ORDER.index(level)
+        key = (abs(idx - target), -idx)  # min distance, then max ordinal
+        if best is None or key < best[0]:
+            best = (key, level)
+    return best[1] if best else effort
+
+
 def _reasoning_attempts(
     model_id: str, effort: str, max_tokens: int,
 ) -> List[Dict[str, Any]]:
@@ -137,10 +192,14 @@ def _reasoning_attempts(
     provider returns 400 the caller moves to the next entry.  Returns an
     empty list for models known to never support reasoning.
 
-    The order is:
-      1. Provider-specific primary format (Anthropic enabled flag,
-         standard OpenRouter effort for everything else).
-      2. max_tokens-based reasoning (Anthropic / Gemini / Qwen style).
+    Order:
+      1. Native ``reasoning.effort`` with effort clamped to what the
+         model supports (xhigh → high/max on 4.6, max → high on 4.5, …).
+         Legacy Claude models fall back to ``reasoning.enabled: true``
+         because they don't accept an effort parameter.
+      2. ``reasoning.max_tokens`` budget (for Gemini / Qwen-style APIs
+         that want an explicit thinking budget).  Deprecated on Claude
+         4.6 and removed on 4.7 — kept here only as a last-resort alias.
       3. Simple ``enabled: true`` flag.
       4. Top-level ``reasoning_effort`` (native provider APIs).
     Duplicates are suppressed automatically.
@@ -150,7 +209,6 @@ def _reasoning_attempts(
     if "glm-4.7" in lower:
         return []
 
-    is_anthropic = "anthropic/" in lower or "claude" in lower
     is_mercury = "inception/" in lower or "mercury" in lower
 
     seen: List[Dict[str, Any]] = []
@@ -165,16 +223,20 @@ def _reasoning_attempts(
         # through to the provider, producing more detailed chain-of-thought
         # inline in the content.  Don't try max_tokens or enabled — they're
         # no-ops for Mercury, and combining effort + max_tokens causes a 400.
+        mapped = _map_effort(effort, ["low", "medium", "high"])
         _add({
-            "reasoning": {"effort": effort},
+            "reasoning": {"effort": mapped},
             "reasoning_summary": True,
         })
         return seen
 
-    if is_anthropic:
+    supported = _supported_efforts(model_id)
+    if supported is None:
+        # Legacy Claude (Sonnet 4.5, Haiku series, Claude 3.x, …) — no
+        # effort parameter; toggling reasoning on is the best we can do.
         _add({"reasoning": {"enabled": True}})
     else:
-        _add({"reasoning": {"effort": effort}})
+        _add({"reasoning": {"effort": _map_effort(effort, supported)}})
 
     budget = max(1024, int(max_tokens * 0.8))
     _add({"reasoning": {"max_tokens": budget}})

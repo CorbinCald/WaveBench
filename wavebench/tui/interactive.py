@@ -737,7 +737,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
 
     from wavebench.tui.styles import THEME_NAMES
 
-    REASONING_CHOICES = ["high", "medium", "low", "off"]
+    REASONING_CHOICES = ["max", "xhigh", "high", "medium", "low", "off"]
     SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens", "cost"]
     AUTO_OPEN_CHOICES = ["off", "incremental", "after_all"]
 
@@ -935,7 +935,7 @@ def interactive_config_menu(available_models: List[Dict[str, Any]], current_mapp
                             if val == "off":
                                 val_s = f"{S.HRED}{val}{S.RST}"
                                 chk = " "
-                            elif val == "high":
+                            elif val in ("high", "xhigh", "max"):
                                 val_s = f"{S.HGRN}{val}{S.RST}"
                                 chk = f"{S.HGRN}✓{S.RST}"
                             else:

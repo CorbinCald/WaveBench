@@ -329,6 +329,11 @@ class ProgressTracker:
         self._wave_rate_time = 0.0
         self._wave_agg_rate = 0.0
         self._wave_phase = 0.0
+        # News-ticker marquee rendered on the summary line — joined text
+        # scrolls once right-to-left, then the strip renders empty.
+        self._ticker_text: str = ""
+        self._ticker_started_at: float = 0.0
+        self._ticker_speed_cps: float = 12.0
 
     @property
     def is_running(self) -> bool:
@@ -340,6 +345,42 @@ class ProgressTracker:
 
     def set_output_dir(self, path: str) -> None:
         self._output_dir = path
+
+    def set_ticker(self, messages: list) -> None:
+        """Attach a one-pass news-scroll ticker of short plain-text
+        messages to the right of the summary spinner line.  Joined with a
+        bullet separator and scrolled right-to-left once; after fully
+        exiting the left edge the ticker strip renders empty.
+        """
+        parts = [str(m).strip() for m in messages if m and str(m).strip()]
+        if not parts:
+            self._ticker_text = ""
+            return
+        self._ticker_text = "   •   ".join(parts)
+        self._ticker_started_at = 0.0
+
+    def _ticker_slice(self, width: int) -> str:
+        """Return a *width*-wide slice of the scrolling ticker (plain
+        text, no ANSI).  Text enters from the right edge, advances one
+        char per (1 / speed) seconds, exits on the left, then blanks.
+        """
+        if not self._ticker_text or width <= 0:
+            return " " * max(0, width)
+        if self._ticker_started_at == 0.0:
+            self._ticker_started_at = time.monotonic()
+        elapsed = time.monotonic() - self._ticker_started_at
+        # Left edge of text starts at +width (off-screen right) and
+        # decreases linearly with elapsed time.
+        offset = width - int(elapsed * self._ticker_speed_cps)
+        text_len = len(self._ticker_text)
+        if offset <= -text_len:
+            return " " * width
+        strip = [" "] * width
+        for i, ch in enumerate(self._ticker_text):
+            col = offset + i
+            if 0 <= col < width:
+                strip[col] = ch
+        return "".join(strip)
 
     def _model_pricing(self, model_name: str) -> Dict[str, Any]:
         """Return the pricing dict for a model, or empty dict."""
@@ -792,6 +833,18 @@ class ProgressTracker:
                     f"{self._label}  "
                     f"{S.DIM}{done}/{self._total} complete · "
                     f"{elapsed}{cost_part}{S.RST}")
+                if self._ticker_text:
+                    inner_w = w - 4
+                    gap = 3
+                    ticker_w = inner_w - _vlen(summary) - gap
+                    if ticker_w > 0:
+                        strip = self._ticker_slice(ticker_w)
+                        if strip.strip():
+                            summary = (
+                                summary
+                                + " " * gap
+                                + f"{S.DIM}{strip}{S.RST}"
+                            )
                 buf.append(_box_row(summary, w) + "\033[K\n")
                 lines += 1
 
