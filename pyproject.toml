@@ -12,8 +12,59 @@ dependencies = [
     "aiohttp",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov",
+    "ruff>=0.5",
+    "pre-commit",
+]
+
 [project.scripts]
 wavebench = "wavebench.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["wavebench*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    ".venv",
+    "venv",
+    "build",
+    "benchmarkResults",
+    ".superpowers",
+    "scripts",            # ad-hoc audit helpers; not part of the package
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",    # line-too-long — let formatter handle; some long strings are intentional
+    "SIM108",  # ternary preference — current explicit if/else is more readable in several places
+    "SIM105",  # contextlib.suppress — try/except/pass is explicit and idiomatic in this codebase
+    "B008",    # function-call in argument default — aiohttp.ClientSession patterns
+    "B904",    # raise ... from ... — stylistic; revisit during #2 cleanup
+    "B007",    # unused loop variable — used for tuple-unpacking shape, not iteration
+    "RUF001",  # ambiguous unicode (e.g., ›) — used intentionally for TUI decoration
+    "RUF002",  # ambiguous unicode in docstrings — en-dashes, bullets used intentionally
+    "RUF059",  # unpacked-but-unused tuple variable — intentional for signature consistency
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can be a bit looser with idioms.
+"tests/**/*.py" = ["B011", "SIM117"]
+# interactive.py imports wavebench.* modules after a conditional
+# ``try: import tty/termios`` block — a legitimate pattern for optional
+# platform-specific deps; E402 doesn't apply.
+"wavebench/tui/interactive.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--strict-markers -ra"
+markers = [
+    "slow: marks tests that take several seconds (deselect with -m 'not slow')",
+]

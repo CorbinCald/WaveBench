@@ -7,6 +7,7 @@ effort phase, sequential across phases.  Reports per-call usage plus
 per-effort aggregates so we can see differentiation emerge despite
 temperature=0.1 sample variance.
 """
+
 import asyncio
 import json
 import os
@@ -18,9 +19,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import aiohttp
+
 from wavebench.api import (
-    load_api_key, call_model_streaming,
-    _reasoning_attempts, _supported_efforts, _map_effort,
+    _reasoning_attempts,
+    _supported_efforts,
+    call_model_streaming,
+    load_api_key,
 )
 
 MODEL_ID = "anthropic/claude-opus-4.7"
@@ -98,7 +102,10 @@ async def run_one_call(
     try:
         content, usage = await asyncio.wait_for(
             call_model_streaming(
-                session, api_key, MODEL_ID, PROMPT,
+                session,
+                api_key,
+                MODEL_ID,
+                PROMPT,
                 reasoning_effort=effort,
                 on_progress=on_progress,
                 max_tokens=MAX_TOKENS,
@@ -108,13 +115,24 @@ async def run_one_call(
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - t0
         print(f"  [{tag}] TIMEOUT after {elapsed:.1f}s")
-        return {"effort": effort, "sample": sample_idx, "status": "timeout",
-                "elapsed": elapsed, "primary": attempts[0]}
+        return {
+            "effort": effort,
+            "sample": sample_idx,
+            "status": "timeout",
+            "elapsed": elapsed,
+            "primary": attempts[0],
+        }
     except Exception as exc:
         elapsed = time.monotonic() - t0
         print(f"  [{tag}] FAILED after {elapsed:.1f}s: {exc!r}")
-        return {"effort": effort, "sample": sample_idx, "status": "failed",
-                "elapsed": elapsed, "primary": attempts[0], "error": repr(exc)}
+        return {
+            "effort": effort,
+            "sample": sample_idx,
+            "status": "failed",
+            "elapsed": elapsed,
+            "primary": attempts[0],
+            "error": repr(exc),
+        }
 
     elapsed = time.monotonic() - t0
     content_len = len(content)
@@ -126,12 +144,14 @@ async def run_one_call(
     rt = _reasoning_tokens(u)
     ct = u.get("completion_tokens", 0) or 0
     cost = u.get("cost", 0.0) or 0.0
-    truncated = (ct >= MAX_TOKENS)
+    truncated = ct >= MAX_TOKENS
 
-    print(f"  [{tag}] ok  {elapsed:>6.1f}s  compl={ct:>5}  "
-          f"reason_tok={rt:>5}  reason_chars={reasoning_chars:>5}  "
-          f"chars={content_len:>6,}  cost=${cost:.4f}"
-          f"{'  ⚠TRUNC' if truncated else ''}")
+    print(
+        f"  [{tag}] ok  {elapsed:>6.1f}s  compl={ct:>5}  "
+        f"reason_tok={rt:>5}  reason_chars={reasoning_chars:>5}  "
+        f"chars={content_len:>6,}  cost=${cost:.4f}"
+        f"{'  ⚠TRUNC' if truncated else ''}"
+    )
     return {
         "effort": effort,
         "sample": sample_idx,
@@ -160,7 +180,7 @@ async def main() -> None:
     print("=" * 72)
     supported = _supported_efforts(MODEL_ID)
     print(f"  _supported_efforts({MODEL_ID}) = {supported}")
-    print(f"  primary wire payloads we will send:")
+    print("  primary wire payloads we will send:")
     for e in EFFORTS:
         print(f"    {e:>6}  →  {_reasoning_attempts(MODEL_ID, e, MAX_TOKENS)[0]}")
     print(f"  prompt length:   ~{len(PROMPT)} chars")
@@ -176,32 +196,33 @@ async def main() -> None:
             print(f"PHASE: effort={effort!r}  (n={N_SAMPLES} concurrent)")
             print(f"{'─' * 72}")
             phase_t0 = time.monotonic()
-            tasks = [
-                run_one_call(session, api_key, effort, i)
-                for i in range(N_SAMPLES)
-            ]
+            tasks = [run_one_call(session, api_key, effort, i) for i in range(N_SAMPLES)]
             results = await asyncio.gather(*tasks, return_exceptions=False)
             phase_elapsed = time.monotonic() - phase_t0
             all_results[effort] = results
 
-            phase_cost = sum(r.get("cost", 0.0) for r in results
-                             if r["status"] == "ok")
+            phase_cost = sum(r.get("cost", 0.0) for r in results if r["status"] == "ok")
             running_cost += phase_cost
-            print(f"  phase wall time: {phase_elapsed:.1f}s   "
-                  f"phase cost: ${phase_cost:.4f}   "
-                  f"running total: ${running_cost:.4f}")
+            print(
+                f"  phase wall time: {phase_elapsed:.1f}s   "
+                f"phase cost: ${phase_cost:.4f}   "
+                f"running total: ${running_cost:.4f}"
+            )
             if running_cost > COST_CEILING_USD:
-                print(f"  ABORT: cost ceiling ${COST_CEILING_USD:.2f} "
-                      f"exceeded at ${running_cost:.4f}")
+                print(
+                    f"  ABORT: cost ceiling ${COST_CEILING_USD:.2f} exceeded at ${running_cost:.4f}"
+                )
                 break
 
     # ── Per-effort aggregates ──────────────────────────────────────────────
     print("\n" + "=" * 72)
     print("PER-EFFORT AGGREGATES (mean ± stdev across n samples)")
     print("=" * 72)
-    header = (f"{'effort':<8} {'n':>3} {'elapsed_s':>20} "
-              f"{'compl_tok':>18} {'reason_chars':>18} {'trunc':>6} "
-              f"{'cost':>9}")
+    header = (
+        f"{'effort':<8} {'n':>3} {'elapsed_s':>20} "
+        f"{'compl_tok':>18} {'reason_chars':>18} {'trunc':>6} "
+        f"{'cost':>9}"
+    )
     print(header)
     print("-" * len(header))
 
@@ -224,12 +245,14 @@ async def main() -> None:
         rchars = [r["reasoning_chars"] for r in rows]
         trunc_cnt = sum(1 for r in rows if r["truncated"])
         cost = sum(r["cost"] for r in rows)
-        print(f"{effort:<8} {len(rows):>3} "
-              f"{_agg(elapsed):>20} "
-              f"{_agg(compl):>18} "
-              f"{_agg(rchars):>18} "
-              f"{trunc_cnt}/{len(rows):>3} "
-              f"${cost:>7.4f}")
+        print(
+            f"{effort:<8} {len(rows):>3} "
+            f"{_agg(elapsed):>20} "
+            f"{_agg(compl):>18} "
+            f"{_agg(rchars):>18} "
+            f"{trunc_cnt}/{len(rows):>3} "
+            f"${cost:>7.4f}"
+        )
 
     # ── Differentiation verdict ────────────────────────────────────────────
     print("\n" + "=" * 72)
@@ -247,36 +270,47 @@ async def main() -> None:
             }
     if len(means) == 3:
         ordered = [means[e]["compl"] for e in EFFORTS]
-        print(f"  completion_tokens mean:  "
-              f"low={ordered[0]:.0f}  high={ordered[1]:.0f}  "
-              f"xhigh={ordered[2]:.0f}")
+        print(
+            f"  completion_tokens mean:  "
+            f"low={ordered[0]:.0f}  high={ordered[1]:.0f}  "
+            f"xhigh={ordered[2]:.0f}"
+        )
         mono = ordered[0] <= ordered[1] <= ordered[2]
         print(f"  monotonic low→high→xhigh? {mono}")
 
         ordered_r = [means[e]["rchars"] for e in EFFORTS]
-        print(f"  reasoning_chars mean:    "
-              f"low={ordered_r[0]:.0f}  high={ordered_r[1]:.0f}  "
-              f"xhigh={ordered_r[2]:.0f}")
+        print(
+            f"  reasoning_chars mean:    "
+            f"low={ordered_r[0]:.0f}  high={ordered_r[1]:.0f}  "
+            f"xhigh={ordered_r[2]:.0f}"
+        )
         mono_r = ordered_r[0] <= ordered_r[1] <= ordered_r[2]
         print(f"  monotonic low→high→xhigh? {mono_r}")
 
         ordered_t = [means[e]["elapsed"] for e in EFFORTS]
-        print(f"  elapsed (s) mean:        "
-              f"low={ordered_t[0]:.1f}  high={ordered_t[1]:.1f}  "
-              f"xhigh={ordered_t[2]:.1f}")
+        print(
+            f"  elapsed (s) mean:        "
+            f"low={ordered_t[0]:.1f}  high={ordered_t[1]:.1f}  "
+            f"xhigh={ordered_t[2]:.1f}"
+        )
 
     # Dump raw results for reference
     print(f"\n  grand total cost: ${running_cost:.4f}")
     dump_path = os.path.join(ROOT, "scripts", "effort_audit_tight_results.json")
     with open(dump_path, "w") as fh:
-        json.dump({
-            "model": MODEL_ID,
-            "efforts": EFFORTS,
-            "n_samples": N_SAMPLES,
-            "max_tokens": MAX_TOKENS,
-            "results": all_results,
-            "total_cost_usd": running_cost,
-        }, fh, indent=2, default=str)
+        json.dump(
+            {
+                "model": MODEL_ID,
+                "efforts": EFFORTS,
+                "n_samples": N_SAMPLES,
+                "max_tokens": MAX_TOKENS,
+                "results": all_results,
+                "total_cost_usd": running_cost,
+            },
+            fh,
+            indent=2,
+            default=str,
+        )
     print(f"  raw results dumped to: {dump_path}")
 
 
