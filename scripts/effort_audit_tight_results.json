@@ -1,0 +1,190 @@
+{
+  "model": "anthropic/claude-opus-4.7",
+  "efforts": [
+    "low",
+    "high",
+    "xhigh"
+  ],
+  "n_samples": 3,
+  "max_tokens": 16000,
+  "results": {
+    "low": [
+      {
+        "effort": "low",
+        "sample": 0,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "low"
+          }
+        },
+        "elapsed": 125.63852250899981,
+        "content_chars": 18156,
+        "reasoning_chars": 6203,
+        "completion_tokens": 12705,
+        "reasoning_tokens": 1580,
+        "prompt_tokens": 637,
+        "total_tokens": 13342,
+        "cost": 0.32081,
+        "truncated": false
+      },
+      {
+        "effort": "low",
+        "sample": 1,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "low"
+          }
+        },
+        "elapsed": 128.5447865719998,
+        "content_chars": 16266,
+        "reasoning_chars": 5521,
+        "completion_tokens": 13149,
+        "reasoning_tokens": 1404,
+        "prompt_tokens": 637,
+        "total_tokens": 13786,
+        "cost": 0.33191,
+        "truncated": false
+      },
+      {
+        "effort": "low",
+        "sample": 2,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "low"
+          }
+        },
+        "elapsed": 145.26153015600175,
+        "content_chars": 6002,
+        "reasoning_chars": 11795,
+        "completion_tokens": 16000,
+        "reasoning_tokens": 3002,
+        "prompt_tokens": 637,
+        "total_tokens": 16637,
+        "cost": 0.403185,
+        "truncated": true
+      }
+    ],
+    "high": [
+      {
+        "effort": "high",
+        "sample": 0,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "high"
+          }
+        },
+        "elapsed": 137.8584846419999,
+        "content_chars": 18597,
+        "reasoning_chars": 5330,
+        "completion_tokens": 13997,
+        "reasoning_tokens": 1355,
+        "prompt_tokens": 637,
+        "total_tokens": 14634,
+        "cost": 0.35311,
+        "truncated": false
+      },
+      {
+        "effort": "high",
+        "sample": 1,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "high"
+          }
+        },
+        "elapsed": 117.12826486999984,
+        "content_chars": 17811,
+        "reasoning_chars": 3347,
+        "completion_tokens": 11895,
+        "reasoning_tokens": 857,
+        "prompt_tokens": 637,
+        "total_tokens": 12532,
+        "cost": 0.30056,
+        "truncated": false
+      },
+      {
+        "effort": "high",
+        "sample": 2,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "high"
+          }
+        },
+        "elapsed": 130.73675924800045,
+        "content_chars": 17704,
+        "reasoning_chars": 4444,
+        "completion_tokens": 13282,
+        "reasoning_tokens": 1125,
+        "prompt_tokens": 637,
+        "total_tokens": 13919,
+        "cost": 0.335235,
+        "truncated": false
+      }
+    ],
+    "xhigh": [
+      {
+        "effort": "xhigh",
+        "sample": 0,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "xhigh"
+          }
+        },
+        "elapsed": 129.83023690000118,
+        "content_chars": 17072,
+        "reasoning_chars": 5222,
+        "completion_tokens": 12930,
+        "reasoning_tokens": 1322,
+        "prompt_tokens": 637,
+        "total_tokens": 13567,
+        "cost": 0.326435,
+        "truncated": false
+      },
+      {
+        "effort": "xhigh",
+        "sample": 1,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "xhigh"
+          }
+        },
+        "elapsed": 92.31696989899865,
+        "content_chars": 15517,
+        "reasoning_chars": 3490,
+        "completion_tokens": 9293,
+        "reasoning_tokens": 883,
+        "prompt_tokens": 637,
+        "total_tokens": 9930,
+        "cost": 0.23551,
+        "truncated": false
+      },
+      {
+        "effort": "xhigh",
+        "sample": 2,
+        "status": "ok",
+        "primary": {
+          "reasoning": {
+            "effort": "xhigh"
+          }
+        },
+        "elapsed": 88.88117843000146,
+        "content_chars": 16934,
+        "reasoning_chars": 2284,
+        "completion_tokens": 9465,
+        "reasoning_tokens": 580,
+        "prompt_tokens": 637,
+        "total_tokens": 10102,
+        "cost": 0.23981,
+        "truncated": false
+      }
+    ]
+  },
+  "total_cost_usd": 2.846565
+}

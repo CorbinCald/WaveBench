@@ -1,0 +1,49 @@
+<h2>How many wave layers feel right?</h2>
+<p class="subtitle">Each extra layer is drawn in front of (overlapping) the main wave, positioned lower, with a darker shade of the theme color. More layers = more depth, but more visual noise and CPU cost.</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>1 extra layer (2 total)</h3>
+      <p>Main wave + one foreground shadow wave. Subtle depth cue. Minimal visual noise.</p>
+      <pre style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:1.15; background:#0a1410; padding:12px; border-radius:6px; margin-top:8px; color:#00e641; white-space:pre;">
+   ⢀⣠⣴⣶⣦⣄⡀                    ⢀⣠⣴⣶⣦⣄⡀            <span style="color:#00a63a">main wave</span>
+⣠⣴⣶⡿⠋⠉⠙⠻⣶⣤⣀⠀⠀⠀⣀⣤⣶⡾⠋⠉⠙⠻⢶⣤⡀
+⣿⣿⣿⡿⠿⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⠿⢿⣿⣿⣿     <span style="color:#005a1e">front shadow</span>
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿</pre>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>2 extra layers (3 total) <span style="color:var(--accent); font-size:12px; margin-left:6px;">← recommended</span></h3>
+      <p>Main + mid-shadow + near-shadow. Clear parallax. Each shade darker than the last. Good balance of richness and clarity.</p>
+      <pre style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:1.15; background:#0a1410; padding:12px; border-radius:6px; margin-top:8px; color:#00e641; white-space:pre;">
+   ⢀⣠⣴⣶⣦⣄⡀                    ⢀⣠⣴⣶⣦⣄⡀            <span style="color:#00a63a">main (lightest)</span>
+⣠⣶⡿⠋⠙⠻⣶⣄⠀⠀⣀⣴⡾⠋⠙⠻⢶⣄⠀⠀⣀⣤⣶
+⣿⣿⡿⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿      <span style="color:#006b25">mid shadow</span>
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿      <span style="color:#003a15">near shadow</span></pre>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>3 extra layers (4 total)</h3>
+      <p>Lush multi-layer parallax. Each subsequent layer is progressively darker and lower. Richest depth, most visually active.</p>
+      <pre style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:1.15; background:#0a1410; padding:12px; border-radius:6px; margin-top:8px; color:#00e641; white-space:pre;">
+  ⢀⣠⣴⣦⣀⠀                  ⢀⣠⣴⣦⣄⡀                  <span style="color:#00c83d">main</span>
+⣠⣶⡿⠛⠿⢶⣄⠀⣀⣴⡾⠟⠛⠿⣦⣀⣀⣴⡾⠋⠙⠻⣶            <span style="color:#008c2e">layer 1</span>
+⣿⣿⡿⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿          <span style="color:#005a1e">layer 2</span>
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    <span style="color:#002a10">layer 3</span></pre>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:24px; padding:16px; background:rgba(255,255,255,0.03); border-radius:6px; font-size:14px;">
+  <strong>Note:</strong> The ASCII art above is a rough impression. In the real version, each layer has its own slightly different wavelength/phase, so they look independent — but they all loosely track the main wave's crests and valleys.
+</div>
