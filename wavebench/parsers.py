@@ -1,11 +1,27 @@
-import re
-import json
+"""LLM output parsing and directory-name generation.
+
+``parse_llm_output()`` is the main entry point — a four-stage cascade:
+
+    Stage 1. Structured JSON payload with ``code`` key.
+    Stage 2. Fenced code-block extraction (prefers largest non-JSON block).
+    Stage 3. Salvage from an unclosed fence.
+    Stage 4. Treat the whole response as code, with language guessed
+             from syntactic markers (shebang, DOCTYPE, ``def``, etc.).
+
+``get_directory_name()`` makes a fast LLM call to derive a concise
+``snake_case`` directory name from the user's prompt.
+"""
+
 import asyncio
+import json
+import re
+from typing import Any
+
 import aiohttp
-from typing import Optional, Dict, Any, List, Tuple
 
 from wavebench.api import call_model_async
-from wavebench.tui.styles import _tri, S
+from wavebench.tui.styles import S, _tri
+
 
 async def get_directory_name(session: aiohttp.ClientSession, api_key: str, prompt: str) -> str:
     """Use a fast model to derive a short directory name from the prompt."""
@@ -19,14 +35,17 @@ async def get_directory_name(session: aiohttp.ClientSession, api_key: str, promp
     try:
         name = await asyncio.wait_for(
             call_model_async(
-                session, api_key, model, naming_prompt,
+                session,
+                api_key,
+                model,
+                naming_prompt,
                 reasoning_effort=None,
                 max_tokens=64,
             ),
-            timeout=15.0
+            timeout=15.0,
         )
         if name:
-            clean = name.strip().replace('`', '').strip()
+            clean = name.strip().replace("`", "").strip()
             clean = "".join(c for c in clean if c.isalnum() or c in "._- ")
             if clean:
                 return clean
@@ -35,6 +54,7 @@ async def get_directory_name(session: aiohttp.ClientSession, api_key: str, promp
         print(f"    {_tri} {S.DIM}dir name error: {exc_str}{S.RST}")
 
     return "benchmark_output"
+
 
 _FENCE_RE = re.compile(
     r"(```|~~~)\s*([^\n`]*)\n(.*?)\n\1",
@@ -87,7 +107,7 @@ def _lang_to_extension(language: str) -> str:
     return _LANG_TO_EXT.get(language.lower().strip(), "")
 
 
-def _extract_json_candidates(text: str) -> List[str]:
+def _extract_json_candidates(text: str) -> list[str]:
     """Collect plausible JSON object candidates from noisy text."""
     clean = text.strip()
     candidates = [clean]
@@ -99,7 +119,7 @@ def _extract_json_candidates(text: str) -> List[str]:
     first = clean.find("{")
     last = clean.rfind("}")
     if first != -1 and last != -1 and last > first:
-        candidates.append(clean[first:last + 1].strip())
+        candidates.append(clean[first : last + 1].strip())
 
     # Preserve insertion order, remove duplicates.
     seen = set()
@@ -111,7 +131,7 @@ def _extract_json_candidates(text: str) -> List[str]:
     return ordered
 
 
-def _parse_json_payload(text: str) -> Optional[Dict[str, Any]]:
+def _parse_json_payload(text: str) -> dict[str, Any] | None:
     for candidate in _extract_json_candidates(text):
         try:
             data = json.loads(candidate)
@@ -124,8 +144,8 @@ def _parse_json_payload(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _parse_code_blocks(text: str) -> List[Tuple[str, str]]:
-    blocks: List[Tuple[str, str]] = []
+def _parse_code_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
     for match in _FENCE_RE.finditer(text):
         info_raw = (match.group(2) or "").strip()
         code = (match.group(3) or "").strip("\n")
@@ -136,7 +156,7 @@ def _parse_code_blocks(text: str) -> List[Tuple[str, str]]:
     return blocks
 
 
-def _salvage_unclosed_fence(text: str) -> Optional[Tuple[str, str]]:
+def _salvage_unclosed_fence(text: str) -> tuple[str, str] | None:
     """Recover code when an LLM opened a fence but never closed it."""
     m = re.search(r"(```|~~~)\s*([^\n`]*)\n(.*)$", text, re.DOTALL)
     if not m:
@@ -154,20 +174,25 @@ def _guess_language_from_code(code: str) -> str:
 
     if stripped.startswith("#!/") and "python" in stripped[:100].lower():
         return "python"
-    if stripped.startswith("#!/") and ("bash" in stripped[:100].lower() or "sh" in stripped[:100].lower()):
+    if stripped.startswith("#!/") and (
+        "bash" in stripped[:100].lower() or "sh" in stripped[:100].lower()
+    ):
         return "bash"
     if "<!doctype html" in stripped.lower() or "<html" in stripped.lower():
         return "html"
     if first.startswith("SELECT ") or "\nSELECT " in code.upper():
         return "sql"
     has_js_import = bool(re.search(r"\bfrom\s+['\"]", code))
-    has_jsx = bool(re.search(r"<\w+[\s/>]", code)) and ("useState" in code or "React" in code or "export " in code)
+    has_jsx = bool(re.search(r"<\w+[\s/>]", code)) and (
+        "useState" in code or "React" in code or "export " in code
+    )
     if has_js_import or has_jsx:
         if re.search(r":\s*(string|number|boolean|React\.)\b", code):
             return "typescript"
         return "javascript"
     if re.search(r"^\s*def\s+\w+\(", code, re.MULTILINE) or (
-            "import " in code and ":" in code and not has_js_import):
+        "import " in code and ":" in code and not has_js_import
+    ):
         return "python"
     if re.search(r"^\s*function\s+\w+\(", code, re.MULTILINE) or "console.log(" in code:
         return "javascript"
@@ -199,7 +224,9 @@ def _strip_trailing_fence(code: str) -> str:
     return cleaned
 
 
-def _build_parse_result(code: str, language_hint: str = "", extension_hint: str = "") -> Dict[str, Any]:
+def _build_parse_result(
+    code: str, language_hint: str = "", extension_hint: str = ""
+) -> dict[str, Any]:
     code = _strip_trailing_fence(code)
     language = (language_hint or "").lower().strip()
     if not language:
@@ -216,10 +243,16 @@ def _build_parse_result(code: str, language_hint: str = "", extension_hint: str 
     }
 
 
-async def parse_llm_output(session: aiohttp.ClientSession, api_key: str, model_name: str, content: str) -> Optional[Dict[str, Any]]:
-    """Extract code, language, and extension from LLM output locally."""
-    # Signature is kept for backward compatibility with existing call sites.
-    del session, api_key, model_name
+def extract_code(content: str) -> dict[str, Any] | None:
+    """Synchronous four-stage code extraction from an LLM response.
+
+    Tries structured JSON → fenced blocks → unclosed-fence salvage →
+    fallback whole-response-as-code, in order. Returns a dict with keys
+    ``code``, ``extension``, ``language`` or ``None`` on failure.
+
+    Used by ``wavebench.modes.code.CodeMode.parse_response`` directly and
+    by ``parse_llm_output`` via a thin async wrapper.
+    """
     try:
         if not content or not content.strip():
             return None
@@ -254,3 +287,16 @@ async def parse_llm_output(session: aiohttp.ClientSession, api_key: str, model_n
         exc_str = str(exc) or exc.__class__.__name__
         print(f"    {_tri} {S.DIM}local parse error: {exc_str}{S.RST}")
         return None
+
+
+async def parse_llm_output(
+    session: aiohttp.ClientSession, api_key: str, model_name: str, content: str
+) -> dict[str, Any] | None:
+    """Async wrapper around :func:`extract_code` for backward compatibility.
+
+    The ``session``, ``api_key``, and ``model_name`` parameters were used
+    when extraction went through an LLM call; they are unused now but the
+    signature is preserved so existing callers don't break.
+    """
+    del session, api_key, model_name
+    return extract_code(content)

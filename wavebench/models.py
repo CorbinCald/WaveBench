@@ -1,29 +1,53 @@
-import time
-from typing import Dict, FrozenSet, Any
+"""Default model mapping and ranking algorithm.
 
-MODEL_MAPPING: Dict[str, str] = {
-    'gemini3_0Pro':     'google/gemini-3-pro-preview',
-    'kimik2_5':         'moonshotai/kimi-k2.5',
-    'minimax_m2.5':     'minimax/minimax-m2.5',
-    'glm5':             'z-ai/glm-5',
-    'claudeOpus4.6':    'anthropic/claude-opus-4.6',
+Holds the fallback ``MODEL_MAPPING`` used when no persistent selection
+exists, and ``_model_score()`` — the heuristic that ranks the OpenRouter
+catalog by provider tier, pricing, recency, reasoning/tool capability,
+and context length. Also exposes ``is_stealth()`` for classifying cloaked
+``openrouter/*`` models.
+"""
+
+import time
+
+MODEL_MAPPING: dict[str, str] = {
+    "gemini3_0Pro": "google/gemini-3-pro-preview",
+    "kimik2_5": "moonshotai/kimi-k2.5",
+    "minimax_m2.5": "minimax/minimax-m2.5",
+    "glm5": "z-ai/glm-5",
+    "claudeOpus4.6": "anthropic/claude-opus-4.6",
 }
 
-_TIER1_PROVIDERS: FrozenSet[str] = frozenset({
-    "anthropic", "openai", "google", "deepseek", "x-ai",
-    "moonshotai", "minimax",
-})
-_TIER2_PROVIDERS: FrozenSet[str] = frozenset({
-    "z-ai", "meta-llama", "mistralai", "bytedance-seed",
-    "microsoft", "cohere", "qwen",
-})
+_TIER1_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "anthropic",
+        "openai",
+        "google",
+        "deepseek",
+        "x-ai",
+        "moonshotai",
+        "minimax",
+    }
+)
+_TIER2_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "z-ai",
+        "meta-llama",
+        "mistralai",
+        "bytedance-seed",
+        "microsoft",
+        "cohere",
+        "qwen",
+    }
+)
 
-_OPENROUTER_UTILITY: FrozenSet[str] = frozenset({
-    "openrouter/auto",
-    "openrouter/free",
-    "openrouter/bodybuilder",
-    "openrouter/cinematika-7b",
-})
+_OPENROUTER_UTILITY: frozenset[str] = frozenset(
+    {
+        "openrouter/auto",
+        "openrouter/free",
+        "openrouter/bodybuilder",
+        "openrouter/cinematika-7b",
+    }
+)
 
 
 def is_stealth(model_id: str) -> bool:

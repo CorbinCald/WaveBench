@@ -1,32 +1,60 @@
+"""CLI entry point.
+
+Parses command-line arguments, loads persistent state (models + config),
+dispatches to either ``core.main_async()`` for a benchmark run or the
+interactive config menu, and prints lifetime analytics on ``--stats``.
+Supports the interactive mode-select screen at startup (Code / Text / config).
+"""
+
 import argparse
-import sys
+import asyncio
 import os
 import shutil
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, Future
+import sys
+from concurrent.futures import Future, ThreadPoolExecutor
 
 try:
     import readline
 except ImportError:
     readline = None  # type: ignore[assignment]
 
-from wavebench.api import load_api_key, fetch_top_models
+import wavebench.tui.styles as _styles
+from wavebench.api import fetch_top_models, load_api_key
+from wavebench.core import main_async
 from wavebench.models import MODEL_MAPPING
-from wavebench.storage import load_models, save_models, load_config, save_config, load_history, _history_path
+from wavebench.storage import (
+    _history_path,
+    load_config,
+    load_history,
+    load_models,
+    save_config,
+    save_models,
+)
+from wavebench.tui.analytics import display_analytics
+from wavebench.tui.input import _read_key_timeout
+from wavebench.tui.line_editor import _read_line, _TabEscape
+from wavebench.tui.menus import run_config_menu
+from wavebench.tui.progress import render_idle_wave
 from wavebench.tui.styles import (
-    _banner, S, _ok, _fail, _dot, _tw, _work,
-    _box_top, _box_row, _box_bot,
+    S,
+    _banner,
+    _box_bot,
+    _box_row,
+    _box_top,
+    _dot,
+    _fail,
+    _ok,
+    _tw,
+    _work,
     apply_theme,
 )
-import wavebench.tui.styles as _styles
-from wavebench.tui.components import display_analytics, render_idle_wave
-from wavebench.tui.interactive import run_config_menu, _read_key, _read_line, _TabEscape, _read_key_timeout
-from wavebench.core import main_async
 
 QUERY_HISTORY_FILE = ".benchmark_query_history"
 
+
 def _query_history_path() -> str:
     return os.path.join(os.getcwd(), QUERY_HISTORY_FILE)
+
 
 def _load_query_history() -> None:
     if readline is None:
@@ -46,6 +74,7 @@ def _load_query_history() -> None:
     except Exception:
         pass
 
+
 def _save_query_history(query: str) -> None:
     if readline is None or not query:
         return
@@ -55,33 +84,50 @@ def _save_query_history(query: str) -> None:
     except Exception:
         pass
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark LLMs via OpenRouter and track analytics.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--prompt", type=str, help="Prompt to send to all models")
+    from wavebench.modes import MODES
+
     parser.add_argument(
-        "--prompt", type=str, help="Prompt to send to all models")
+        "--mode",
+        type=str,
+        choices=sorted(MODES.keys()),
+        default=None,
+        help="Response mode (default: code). Registered modes: " + ", ".join(sorted(MODES.keys())),
+    )
     parser.add_argument(
-        "--text", action="store_true",
-        help="Text mode: get prose answers instead of code")
+        "--text",
+        action="store_true",
+        help="Alias for --mode text (kept for backward compatibility).",
+    )
+    parser.add_argument("--stats", action="store_true", help="Show lifetime analytics and exit")
+    parser.add_argument("--clear-history", action="store_true", help="Reset analytics history")
     parser.add_argument(
-        "--stats", action="store_true",
-        help="Show lifetime analytics and exit")
+        "--config",
+        "--models",
+        action="store_true",
+        dest="config",
+        help="Open the configuration menu (models & settings)",
+    )
     parser.add_argument(
-        "--clear-history", action="store_true",
-        help="Reset analytics history")
-    parser.add_argument(
-        "--config", "--models", action="store_true", dest="config",
-        help="Open the configuration menu (models & settings)")
-    parser.add_argument(
-        "--open", "--auto-open", dest="auto_open",
+        "--open",
+        "--auto-open",
+        dest="auto_open",
         choices=["incremental", "after_all"],
         default=None,
-        help="Auto-open generated files (incremental or after_all)")
+        help="Auto-open generated files (incremental or after_all)",
+    )
     parser.add_argument(
-        "--auto-install", action="store_true", default=None,
-        help="Auto-install detected dependencies in a venv")
+        "--auto-install",
+        action="store_true",
+        default=None,
+        help="Auto-install detected dependencies in a venv",
+    )
     args = parser.parse_args()
 
     # ── Stats-only mode ────────────────────────────────────────────────────
@@ -91,8 +137,7 @@ def main() -> None:
         print()
         print(_banner("WAVEBENCH"))
         history = load_history()
-        display_analytics(history, compact=False,
-                          sort_by=cfg.get("analytics_sort", "runs"))
+        display_analytics(history, compact=False, sort_by=cfg.get("analytics_sort", "runs"))
         print()
         return
 
@@ -110,7 +155,7 @@ def main() -> None:
     api_key = load_api_key()
     if not api_key:
         print(f"\n  {_fail} {S.BOLD}OPENROUTER_API_KEY{S.RST} not set.")
-        print(f"     Set via environment variable or .env file.\n")
+        print("     Set via environment variable or .env file.\n")
         sys.exit(1)
 
     # ── Pre-fetch models in background ────────────────────────────────────
@@ -133,7 +178,7 @@ def main() -> None:
             return [], {}
 
     if sys.stdout.isatty():
-        sys.stdout.write('\033[2J\033[H')
+        sys.stdout.write("\033[2J\033[H")
         sys.stdout.flush()
 
     if args.config:
@@ -141,9 +186,11 @@ def main() -> None:
         print(_banner("WAVEBENCH"))
         print()
         new_models, new_config = run_config_menu(
-            api_key, current_mapping=selected_models,
+            api_key,
+            current_mapping=selected_models,
             current_config=config,
-            prefetched=_resolve_models_future())
+            prefetched=_resolve_models_future(),
+        )
         if new_models is None:
             print(f"  {S.DIM}Cancelled.{S.RST}\n")
             return
@@ -158,21 +205,21 @@ def main() -> None:
         text_from_cli = args.text
 
         def _print_mode_menu() -> None:
-            active = (selected_models
-                      if selected_models is not None
-                      else MODEL_MAPPING)
+            active = selected_models if selected_models is not None else MODEL_MAPPING
             w = _tw() - 4
-            row = (f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
-                   f"{_styles.ACCENT}[2]{S.RST} Text"
-                   f"  {_dot}  "
-                   f"{S.DIM}{len(active)} models{S.RST}  "
-                   f"{_styles.ACCENT}[c]{S.RST} config")
+            row = (
+                f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
+                f"{_styles.ACCENT}[2]{S.RST} Text"
+                f"  {_dot}  "
+                f"{S.DIM}{len(active)} models{S.RST}  "
+                f"{_styles.ACCENT}[c]{S.RST} config"
+            )
             print(_box_top("Select Mode", w))
             print(_box_row(row, w))
             print(_box_bot(w))
 
         def _refresh_header() -> None:
-            sys.stdout.write('\033[2J\033[H')
+            sys.stdout.write("\033[2J\033[H")
             sys.stdout.flush()
             print()
             print(_banner("WAVEBENCH"))
@@ -189,11 +236,11 @@ def main() -> None:
             _ww = term.columns - 2
             if _wh >= 3 and _ww >= 10:
                 _wf = render_idle_wave(_wave_tick, _ww, _wh)
-                _buf = ['\x1b7']
+                _buf = ["\x1b7"]
                 for _i, _rs in enumerate(_wf):
-                    _buf.append(f'\x1b[{_wt + _i};2H{_rs}')
-                _buf.append('\x1b8')
-                sys.stdout.write(''.join(_buf))
+                    _buf.append(f"\x1b[{_wt + _i};2H{_rs}")
+                _buf.append("\x1b8")
+                sys.stdout.write("".join(_buf))
                 sys.stdout.flush()
             _wave_tick += 1
 
@@ -207,7 +254,7 @@ def main() -> None:
                 _print_mode_menu()
                 mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                 sys.stdout.write(mode_prompt)
-                sys.stdout.write('\x1b7')
+                sys.stdout.write("\x1b7")
                 sys.stdout.flush()
 
                 mode_done = False
@@ -218,22 +265,23 @@ def main() -> None:
                         _wave_idle()
                         continue
 
-                    sys.stdout.write(
-                        f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J\x1b8')
+                    sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J\x1b8")
                     sys.stdout.flush()
 
-                    if key in ('tab', 'escape'):
-                        sys.stdout.write('\n')
+                    if key in ("tab", "escape"):
+                        sys.stdout.write("\n")
                         return
-                    if key == 'ctrl-c':
+                    if key == "ctrl-c":
                         print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
                         return
-                    if key == 'c':
-                        sys.stdout.write('c\n')
+                    if key == "c":
+                        sys.stdout.write("c\n")
                         new_m, new_c = run_config_menu(
-                            api_key, current_mapping=selected_models,
+                            api_key,
+                            current_mapping=selected_models,
                             current_config=config,
-                            prefetched=_resolve_models_future())
+                            prefetched=_resolve_models_future(),
+                        )
                         if new_m is not None:
                             selected_models = new_m
                             config = new_c
@@ -244,21 +292,20 @@ def main() -> None:
                         _print_mode_menu()
                         mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                         sys.stdout.write(mode_prompt)
-                        sys.stdout.write('\x1b7')
+                        sys.stdout.write("\x1b7")
                         sys.stdout.flush()
                         continue
-                    if key == '2':
-                        sys.stdout.write('2\n')
+                    if key == "2":
+                        sys.stdout.write("2\n")
                         text_mode = True
                         mode_done = True
-                    elif key == '1':
-                        sys.stdout.write('1\n')
+                    elif key == "1":
+                        sys.stdout.write("1\n")
                         mode_done = True
-                sys.stdout.write('\033[4A\r\033[J')
+                sys.stdout.write("\033[4A\r\033[J")
                 sys.stdout.flush()
 
-            active = (selected_models
-                      if selected_models is not None else MODEL_MAPPING)
+            active = selected_models if selected_models is not None else MODEL_MAPPING
             names = list(active.keys())
             summary = ", ".join(names[:6])
             if len(names) > 6:
@@ -279,9 +326,8 @@ def main() -> None:
                             history_entries.append(entry)
 
                 rl_prompt = f"  {_styles.ACCENT_HI}›{S.RST} "
-                user_prompt = _read_line(rl_prompt, history=history_entries,
-                                         on_idle=_wave_idle)
-                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                user_prompt = _read_line(rl_prompt, history=history_entries, on_idle=_wave_idle)
+                sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J")
                 sys.stdout.flush()
 
                 if not user_prompt.strip():
@@ -289,14 +335,14 @@ def main() -> None:
                     continue
                 _save_query_history(user_prompt)
             except _TabEscape:
-                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J")
                 sys.stdout.flush()
                 if text_from_cli:
                     return
                 _refresh_header()
                 continue
             except (KeyboardInterrupt, EOFError):
-                sys.stdout.write(f'\x1b[{_PROMPT_ROW + 1};1H\x1b[J')
+                sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J")
                 sys.stdout.flush()
                 print(f"  {S.DIM}Interrupted.{S.RST}\n")
                 return
@@ -308,10 +354,18 @@ def main() -> None:
 
     _, run_pricing = _resolve_models_future()
     try:
-        asyncio.run(main_async(args, api_key, model_mapping=selected_models,
-                               config=config, pricing_lookup=run_pricing))
+        asyncio.run(
+            main_async(
+                args,
+                api_key,
+                model_mapping=selected_models,
+                config=config,
+                pricing_lookup=run_pricing,
+            )
+        )
     except KeyboardInterrupt:
         print(f"\n\n  {S.DIM}Interrupted.{S.RST}\n")
+
 
 if __name__ == "__main__":
     main()

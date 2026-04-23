@@ -7,6 +7,7 @@ usage — so we can verify both that the effort parameter is being
 transmitted *and* that the upstream model is visibly adjusting its
 behavior based on it.
 """
+
 import asyncio
 import json
 import os
@@ -18,9 +19,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import aiohttp
+
 from wavebench.api import (
-    load_api_key, call_model_streaming,
-    _reasoning_attempts, _supported_efforts, _map_effort,
+    _map_effort,
+    _reasoning_attempts,
+    _supported_efforts,
+    call_model_streaming,
+    load_api_key,
 )
 
 MODEL_ID = "anthropic/claude-opus-4.7"
@@ -67,7 +72,10 @@ async def run_one_call(
     try:
         content, usage = await asyncio.wait_for(
             call_model_streaming(
-                session, api_key, MODEL_ID, PROMPT,
+                session,
+                api_key,
+                MODEL_ID,
+                PROMPT,
                 reasoning_effort=effort,
                 on_progress=on_progress,
                 max_tokens=MAX_TOKENS,
@@ -81,8 +89,7 @@ async def run_one_call(
     except Exception as exc:
         elapsed = time.monotonic() - t0
         print(f"  FAILED after {elapsed:.1f}s: {exc!r}")
-        return {"effort": effort, "status": "failed", "elapsed": elapsed,
-                "error": repr(exc)}
+        return {"effort": effort, "status": "failed", "elapsed": elapsed, "error": repr(exc)}
 
     elapsed = time.monotonic() - t0
     print(f"  elapsed:              {elapsed:.1f}s")
@@ -118,10 +125,10 @@ async def main() -> None:
     supported = _supported_efforts(MODEL_ID)
     print(f"  _supported_efforts({MODEL_ID!r})")
     print(f"    = {supported}")
-    print(f"  effort-clamp map (what the user's choice becomes on the wire):")
+    print("  effort-clamp map (what the user's choice becomes on the wire):")
     for e in ["low", "medium", "high", "xhigh", "max"]:
         mapped = _map_effort(e, supported)
-        tag = "" if mapped == e else f"  (clamped ← would NOT be 1:1)"
+        tag = "" if mapped == e else "  (clamped ← would NOT be 1:1)"
         print(f"    {e:>6}  →  {mapped:<6}{tag}")
 
     results = []
@@ -134,14 +141,15 @@ async def main() -> None:
     print("\n" + "=" * 68)
     print("SUMMARY")
     print("=" * 68)
-    header = (f"{'effort':<8} {'status':<8} {'elapsed':>10} {'chars':>10} "
-              f"{'prompt':>8} {'compl':>8} {'reason':>8} {'total':>8}")
+    header = (
+        f"{'effort':<8} {'status':<8} {'elapsed':>10} {'chars':>10} "
+        f"{'prompt':>8} {'compl':>8} {'reason':>8} {'total':>8}"
+    )
     print(header)
     print("-" * len(header))
     for r in results:
         if r["status"] != "ok":
-            print(f"{r['effort']:<8} {r['status']:<8} "
-                  f"{r.get('elapsed', 0):>9.1f}s")
+            print(f"{r['effort']:<8} {r['status']:<8} {r.get('elapsed', 0):>9.1f}s")
             continue
         u = r.get("usage") or {}
         pt = u.get("prompt_tokens", "?")
@@ -153,12 +161,16 @@ async def main() -> None:
         rt = details.get("reasoning_tokens")
         if rt is None:
             rt = u.get("reasoning_tokens", "-")
-        print(f"{r['effort']:<8} {r['status']:<8} "
-              f"{r['elapsed']:>9.1f}s {r['chars']:>10,} "
-              f"{str(pt):>8} {str(ct):>8} {str(rt):>8} {str(tt):>8}")
+        print(
+            f"{r['effort']:<8} {r['status']:<8} "
+            f"{r['elapsed']:>9.1f}s {r['chars']:>10,} "
+            f"{pt!s:>8} {ct!s:>8} {rt!s:>8} {tt!s:>8}"
+        )
 
-    print("\nDifferentiation check — we expect reasoning / completion tokens "
-          "and elapsed time to grow monotonically from low → high → xhigh.")
+    print(
+        "\nDifferentiation check — we expect reasoning / completion tokens "
+        "and elapsed time to grow monotonically from low → high → xhigh."
+    )
 
 
 if __name__ == "__main__":
