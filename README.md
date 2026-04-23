@@ -142,3 +142,18 @@ These are created in the project root and are gitignored:
 | `.benchmark_config.json` | Settings (theme, reasoning effort, etc.) |
 | `.benchmark_history.json` | Lifetime run history for analytics |
 | `.benchmark_query_history` | Readline prompt history |
+
+## Development
+
+Local setup, test commands, style conventions, and contribution guidelines
+live in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). A more detailed
+architectural map — "where does X live" — is in
+[`docs/architecture.md`](docs/architecture.md).
+
+Quick start for contributors:
+
+```bash
+pip install -e '.[dev]'
+pre-commit install
+pytest
+```

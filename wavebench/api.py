@@ -1,23 +1,41 @@
-import os
-import json
-import time
-import urllib.request
-import urllib.error
-import asyncio
-import re
-import aiohttp
-from typing import Optional, Tuple, Any, Dict, List, Callable
+"""OpenRouter API client.
 
-from wavebench.tui.styles import _tri, S
+Handles API-key loading, streaming and non-streaming chat completions,
+reasoning-effort negotiation (including fallback formats for models that
+reject ``reasoning.effort``), and catalog fetching. All OpenRouter-specific
+knowledge lives here so the rest of the package never talks to HTTP directly.
+
+Key entry points:
+  - ``load_api_key()``  — env var or ``.env`` file lookup
+  - ``call_model_async()``  — non-streaming completion
+  - ``call_model_streaming()``  — SSE completion with progress callback
+  - ``fetch_top_models()``  — sync catalog fetch for the config menu
+"""
+
+import asyncio
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from typing import Any
+
+import aiohttp
+
 from wavebench.models import _model_score, is_stealth
+from wavebench.tui.styles import S, _tri
 
 API_URL = "https://openrouter.ai/api/v1"
-_MODEL_CONTEXT_CACHE: Dict[str, int] = {}
+_MODEL_CONTEXT_CACHE: dict[str, int] = {}
 _MODEL_CONTEXTS_ATTEMPTED = False
 _MODEL_CONTEXT_LOCK = asyncio.Lock()
 
+
 async def _load_model_context_lengths(
-    session: aiohttp.ClientSession, api_key: str,
+    session: aiohttp.ClientSession,
+    api_key: str,
 ) -> None:
     """Populate a cache of model_id -> context_length from OpenRouter."""
     global _MODEL_CONTEXTS_ATTEMPTED
@@ -54,9 +72,13 @@ async def _load_model_context_lengths(
             # Fall back to legacy defaults if model metadata cannot be fetched.
             return
 
+
 async def _resolve_max_tokens(
-    session: aiohttp.ClientSession, api_key: str, model_id: str,
-    prompt: str, fallback: int,
+    session: aiohttp.ClientSession,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    fallback: int,
 ) -> int:
     """Use model context_length and budget around prompt size.
 
@@ -76,7 +98,8 @@ async def _resolve_max_tokens(
     available = max(1, context_limit - prompt_tokens_est - safety_buffer)
     return min(available, MAX_OUTPUT_TOKENS_DEFAULT)
 
-def _context_limit_from_error_text(err_text: str) -> Optional[int]:
+
+def _context_limit_from_error_text(err_text: str) -> int | None:
     """Extract context limit from OpenRouter 400 text when present."""
     m = re.search(r"maximum context length is (\d+) tokens", err_text)
     if not m:
@@ -87,7 +110,8 @@ def _context_limit_from_error_text(err_text: str) -> Optional[int]:
         return None
     return limit if limit > 0 else None
 
-def _credit_token_limit_from_error(err_text: str) -> Optional[int]:
+
+def _credit_token_limit_from_error(err_text: str) -> int | None:
     """Extract the affordable token count from an OpenRouter 402 error.
 
     Typical message: "You requested up to 128000 tokens, but can only
@@ -107,7 +131,8 @@ def _credit_token_limit_from_error(err_text: str) -> Optional[int]:
 MAX_OUTPUT_TOKENS_DEFAULT = 32_000
 REASONING_STALL_TIMEOUT = 300  # 5 minutes with zero tokens → abort
 
-def load_api_key() -> Optional[str]:
+
+def load_api_key() -> str | None:
     """Load API key from environment or .env file."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if key:
@@ -115,7 +140,7 @@ def load_api_key() -> Optional[str]:
 
     if os.path.exists(".env"):
         try:
-            with open(".env", "r", encoding="utf-8") as fh:
+            with open(".env", encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
@@ -130,25 +155,25 @@ def load_api_key() -> Optional[str]:
 
 # Ordered low → max.  Only used for distance math when clamping an
 # unsupported effort choice down to the closest level the model accepts.
-_EFFORT_ORDER: List[str] = ["low", "medium", "high", "xhigh", "max"]
+_EFFORT_ORDER: list[str] = ["low", "medium", "high", "xhigh", "max"]
 
 # Per-model effort capabilities (as of 2026-04-22).  Patterns match as
 # substrings against the lower-cased OpenRouter model id; most-specific
 # entries first so "opus-4.7" wins over a hypothetical generic "opus".
-_CLAUDE_EFFORT_CAPABILITIES: List[tuple] = [
-    ("opus-4-7",   ["low", "medium", "high", "xhigh", "max"]),
-    ("opus-4.7",   ["low", "medium", "high", "xhigh", "max"]),
-    ("mythos",     ["low", "medium", "high", "xhigh", "max"]),
-    ("opus-4-6",   ["low", "medium", "high", "max"]),
-    ("opus-4.6",   ["low", "medium", "high", "max"]),
+_CLAUDE_EFFORT_CAPABILITIES: list[tuple] = [
+    ("opus-4-7", ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4.7", ["low", "medium", "high", "xhigh", "max"]),
+    ("mythos", ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4-6", ["low", "medium", "high", "max"]),
+    ("opus-4.6", ["low", "medium", "high", "max"]),
     ("sonnet-4-6", ["low", "medium", "high", "max"]),
     ("sonnet-4.6", ["low", "medium", "high", "max"]),
-    ("opus-4-5",   ["low", "medium", "high"]),
-    ("opus-4.5",   ["low", "medium", "high"]),
+    ("opus-4-5", ["low", "medium", "high"]),
+    ("opus-4.5", ["low", "medium", "high"]),
 ]
 
 
-def _supported_efforts(model_id: str) -> Optional[List[str]]:
+def _supported_efforts(model_id: str) -> list[str] | None:
     """Return the effort levels supported by *model_id*, or None if the
     model accepts no ``effort`` parameter at all (older Claude variants).
     """
@@ -162,7 +187,7 @@ def _supported_efforts(model_id: str) -> Optional[List[str]]:
     return ["low", "medium", "high"]
 
 
-def _map_effort(effort: str, supported: List[str]) -> str:
+def _map_effort(effort: str, supported: list[str]) -> str:
     """Clamp *effort* to the closest value in *supported*.  Ties (equal
     distance — e.g. xhigh on a 4.6 model between high and max) resolve
     upward, per the "highest effort closest to the set choice" rule.
@@ -172,7 +197,7 @@ def _map_effort(effort: str, supported: List[str]) -> str:
     if effort not in _EFFORT_ORDER:
         return effort
     target = _EFFORT_ORDER.index(effort)
-    best: Optional[tuple] = None
+    best: tuple | None = None
     for level in supported:
         if level not in _EFFORT_ORDER:
             continue
@@ -184,8 +209,10 @@ def _map_effort(effort: str, supported: List[str]) -> str:
 
 
 def _reasoning_attempts(
-    model_id: str, effort: str, max_tokens: int,
-) -> List[Dict[str, Any]]:
+    model_id: str,
+    effort: str,
+    max_tokens: int,
+) -> list[dict[str, Any]]:
     """Build an ordered list of reasoning payload overrides to try.
 
     Each entry is a dict to merge into the base request data.  When the
@@ -211,9 +238,9 @@ def _reasoning_attempts(
 
     is_mercury = "inception/" in lower or "mercury" in lower
 
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
 
-    def _add(extra: Dict[str, Any]) -> None:
+    def _add(extra: dict[str, Any]) -> None:
         if extra not in seen:
             seen.append(extra)
 
@@ -224,10 +251,12 @@ def _reasoning_attempts(
         # inline in the content.  Don't try max_tokens or enabled — they're
         # no-ops for Mercury, and combining effort + max_tokens causes a 400.
         mapped = _map_effort(effort, ["low", "medium", "high"])
-        _add({
-            "reasoning": {"effort": mapped},
-            "reasoning_summary": True,
-        })
+        _add(
+            {
+                "reasoning": {"effort": mapped},
+                "reasoning_summary": True,
+            }
+        )
         return seen
 
     supported = _supported_efforts(model_id)
@@ -246,10 +275,16 @@ def _reasoning_attempts(
     return seen
 
 
-async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_id: str, prompt: str,
-                           reasoning_effort: Optional[str] = "high", return_usage: bool = False,
-                           temperature: Optional[float] = None,
-                           max_tokens: Optional[int] = None) -> Any:
+async def call_model_async(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    reasoning_effort: str | None = "high",
+    return_usage: bool = False,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> Any:
     """Call the OpenRouter API for a specific model."""
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -261,7 +296,8 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
 
     fallback_max_tokens = 128000 if is_anthropic else 200000
     resolved_max_tokens = await _resolve_max_tokens(
-        session, api_key, model_id, prompt, fallback=fallback_max_tokens)
+        session, api_key, model_id, prompt, fallback=fallback_max_tokens
+    )
     model_max_tokens = (
         max(1, min(max_tokens, resolved_max_tokens))
         if max_tokens is not None
@@ -283,15 +319,19 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
         if affordable >= data.get("max_tokens", 0):
             return None
         retry_data = {**data, "max_tokens": max(1, affordable)}
-        print(f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
-              f"max_tokens={retry_data['max_tokens']}{S.RST}")
+        print(
+            f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
+            f"max_tokens={retry_data['max_tokens']}{S.RST}"
+        )
         async with session.post(
-            f"{API_URL}/chat/completions", headers=headers, json=retry_data,
+            f"{API_URL}/chat/completions",
+            headers=headers,
+            json=retry_data,
         ) as r:
             if r.status == 200:
                 body = await r.json()
-                content = body['choices'][0]['message']['content']
-                usage = body.get('usage', {})
+                content = body["choices"][0]["message"]["content"]
+                usage = body.get("usage", {})
                 return (content, usage) if return_usage else content
             t = await r.text()
             raise RuntimeError(f"HTTP {r.status}: {t[:120].strip()}")
@@ -304,25 +344,29 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
             try:
                 async with session.post(
                     f"{API_URL}/chat/completions",
-                    headers=headers, json=data,
+                    headers=headers,
+                    json=data,
                 ) as resp:
                     if resp.status == 200:
                         try:
                             body = await resp.json()
-                            content = body['choices'][0]['message']['content']
-                            usage = body.get('usage', {})
+                            content = body["choices"][0]["message"]["content"]
+                            usage = body.get("usage", {})
                             return (content, usage) if return_usage else content
                         except (KeyError, IndexError, json.JSONDecodeError) as e:
-                            print(f"    {_tri} {S.DIM}parse error "
-                                  f"({model_id}): {e}{S.RST}")
+                            print(f"    {_tri} {S.DIM}parse error ({model_id}): {e}{S.RST}")
                     elif resp.status == 400:
                         remaining = len(attempts) - attempt_idx - 1
                         if remaining > 0:
-                            print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                                  f" — trying next format ({remaining} left)…{S.RST}")
+                            print(
+                                f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                                f" — trying next format ({remaining} left)…{S.RST}"
+                            )
                             continue
-                        print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                              f" — retrying without…{S.RST}")
+                        print(
+                            f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                            f" — retrying without…{S.RST}"
+                        )
                     elif resp.status == 402:
                         text = await resp.text()
                         affordable = _credit_token_limit_from_error(text)
@@ -333,8 +377,10 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
                         raise RuntimeError(f"HTTP 402: {text[:120].strip()}")
                     else:
                         text = await resp.text()
-                        print(f"    {_tri} {S.DIM}{model_id}: {resp.status}"
-                              f" — {text[:120].strip()}{S.RST}")
+                        print(
+                            f"    {_tri} {S.DIM}{model_id}: {resp.status}"
+                            f" — {text[:120].strip()}{S.RST}"
+                        )
                         if resp.status not in (429, 500, 502, 503, 504):
                             raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
             except asyncio.CancelledError:
@@ -345,20 +391,20 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
                 print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
             except Exception as exc:
                 exc_str = str(exc) or exc.__class__.__name__
-                print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
-                      f"{exc_str}{S.RST}")
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: {exc_str}{S.RST}")
             break  # non-400 failures skip remaining reasoning formats
 
     # Final attempt — without reasoning
     async with session.post(
         f"{API_URL}/chat/completions",
-        headers=headers, json=base_data,
+        headers=headers,
+        json=base_data,
     ) as resp:
         if resp.status == 200:
             try:
                 body = await resp.json()
-                content = body['choices'][0]['message']['content']
-                usage = body.get('usage', {})
+                content = body["choices"][0]["message"]["content"]
+                usage = body.get("usage", {})
                 return (content, usage) if return_usage else content
             except (KeyError, IndexError, json.JSONDecodeError) as e:
                 raise RuntimeError(f"parse error: {e}")
@@ -382,25 +428,28 @@ async def call_model_async(session: aiohttp.ClientSession, api_key: str, model_i
                     retry_data = {**base_data, "max_tokens": retry_max}
                     async with session.post(
                         f"{API_URL}/chat/completions",
-                        headers=headers, json=retry_data,
+                        headers=headers,
+                        json=retry_data,
                     ) as retry_resp:
                         if retry_resp.status == 200:
                             body = await retry_resp.json()
-                            content = body['choices'][0]['message']['content']
-                            usage = body.get('usage', {})
+                            content = body["choices"][0]["message"]["content"]
+                            usage = body.get("usage", {})
                             return (content, usage) if return_usage else content
                         retry_text = await retry_resp.text()
-                        raise RuntimeError(
-                            f"HTTP {retry_resp.status}: {retry_text[:120].strip()}")
+                        raise RuntimeError(f"HTTP {retry_resp.status}: {retry_text[:120].strip()}")
         raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
 
 
 async def call_model_streaming(
-    session: aiohttp.ClientSession, api_key: str, model_id: str, prompt: str,
-    reasoning_effort: Optional[str] = "high",
-    on_progress: Optional[Callable[[int], None]] = None,
-    max_tokens: Optional[int] = None,
-) -> Tuple[str, dict]:
+    session: aiohttp.ClientSession,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    reasoning_effort: str | None = "high",
+    on_progress: Callable[[int], None] | None = None,
+    max_tokens: int | None = None,
+) -> tuple[str, dict]:
     """Stream a chat completion via SSE, calling *on_progress(total_chars)* for
     each content chunk so the caller can drive a live progress bar.
 
@@ -417,14 +466,15 @@ async def call_model_streaming(
 
     fallback_max_tokens = 128000 if is_anthropic else 200000
     resolved_max_tokens = await _resolve_max_tokens(
-        session, api_key, model_id, prompt, fallback=fallback_max_tokens)
+        session, api_key, model_id, prompt, fallback=fallback_max_tokens
+    )
     model_max_tokens = (
         max(1, min(max_tokens, resolved_max_tokens))
         if max_tokens is not None
         else resolved_max_tokens
     )
 
-    base_data: Dict[str, Any] = {
+    base_data: dict[str, Any] = {
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
@@ -438,7 +488,7 @@ async def call_model_streaming(
     _stall_deadline = time.monotonic() + REASONING_STALL_TIMEOUT
     _got_first_token = False
 
-    async def _do_stream(data: dict) -> Tuple[Optional[str], dict, int, str]:
+    async def _do_stream(data: dict) -> tuple[str | None, dict, int, str]:
         """Execute one streaming request.  Returns (content, usage, status, err)."""
         nonlocal _got_first_token
         parts: list[str] = []
@@ -450,19 +500,15 @@ async def call_model_streaming(
 
         def _raise_stall() -> None:
             elapsed_m = int(REASONING_STALL_TIMEOUT / 60)
-            raise RuntimeError(
-                f"no tokens after {elapsed_m}m (reasoning stall)")
+            raise RuntimeError(f"no tokens after {elapsed_m}m (reasoning stall)")
 
         if not _got_first_token and _stall_remaining() <= 0:
             _raise_stall()
 
-        post_timeout = (
-            _stall_remaining() if not _got_first_token else None)
-        resp_ctx = session.post(
-            f"{API_URL}/chat/completions", headers=headers, json=data)
+        post_timeout = _stall_remaining() if not _got_first_token else None
+        resp_ctx = session.post(f"{API_URL}/chat/completions", headers=headers, json=data)
         try:
-            resp = await asyncio.wait_for(
-                resp_ctx.__aenter__(), timeout=post_timeout)
+            resp = await asyncio.wait_for(resp_ctx.__aenter__(), timeout=post_timeout)
         except asyncio.TimeoutError:
             try:
                 await resp_ctx.__aexit__(None, None, None)
@@ -515,11 +561,13 @@ async def call_model_streaming(
                             delta = ch.get("delta", {})
                             txt = delta.get("content", "")
                             reasoning = delta.get("reasoning", "")
-                            
+
                             # Safely handle None values from OpenRouter
-                            if txt is None: txt = ""
-                            if reasoning is None: reasoning = ""
-                            
+                            if txt is None:
+                                txt = ""
+                            if reasoning is None:
+                                reasoning = ""
+
                             if txt or reasoning:
                                 if txt:
                                     parts.append(txt)
@@ -534,14 +582,16 @@ async def call_model_streaming(
 
         return "".join(parts), usage, 200, ""
 
-    async def _stream_retry_402(data: dict, err_text: str) -> Optional[Tuple[str, dict]]:
+    async def _stream_retry_402(data: dict, err_text: str) -> tuple[str, dict] | None:
         """On 402, parse affordable token limit and retry with reduced max_tokens."""
         affordable = _credit_token_limit_from_error(err_text)
         if not affordable or affordable >= data.get("max_tokens", 0):
             return None
         retry_data = {**data, "max_tokens": max(1, affordable)}
-        print(f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
-              f"max_tokens={retry_data['max_tokens']}{S.RST}")
+        print(
+            f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
+            f"max_tokens={retry_data['max_tokens']}{S.RST}"
+        )
         content, usage, status, err = await _do_stream(retry_data)
         if status == 200 and content:
             return content, usage
@@ -561,19 +611,21 @@ async def call_model_streaming(
                 elif status == 400:
                     remaining = len(attempts) - attempt_idx - 1
                     if remaining > 0:
-                        print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                              f" — trying next format ({remaining} left)…{S.RST}")
+                        print(
+                            f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
+                            f" — trying next format ({remaining} left)…{S.RST}"
+                        )
                         continue
-                    print(f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning"
-                          f" — retrying without…{S.RST}")
+                    print(
+                        f"    {_tri} {S.DIM}{model_id} 400 w/ reasoning — retrying without…{S.RST}"
+                    )
                 elif status == 402:
                     result = await _stream_retry_402(data, err)
                     if result is not None:
                         return result
                     raise RuntimeError(f"HTTP 402: {err[:120].strip()}")
                 else:
-                    print(f"    {_tri} {S.DIM}{model_id}: {status}"
-                          f" — {err[:120].strip()}{S.RST}")
+                    print(f"    {_tri} {S.DIM}{model_id}: {status} — {err[:120].strip()}{S.RST}")
                     if status not in (429, 500, 502, 503, 504):
                         raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
             except (asyncio.CancelledError, RuntimeError):
@@ -584,8 +636,7 @@ async def call_model_streaming(
                 print(f"    {_tri} {S.DIM}{model_id} reasoning err: API err ({exc}){S.RST}")
             except Exception as exc:
                 exc_str = str(exc) or exc.__class__.__name__
-                print(f"    {_tri} {S.DIM}{model_id} reasoning err: "
-                      f"{exc_str}{S.RST}")
+                print(f"    {_tri} {S.DIM}{model_id} reasoning err: {exc_str}{S.RST}")
             break  # non-400 failures skip remaining reasoning formats
 
     # Final attempt — without reasoning
@@ -614,7 +665,7 @@ async def call_model_streaming(
     raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
 
 
-def fetch_top_models(api_key: str, count: int = 12) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch models from OpenRouter, returning (top_for_menu, pricing_lookup).
 
     *top_for_menu* is a list of model dicts sorted by popularity score.
