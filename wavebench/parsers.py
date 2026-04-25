@@ -8,8 +8,9 @@
     Stage 4. Treat the whole response as code, with language guessed
              from syntactic markers (shebang, DOCTYPE, ``def``, etc.).
 
-``get_directory_name()`` makes a fast LLM call to derive a concise
-``snake_case`` directory name from the user's prompt.
+``get_directory_name()`` derives a concise ``snake_case`` directory name from
+    the user's prompt, either through the configured LLM fallback chain or a
+    local slug parser.
 """
 
 import asyncio
@@ -22,36 +23,94 @@ import aiohttp
 from wavebench.api import call_model_async
 from wavebench.tui.styles import S, _tri
 
+_DIRECTORY_NAME_ATTEMPTS: tuple[tuple[str, float], ...] = (
+    ("deepseek/deepseek-v4-flash", 5.0),
+    ("qwen/qwen3.5-9b", 5.0),
+    ("google/gemini-3.1-flash-lite-preview", 15.0),
+)
+_DIRECTORY_NAME_REASONING_EFFORT = "none"
+_DIRECTORY_NAMING_LLM = "llm"
+_DIRECTORY_NAMING_SLUG = "slug"
+_DIRECTORY_NAMING_DEFAULT = _DIRECTORY_NAMING_LLM
+_DIRECTORY_NAMING_CHOICES = (_DIRECTORY_NAMING_LLM, _DIRECTORY_NAMING_SLUG)
+_DIRECTORY_SLUG_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "app",
+    "application",
+    "build",
+    "create",
+    "for",
+    "generate",
+    "make",
+    "me",
+    "of",
+    "small",
+    "the",
+    "to",
+    "using",
+    "with",
+}
 
-async def get_directory_name(session: aiohttp.ClientSession, api_key: str, prompt: str) -> str:
-    """Use a fast model to derive a short directory name from the prompt."""
-    model = "google/gemini-2.5-flash-lite"
+
+def _clean_directory_name(name: str) -> str:
+    """Return the filename-safe subset of an LLM-proposed directory name."""
+    clean = name.strip().replace("`", "").strip()
+    return "".join(c for c in clean if c.isalnum() or c in "._- ").strip()
+
+
+def _slug_directory_name(prompt: str) -> str:
+    """Return a deterministic snake_case directory slug from *prompt*."""
+    words = re.findall(r"[a-z0-9]+", prompt.lower())
+    meaningful = [word for word in words if word not in _DIRECTORY_SLUG_STOPWORDS]
+    chosen = meaningful[:3] or words[:3]
+    return "_".join(chosen) or "benchmark_output"
+
+
+async def get_directory_name(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    prompt: str,
+    naming_mode: str = _DIRECTORY_NAMING_DEFAULT,
+) -> str:
+    """Derive a short directory name from the prompt.
+
+    ``naming_mode="slug"`` uses a deterministic local parser. Otherwise,
+    DeepSeek V4 Flash is tried first with reasoning effort disabled and a
+    tight five-second budget. If it does not return usable content in time,
+    Qwen 3.5 9B gets the same five-second chance, then Gemini Flash Lite is
+    used as the final fallback before returning the local default.
+    """
+    if naming_mode == _DIRECTORY_NAMING_SLUG:
+        return _slug_directory_name(prompt)
+
     naming_prompt = (
         "Generate a short, concise, snake_case directory name (max 3 words) "
         "that summarizes the following prompt. Return ONLY the directory "
         "name, no other text, no markdown formatting.\n\nPrompt: " + prompt
     )
 
-    try:
-        name = await asyncio.wait_for(
-            call_model_async(
-                session,
-                api_key,
-                model,
-                naming_prompt,
-                reasoning_effort=None,
-                max_tokens=64,
-            ),
-            timeout=15.0,
-        )
-        if name:
-            clean = name.strip().replace("`", "").strip()
-            clean = "".join(c for c in clean if c.isalnum() or c in "._- ")
-            if clean:
-                return clean
-    except Exception as exc:
-        exc_str = str(exc) or exc.__class__.__name__
-        print(f"    {_tri} {S.DIM}dir name error: {exc_str}{S.RST}")
+    for model, timeout_s in _DIRECTORY_NAME_ATTEMPTS:
+        try:
+            name = await asyncio.wait_for(
+                call_model_async(
+                    session,
+                    api_key,
+                    model,
+                    naming_prompt,
+                    reasoning_effort=_DIRECTORY_NAME_REASONING_EFFORT,
+                    max_tokens=512,
+                ),
+                timeout=timeout_s,
+            )
+            if name:
+                clean = _clean_directory_name(name)
+                if clean:
+                    return clean
+        except Exception as exc:
+            exc_str = str(exc) or exc.__class__.__name__
+            print(f"    {_tri} {S.DIM}dir name error ({model}): {exc_str}{S.RST}")
 
     return "benchmark_output"
 
