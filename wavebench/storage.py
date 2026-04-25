@@ -143,6 +143,7 @@ def record_run(
                 "file": info.get("file"),
                 "usage": info.get("usage", {}),
                 **({"cost": round(costs[name], 6)} if costs.get(name) is not None else {}),
+                **({"retries": info["retries"]} if info.get("retries") else {}),
             }
             for name, info in model_results.items()
         },

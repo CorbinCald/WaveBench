@@ -32,6 +32,7 @@ from wavebench.tui.styles import (
     _fail,
     _ok,
     _skip,
+    _tri,
     _wait,
     _work,
     format_duration,
@@ -103,6 +104,7 @@ async def run_model(
     framed_prompt = mode.frame_prompt(user_prompt)
     content: str | None = None
     usage: dict = {}
+    retry_events: list[dict[str, Any]] = []
 
     try:
         async with semaphore:
@@ -111,6 +113,19 @@ async def run_model(
                 if registered:
                     tracker.update(model_name, chars)
 
+            def _on_retry(status: int, attempt: int, max_attempts: int, wait_s: float) -> None:
+                retry_events.append(
+                    {"status": status, "attempt": attempt, "wait_s": round(wait_s, 2)}
+                )
+                if registered:
+                    tracker.note_retry(model_name, status, attempt, max_attempts, wait_s)
+                else:
+                    print(
+                        f"    {_tri} {model_name:<{pad}}  "
+                        f"{S.YEL}HTTP {status}{S.RST} "
+                        f"{S.DIM}retry {attempt}/{max_attempts} in {wait_s:.1f}s{S.RST}"
+                    )
+
             content, usage = await call_model_streaming(
                 session,
                 api_key,
@@ -118,6 +133,7 @@ async def run_model(
                 framed_prompt,
                 reasoning_effort=reasoning_effort,
                 on_progress=_on_progress,
+                on_retry=_on_retry,
             )
 
     except asyncio.CancelledError:
@@ -127,7 +143,7 @@ async def run_model(
                 f"  {_skip} {model_name:<{pad}}  "
                 f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "cancelled", "time_s": elapsed, "file": None, "usage": {}}
+        results[model_name] = {"status": "cancelled", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
         return
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - start
@@ -137,7 +153,7 @@ async def run_model(
                 f"{S.RED}timeout{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}}
+        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
         return
     except aiohttp.ClientError as exc:
         elapsed = time.monotonic() - start
@@ -147,7 +163,7 @@ async def run_model(
                 f"{S.RED}API error: {exc}{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}}
+        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
         return
     except Exception as exc:
         elapsed = time.monotonic() - start
@@ -158,7 +174,7 @@ async def run_model(
                 f"{S.RED}{exc_str}{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}}
+        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
         return
     finally:
         if registered:
@@ -173,7 +189,7 @@ async def run_model(
                 f"{S.RED}no response{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}}
+        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
         return
 
     if registered:
@@ -198,6 +214,7 @@ async def run_model(
                 "time_s": elapsed,
                 "file": None,
                 "usage": usage,
+                "retries": retry_events,
             }
             return
 
@@ -245,6 +262,7 @@ async def run_model(
             "time_s": elapsed,
             "file": filename,
             "usage": usage,
+            "retries": retry_events,
         }
         if mode.name == "code":
             result["venv_python"] = venv_python
