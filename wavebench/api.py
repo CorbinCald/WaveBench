@@ -131,6 +131,30 @@ def _credit_token_limit_from_error(err_text: str) -> int | None:
 MAX_OUTPUT_TOKENS_DEFAULT = 32_000
 REASONING_STALL_TIMEOUT = 300  # 5 minutes with zero tokens → abort
 
+# Statuses that indicate a transient upstream condition rather than a real
+# request error. Each is retried with bounded exponential backoff.
+_RETRYABLE_STATUSES: frozenset[int] = frozenset({429, 502, 503, 504})
+_MAX_RETRIES: int = 3
+_MAX_RETRY_WAIT_S: float = 30.0
+# on_retry callback signature: (status, attempt, max_attempts, wait_seconds)
+RetryCallback = Callable[[int, int, int, float], None]
+
+
+def _retry_wait_seconds(retry_after_header: str | None, attempt: int) -> float:
+    """Seconds to wait before retry *attempt* (1-based).
+
+    Honors a numeric ``Retry-After`` (seconds) when present; otherwise
+    falls back to exponential backoff (1s, 2s, 4s, …). Capped at
+    ``_MAX_RETRY_WAIT_S`` so a stuck upstream can't park a benchmark
+    indefinitely.
+    """
+    if retry_after_header:
+        try:
+            return min(_MAX_RETRY_WAIT_S, max(0.5, float(retry_after_header)))
+        except ValueError:
+            pass
+    return min(_MAX_RETRY_WAIT_S, 2.0 ** (attempt - 1))
+
 
 def load_api_key() -> str | None:
     """Load API key from environment or .env file."""
@@ -184,7 +208,45 @@ def _supported_efforts(model_id: str) -> list[str] | None:
             if pat in lower:
                 return levels
         return None  # legacy Claude — only reasoning.enabled toggles work
+    if "deepseek-v4" in lower:
+        # V4 *does* have a max-reasoning tier natively (DeepSeek exposes two
+        # thinking levels — `high` and `max`, per api-docs.deepseek.com/
+        # guides/thinking_mode). OpenRouter's normalization layer names that
+        # ceiling `xhigh` and rejects the literal string `max` for V4 slugs
+        # (verified 2026-04-24 via 400 validator: expected one of
+        # xhigh|high|medium|low|minimal|none). `xhigh` → DeepSeek `max`
+        # upstream, so clamping user-configured `max` to `xhigh` here
+        # actually reaches V4's highest tier — it's a naming bridge, not a
+        # downgrade.
+        return ["low", "medium", "high", "xhigh"]
+    if "gpt-5" in lower:
+        # Same OpenRouter naming bridge as DeepSeek V4. Verified 2026-04-25
+        # against gpt-5, gpt-5-pro, gpt-5-mini, gpt-5-nano, gpt-5-codex,
+        # gpt-5.5, gpt-5.5-pro: every variant's validator accepts
+        # xhigh|high|medium|low|minimal|none and 400s on literal `max`.
+        # `xhigh` is the top reasoning tier across the family.
+        return ["low", "medium", "high", "xhigh"]
     return ["low", "medium", "high"]
+
+
+def _is_effort_naming_bridge(model_id: str, requested: str, mapped: str) -> bool:
+    """True when ``requested → mapped`` is a cross-vendor naming bridge that
+    routes to the same underlying tier, not a capability downgrade.
+
+    Surfacing a "max → xhigh" notice for DeepSeek V4 is misleading because
+    V4 natively names its max-reasoning tier ``max`` while OpenRouter's
+    normalization layer names the identical tier ``xhigh``. Callers building
+    user-facing effort-adjustment notices should skip entries for which this
+    predicate returns True.
+    """
+    lower = model_id.lower()
+    if "deepseek-v4" in lower:
+        if requested == "max" and mapped == "xhigh":
+            return True
+    if "gpt-5" in lower:
+        if requested == "max" and mapped == "xhigh":
+            return True
+    return False
 
 
 def _map_effort(effort: str, supported: list[str]) -> str:
@@ -449,6 +511,7 @@ async def call_model_streaming(
     reasoning_effort: str | None = "high",
     on_progress: Callable[[int], None] | None = None,
     max_tokens: int | None = None,
+    on_retry: RetryCallback | None = None,
 ) -> tuple[str, dict]:
     """Stream a chat completion via SSE, calling *on_progress(total_chars)* for
     each content chunk so the caller can drive a live progress bar.
@@ -489,7 +552,12 @@ async def call_model_streaming(
     _got_first_token = False
 
     async def _do_stream(data: dict) -> tuple[str | None, dict, int, str]:
-        """Execute one streaming request.  Returns (content, usage, status, err)."""
+        """Execute one streaming request.  Returns (content, usage, status, err).
+
+        Transparently retries 429/5xx upstream throttles up to ``_MAX_RETRIES``
+        with exponential backoff (or ``Retry-After`` when honored), notifying
+        the caller via ``on_retry`` so the UI can surface throttle state.
+        """
         nonlocal _got_first_token
         parts: list[str] = []
         usage: dict = {}
@@ -502,85 +570,106 @@ async def call_model_streaming(
             elapsed_m = int(REASONING_STALL_TIMEOUT / 60)
             raise RuntimeError(f"no tokens after {elapsed_m}m (reasoning stall)")
 
-        if not _got_first_token and _stall_remaining() <= 0:
-            _raise_stall()
+        last_status = 0
+        last_err = ""
 
-        post_timeout = _stall_remaining() if not _got_first_token else None
-        resp_ctx = session.post(f"{API_URL}/chat/completions", headers=headers, json=data)
-        try:
-            resp = await asyncio.wait_for(resp_ctx.__aenter__(), timeout=post_timeout)
-        except asyncio.TimeoutError:
+        for attempt in range(1, _MAX_RETRIES + 2):
+            if not _got_first_token and _stall_remaining() <= 0:
+                _raise_stall()
+
+            post_timeout = _stall_remaining() if not _got_first_token else None
+            resp_ctx = session.post(f"{API_URL}/chat/completions", headers=headers, json=data)
             try:
-                await resp_ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
-            _raise_stall()
-
-        try:
-            if resp.status != 200:
-                err = await resp.text()
-                return None, {}, resp.status, err
-
-            buf = ""
-            content_stream = resp.content
-            while True:
-                if not _got_first_token:
-                    remaining = _stall_remaining()
-                    if remaining <= 0:
-                        _raise_stall()
-                else:
-                    remaining = None
-
+                resp = await asyncio.wait_for(resp_ctx.__aenter__(), timeout=post_timeout)
+            except asyncio.TimeoutError:
                 try:
-                    raw = await asyncio.wait_for(
-                        content_stream.readany(),
-                        timeout=remaining,
-                    )
-                except asyncio.TimeoutError:
-                    _raise_stall()
+                    await resp_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                _raise_stall()
 
-                if not raw:
-                    break
+            wait_s = 0.0
+            should_retry = False
+            try:
+                if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
+                    last_status = resp.status
+                    last_err = await resp.text()
+                    wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)
+                    should_retry = True
+                elif resp.status != 200:
+                    err = await resp.text()
+                    return None, {}, resp.status, err
+                else:
+                    buf = ""
+                    content_stream = resp.content
+                    while True:
+                        if not _got_first_token:
+                            remaining = _stall_remaining()
+                            if remaining <= 0:
+                                _raise_stall()
+                        else:
+                            remaining = None
 
-                buf += raw.decode("utf-8", errors="replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    line = line.strip()
-                    if not line or line.startswith(":"):
-                        continue
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:].strip()
-                    if payload == "[DONE]":
-                        continue
-                    try:
-                        obj = json.loads(payload)
-                        if "usage" in obj:
-                            usage = obj["usage"]
-                        for ch in obj.get("choices", []):
-                            delta = ch.get("delta", {})
-                            txt = delta.get("content", "")
-                            reasoning = delta.get("reasoning", "")
+                        try:
+                            raw = await asyncio.wait_for(
+                                content_stream.readany(),
+                                timeout=remaining,
+                            )
+                        except asyncio.TimeoutError:
+                            _raise_stall()
 
-                            # Safely handle None values from OpenRouter
-                            if txt is None:
-                                txt = ""
-                            if reasoning is None:
-                                reasoning = ""
+                        if not raw:
+                            break
 
-                            if txt or reasoning:
-                                if txt:
-                                    parts.append(txt)
-                                total_chars += len(txt) + len(reasoning)
-                                _got_first_token = True
-                                if on_progress:
-                                    on_progress(total_chars)
-                    except json.JSONDecodeError:
-                        pass
-        finally:
-            await resp_ctx.__aexit__(None, None, None)
+                        buf += raw.decode("utf-8", errors="replace")
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            line = line.strip()
+                            if not line or line.startswith(":"):
+                                continue
+                            if not line.startswith("data: "):
+                                continue
+                            payload = line[6:].strip()
+                            if payload == "[DONE]":
+                                continue
+                            try:
+                                obj = json.loads(payload)
+                                if "usage" in obj:
+                                    usage = obj["usage"]
+                                for ch in obj.get("choices", []):
+                                    delta = ch.get("delta", {})
+                                    txt = delta.get("content", "")
+                                    reasoning = delta.get("reasoning", "")
 
-        return "".join(parts), usage, 200, ""
+                                    # Safely handle None values from OpenRouter
+                                    if txt is None:
+                                        txt = ""
+                                    if reasoning is None:
+                                        reasoning = ""
+
+                                    if txt or reasoning:
+                                        if txt:
+                                            parts.append(txt)
+                                        total_chars += len(txt) + len(reasoning)
+                                        _got_first_token = True
+                                        if on_progress:
+                                            on_progress(total_chars)
+                            except json.JSONDecodeError:
+                                pass
+                    return "".join(parts), usage, 200, ""
+            finally:
+                await resp_ctx.__aexit__(None, None, None)
+
+            if not should_retry:
+                # Defensive: control should have returned via one of the
+                # branches above. Treat as non-retryable failure.
+                return None, {}, last_status, last_err
+
+            if on_retry:
+                on_retry(last_status, attempt, _MAX_RETRIES, wait_s)
+            await asyncio.sleep(wait_s)
+
+        return None, {}, last_status, last_err
 
     async def _stream_retry_402(data: dict, err_text: str) -> tuple[str, dict] | None:
         """On 402, parse affordable token limit and retry with reduced max_tokens."""
@@ -625,9 +714,12 @@ async def call_model_streaming(
                         return result
                     raise RuntimeError(f"HTTP 402: {err[:120].strip()}")
                 else:
+                    # 429/5xx are exhausted retries from _do_stream — raise so
+                    # the runner records a clean failure rather than falling
+                    # through to a no-reasoning attempt against the same
+                    # throttled upstream (which would just throttle again).
                     print(f"    {_tri} {S.DIM}{model_id}: {status} — {err[:120].strip()}{S.RST}")
-                    if status not in (429, 500, 502, 503, 504):
-                        raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
+                    raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
             except (asyncio.CancelledError, RuntimeError):
                 raise
             except asyncio.TimeoutError:

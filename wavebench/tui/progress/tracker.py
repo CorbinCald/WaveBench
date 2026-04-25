@@ -92,6 +92,10 @@ class ProgressTracker:
         self._active: dict[str, dict[str, Any]] = {}
         self._parsing: dict[str, dict[str, Any]] = {}
         self._phases: dict[str, float] = {}
+        # Live throttle/retry state per model. Cleared once the retry's
+        # `until` deadline passes; total count survives so the active-row
+        # render can show "(2 retries)" cumulatively.
+        self._retries: dict[str, dict[str, Any]] = {}
         self._drawn_lines = 0
         self._model_names = model_names or []
         self._avg_tokens = avg_tokens or {}
@@ -229,6 +233,29 @@ class ProgressTracker:
         """Remove a model from the parsing state."""
         self._parsing.pop(model_name, None)
 
+    def note_retry(
+        self,
+        model_name: str,
+        status: int,
+        attempt: int,
+        max_attempts: int,
+        wait_s: float,
+    ) -> None:
+        """Record a transient-failure retry so the active row can surface it.
+
+        ``until`` lets the renderer auto-clear the "throttled" line once
+        the backoff sleep has elapsed; ``count`` survives the retry so the
+        total appears next to the model name even after recovery.
+        """
+        prev = self._retries.get(model_name, {})
+        self._retries[model_name] = {
+            "status": status,
+            "attempt": attempt,
+            "max": max_attempts,
+            "until": time.monotonic() + wait_s,
+            "count": prev.get("count", 0) + 1,
+        }
+
     async def start(self) -> None:
         if not self._is_tty:
             return
@@ -350,20 +377,27 @@ class ProgressTracker:
         t = format_duration(info.get("time_s", 0))
         cost = self._model_cost(name, info)
         cost_s = f"  {S.HYEL}{format_cost(cost)}{S.RST}" if cost else ""
+        retries = info.get("retries") or []
+        retry_s = ""
+        if retries:
+            statuses = sorted({r.get("status", "?") for r in retries})
+            status_part = "/".join(str(s) for s in statuses)
+            label = f"{len(retries)} retry" if len(retries) == 1 else f"{len(retries)} retries"
+            retry_s = f"  {S.YEL}({label} on {status_part}){S.RST}"
         if st == "success":
             sym = _ok
             usage = info.get("usage", {})
             tokens = usage.get("total_tokens")
             fname = info.get("file", "")
             tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}{retry_s}"
         elif st == "cancelled":
             sym = _skip
-            detail = f"{S.DIM}cancelled{S.RST}"
+            detail = f"{S.DIM}cancelled{S.RST}{retry_s}"
             fname = ""
         else:
             sym = _fail
-            detail = f"{S.RED}failed{S.RST}{cost_s}"
+            detail = f"{S.RED}failed{S.RST}{cost_s}{retry_s}"
             fname = ""
         rank_s = f"{S.DIM}{rank:>2}.{S.RST}"
         content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
@@ -371,7 +405,7 @@ class ProgressTracker:
             overflow = _vlen(content) + 2 + len(t) - inner_w
             max_fname = max(8, len(fname) - overflow)
             fname = _truncate(fname, max_fname)
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}{retry_s}"
             content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
         gap = max(inner_w - _vlen(content) - len(t), 2)
         return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
@@ -490,6 +524,24 @@ class ProgressTracker:
                     elif name in self._active:
                         ainfo = self._active[name]
                         mel = format_duration(time.monotonic() - ainfo["start"])
+                        rinfo = self._retries.get(name)
+                        now_t = time.monotonic()
+                        if rinfo and rinfo["until"] > now_t:
+                            # Throttle override: replace bar/suffix with a
+                            # one-line throttle status until the backoff
+                            # sleep elapses, then resume the normal render.
+                            remain = max(0.0, rinfo["until"] - now_t)
+                            boxes = self._token_boxes(name, ainfo.get("chars", 0))
+                            suffix = (
+                                f"{S.YEL}HTTP {rinfo['status']}{S.RST}  "
+                                f"{S.DIM}retry {rinfo['attempt']}/{rinfo['max']}"
+                                f" in {remain:.1f}s  {mel:>7}{S.RST}"
+                            )
+                            row = f"{boxes}   {_rpad(name, self._pad)}  {suffix}"
+                            buf.append(_box_row(row, w) + "\033[K\n")
+                            lines += 1
+                            visible += 1
+                            continue
                         if ainfo["chars"] == 0:
                             boxes = self._token_boxes(name, 0)
                             dots = "·" * (1 + (idx // 4) % 3)
