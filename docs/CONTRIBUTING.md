@@ -1,14 +1,14 @@
 # Contributing to WaveBench
 
-Thanks for wanting to hack on WaveBench! This document covers local setup,
-running tests, style conventions, and how to structure a change so it's
-easy to review.
+Jump on in! This document covers local setup,
+running tests, style conventions, and how to structure a change so it's easy
+to review.
 
 ## Prerequisites
 
 - Python 3.10+
-- An [OpenRouter API key](https://openrouter.ai/keys) (only needed to *run*
-  the tool — tests never call OpenRouter)
+- An [OpenRouter API key](https://openrouter.ai/keys) only if you want to run
+  real benchmarks. The test suite never calls OpenRouter.
 
 ## Local setup
 
@@ -17,92 +17,109 @@ git clone <repository-url>
 cd WaveBench
 python -m venv .venv
 source .venv/bin/activate            # macOS / Linux
-# .venv\Scripts\activate              # Windows
+# .venv\Scripts\activate             # Windows
 pip install -e '.[dev]'
 pre-commit install
 ```
 
 `pre-commit install` wires up a git hook that runs `ruff check --fix` and
 `ruff format` before every commit. If a commit fails because a hook fixed
-something, re-stage and re-commit.
+something, re-stage the changed files and re-commit.
 
 ## Running tests
 
 ```bash
-pytest                               # full suite
-pytest tests/unit                    # unit tests only (fast)
-pytest tests/integration             # integration tests
-pytest -k streaming                  # substring filter
-pytest -x --lf                       # stop on first failure; re-run last-failed
-pytest --cov=wavebench               # coverage report (HTML in htmlcov/)
+python -m pytest                      # full suite
+python -m pytest tests/unit            # unit tests only
+python -m pytest tests/integration     # integration tests
+python -m pytest tests/characterization # contract tests for refactor seams
+python -m pytest -k streaming          # substring filter
+python -m pytest -x --lf               # stop on first failure; re-run last-failed
+python -m pytest --cov=wavebench       # coverage report (HTML in htmlcov/)
 ```
 
-The suite should finish in well under a second. If you're writing a slow
-test, mark it with `@pytest.mark.slow` and run it with `pytest -m slow`.
+The suite is intentionally fast; it currently runs in well under a second in
+the project venv. If your shell's default Python does not have the dev extras
+installed, use `.venv/bin/python -m pytest ...`.
+
+If you're writing a slow test, mark it with `@pytest.mark.slow` and run it
+with `python -m pytest -m slow` when needed.
 
 ## Style & linting
 
 ```bash
-ruff check .                         # lint
-ruff format .                        # format
-ruff check --fix .                   # lint + auto-fix
+ruff check .                          # lint
+ruff format .                         # format
+ruff check --fix .                    # lint + auto-fix
+ruff format --check .                 # verify formatting only
 ```
 
-Ruff is configured in `pyproject.toml`. We use line-length 100 and rule set
-`E, F, I, B, UP, SIM, RUF`. If a warning seems wrong for a specific line,
-use `# noqa: <rule>` with a comment explaining why rather than disabling
-the rule globally.
+Ruff is configured in `pyproject.toml`. We use line-length 100 and the rule
+set `E, F, I, B, UP, SIM, RUF`. If a warning is wrong for a specific line,
+use `# noqa: <rule>` with a short explanation rather than disabling the rule
+globally.
 
 ## Where code lives
 
-```
+```text
 wavebench/
-├── __main__.py          CLI entry point
-├── api.py               OpenRouter HTTP client
-├── core.py              benchmark orchestration + per-model runners
-├── models.py            default model mapping + catalog scoring
-├── parsers.py           LLM output → code + extension
-├── storage.py           JSON persistence (models/config/history)
+├── __main__.py                 CLI entry point, interactive startup, dispatch
+├── api.py                      OpenRouter HTTP/SSE client and model catalog fetch
+├── models.py                   default model mapping and catalog scoring
+├── parsers.py                  LLM output → code + extension; directory names
+├── storage.py                  JSON persistence for models/config/history
+├── modes/                      response-mode protocol and built-ins
+│   ├── __init__.py             Mode, ParsedOutput, MODES registry
+│   ├── code.py                 CodeMode prompt framing + parser wrapper
+│   └── text.py                 TextMode prompt framing + Markdown pass-through
+├── core/                       benchmark run orchestration and artifact handling
+│   ├── orchestrator.py         main_async, concurrency, result display, history
+│   ├── runner.py               run_model and get_unique_filename
+│   ├── auto_open.py            viewer/terminal/tab launching
+│   └── auto_install.py         dependency detection and per-run venv setup
 └── tui/
-    ├── components.py    ProgressTracker + analytics display
-    ├── interactive.py   model selection + config menus
-    └── styles.py        themes, ANSI helpers
+    ├── styles.py               themes, ANSI helpers, boxes, formatting
+    ├── input.py                raw key reads
+    ├── line_editor.py          prompt editor
+    ├── progress/               ProgressTracker and wave rendering
+    ├── analytics/              display_analytics and compute_cost
+    └── menus/                  model browser and configuration menu
 
 tests/
-├── unit/                fast, pure-function tests
-├── integration/         fake aiohttp server, real streaming code paths
-└── characterization/    scaffolding used during refactoring
+├── unit/                       pure functions and mode behavior
+├── integration/                mocked OpenRouter/SSE paths
+└── characterization/           contract tests around refactor-sensitive seams
 ```
 
 See `docs/architecture.md` for a more detailed map of how the pieces fit
-together and where to look when you want to change a specific behavior.
+together and where to look when changing specific behavior.
 
 ## Writing tests
 
 - **Unit tests** (`tests/unit/`) — pure functions, no network, no file I/O
   beyond `tmp_path`. These should run in a handful of milliseconds each.
 - **Integration tests** (`tests/integration/`) — exercise real code paths
-  against a mocked collaborator (e.g., `aiohttp.test_utils.TestServer` for
-  the OpenRouter client).
-- **Characterization tests** (`tests/characterization/`) — temporary
-  scaffolding for refactors. Pin current behavior at the module's *public*
-  boundary (not internals) so the tests survive the refactor. Delete them
-  once the refactor lands and proper unit tests supersede.
+  against mocked collaborators, such as an `aiohttp.test_utils.TestServer`
+  standing in for OpenRouter.
+- **Characterization tests** (`tests/characterization/`) — contract tests for
+  public behavior at refactor seams (`core`, progress, menus). Prefer asserting
+  state transitions and import compatibility over byte-for-byte ANSI output.
 
 Helpful fixtures in `tests/conftest.py`:
 
-- `tmp_state_dir` — redirects `storage.py` paths to an isolated tmp dir.
-- `isolated_env` — scrubs WaveBench-relevant env vars.
-- pytest's own `capsys` (not a WaveBench fixture) — capture `print()` output.
+- `tmp_state_dir` — changes the working directory to an isolated temp dir so
+  `.benchmark_*.json` files are test-local.
+- `isolated_env` — removes `OPENROUTER_API_KEY` from the environment.
+- pytest's built-in `capsys` — capture `print()` output.
 
 ## Adding a new mode
 
-WaveBench's response modes — `CodeMode`, `TextMode` — implement the
-`Mode` protocol in `wavebench/modes/__init__.py`. A mode captures two
-mode-specific decisions: how to frame the user's prompt, and how to
-parse the raw LLM response into savable content with a file extension.
+WaveBench's response modes — currently `CodeMode` and `TextMode` — implement
+the `Mode` protocol in `wavebench/modes/__init__.py`. A mode captures two
+mode-specific decisions: how to frame the user's prompt, and how to parse the
+raw LLM response into savable content with a file extension.
 
-To add a new mode (e.g., `JsonMode`):
+To add a new mode, for example `JsonMode`:
 
 1. **Create the module.** `wavebench/modes/json.py`:
 
@@ -136,7 +153,9 @@ To add a new mode (e.g., `JsonMode`):
                _json.loads(text)
            except _json.JSONDecodeError as exc:
                return ParsedOutput(
-                   content=text, extension="json", parse_ok=False,
+                   content=text,
+                   extension="json",
+                   parse_ok=False,
                    parse_error=f"invalid JSON: {exc.msg}",
                )
            return ParsedOutput(content=text + "\n", extension="json", parse_ok=True)
@@ -145,47 +164,52 @@ To add a new mode (e.g., `JsonMode`):
    JSON_MODE = JsonMode()
    ```
 
-2. **Register it.** Edit `wavebench/modes/__init__.py`, add an import
-   for your singleton and call `register(JSON_MODE)` alongside the
-   built-ins:
+2. **Register it.** Edit `wavebench/modes/__init__.py`, import the singleton
+   and call `register(JSON_MODE)` alongside the built-ins:
 
    ```python
-   from .json import JSON_MODE   # noqa: E402
+   from .json import JSON_MODE  # noqa: E402
    register(JSON_MODE)
    ```
 
-   Also add `"JSON_MODE"` to the `__all__` list.
+   Also add `"JSON_MODE"` to `__all__`.
 
 3. **Add unit tests.** In `tests/unit/test_modes.py` add tests for:
-   - The registry contains your mode: `"json" in MODES`.
-   - `frame_prompt` produces expected framing.
+   - the registry contains your mode: `"json" in MODES`;
+   - `frame_prompt` produces expected framing;
    - `parse_response` returns `parse_ok=True` for valid input and
      `parse_ok=False` with a useful `parse_error` for malformed input.
 
-4. **(Optional) Update the CLI mode-select screen.** Once registered,
-   your mode is automatically listed in `wavebench --help` and
-   accessible via `wavebench --mode json`. If you want it in the
-   interactive startup "Select Mode" box in `__main__.py`, edit the
-   `_print_mode_menu` function to include it.
+4. **Decide how it appears in the interactive startup UI.** Once registered,
+   your mode is automatically accepted by `wavebench --mode json` and appears
+   in `wavebench --help`. The interactive startup selector currently displays
+   Code/Text shortcuts explicitly, so update `_print_mode_menu()` and key
+   handling in `wavebench/__main__.py` if the new mode should be selectable
+   there too.
 
-5. **Run the full check.** `pytest && ruff check . && ruff format --check .`
-   — all green means you're done.
+5. **Run the full check.**
 
-That's it. No wiring into `core/runner.py` is needed — the mode
-abstraction handles framing and parsing, and `run_model(mode, ...)`
-treats any registered mode identically.
+   ```bash
+   python -m pytest
+   ruff check .
+   ruff format --check .
+   ```
+
+No wiring into `core/runner.py` is normally needed. The mode abstraction
+handles framing and parsing, and `run_model(mode, ...)` treats registered
+modes uniformly.
 
 ## Commits & PRs
 
 - Keep commits focused — one logical change per commit.
-- Include a short commit message ("what" + "why", not "how").
-- For PRs that touch `core.py`, `tui/components.py`, or `tui/interactive.py`,
-  prefer small incremental PRs over large sweeping ones (these files are
-  being decomposed; large changes collide with the refactor).
-- Run `ruff check .` and `pytest` before pushing.
+- Include a short commit message that explains the what and why.
+- Prefer small incremental PRs for changes that touch the run loop, streaming
+  client, progress tracker, or interactive menus. Those areas have many user-
+  visible behaviors and are covered by characterization tests.
+- Run `ruff check .`, `ruff format --check .`, and `python -m pytest` before
+  pushing.
 
 ## Getting unstuck
 
-- `docs/superpowers/specs/` — design docs for ongoing architectural work.
-- `docs/architecture.md` — "where does X live" reference.
-- README — user-facing feature overview.
+- `docs/architecture.md` — current "where does X live" reference.
+- `README.md` — user-facing feature overview.

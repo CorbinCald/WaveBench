@@ -143,7 +143,13 @@ async def run_model(
                 f"  {_skip} {model_name:<{pad}}  "
                 f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "cancelled", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
+        results[model_name] = {
+            "status": "cancelled",
+            "time_s": elapsed,
+            "file": None,
+            "usage": {},
+            "retries": retry_events,
+        }
         return
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - start
@@ -153,7 +159,13 @@ async def run_model(
                 f"{S.RED}timeout{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
+        results[model_name] = {
+            "status": "failed",
+            "time_s": elapsed,
+            "file": None,
+            "usage": {},
+            "retries": retry_events,
+        }
         return
     except aiohttp.ClientError as exc:
         elapsed = time.monotonic() - start
@@ -163,7 +175,13 @@ async def run_model(
                 f"{S.RED}API error: {exc}{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
+        results[model_name] = {
+            "status": "failed",
+            "time_s": elapsed,
+            "file": None,
+            "usage": {},
+            "retries": retry_events,
+        }
         return
     except Exception as exc:
         elapsed = time.monotonic() - start
@@ -174,7 +192,13 @@ async def run_model(
                 f"{S.RED}{exc_str}{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
+        results[model_name] = {
+            "status": "failed",
+            "time_s": elapsed,
+            "file": None,
+            "usage": {},
+            "retries": retry_events,
+        }
         return
     finally:
         if registered:
@@ -189,7 +213,13 @@ async def run_model(
                 f"{S.RED}no response{S.RST}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
-        results[model_name] = {"status": "failed", "time_s": elapsed, "file": None, "usage": {}, "retries": retry_events}
+        results[model_name] = {
+            "status": "failed",
+            "time_s": elapsed,
+            "file": None,
+            "usage": {},
+            "retries": retry_events,
+        }
         return
 
     if registered:

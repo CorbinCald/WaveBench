@@ -240,13 +240,7 @@ def _is_effort_naming_bridge(model_id: str, requested: str, mapped: str) -> bool
     predicate returns True.
     """
     lower = model_id.lower()
-    if "deepseek-v4" in lower:
-        if requested == "max" and mapped == "xhigh":
-            return True
-    if "gpt-5" in lower:
-        if requested == "max" and mapped == "xhigh":
-            return True
-    return False
+    return requested == "max" and mapped == "xhigh" and ("deepseek-v4" in lower or "gpt-5" in lower)
 
 
 def _map_effort(effort: str, supported: list[str]) -> str:

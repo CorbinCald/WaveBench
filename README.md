@@ -1,6 +1,6 @@
 # WaveBench
 
-A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send a single prompt to multiple models in parallel, compare their generated code or prose, and track lifetime performance analytics from your terminal.
+A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send one prompt to multiple models in parallel, compare their generated code or prose, and track lifetime performance analytics from your terminal.
 
 ## Prerequisites
 
@@ -26,9 +26,11 @@ The only runtime dependency is `aiohttp`.
 
 Provide your OpenRouter API key via **environment variable** or a **`.env` file** in the project root:
 
-```
+```env
 OPENROUTER_API_KEY=your_key_here
 ```
+
+WaveBench stores model selection, user settings, analytics history, and prompt history in gitignored files in the current working directory. See [Persistent Files](#persistent-files).
 
 ## Quick Start
 
@@ -38,17 +40,18 @@ wavebench
 python -m wavebench
 ```
 
-You'll be greeted with an interactive mode selector (**Code** or **Text**), a summary of active models, and a prompt input with readline history support. Type `c` at the mode prompt to open the configuration menu.
+Interactive startup shows a **Code / Text** mode selector, a summary of active models, and a prompt input with readline-style history. Type `c` at the mode prompt to open the configuration menu.
 
 ### CLI Flags
 
 | Flag | Description |
 |---|---|
 | `--prompt "…"` | Skip interactive input and run immediately |
-| `--text` | Text mode — get prose/Markdown answers instead of code |
-| `--config` / `--models` | Open the configuration menu (model selection & settings) |
-| `--open incremental\|after_all` | Auto-open generated files as they complete or after all finish |
-| `--auto-install` | Auto-install detected Python dependencies in a venv |
+| `--mode code\|text` | Select the response mode; defaults to `code` |
+| `--text` | Alias for `--mode text` |
+| `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
+| `--open incremental\|after_all` / `--auto-open …` | Auto-open generated files as they complete or after all models finish |
+| `--auto-install` | In code mode, permit PyPI dependencies and auto-install detected Python packages into a per-run venv before opening files |
 | `--stats` | Display lifetime analytics and exit |
 | `--clear-history` | Reset all analytics history |
 
@@ -56,6 +59,7 @@ Examples:
 
 ```bash
 wavebench --prompt "Create a snake game in Python"
+wavebench --prompt "Explain quantum computing" --mode text
 wavebench --prompt "Explain quantum computing" --text
 wavebench --config
 wavebench --stats
@@ -63,24 +67,27 @@ wavebench --stats
 
 ## How It Works
 
-1. **Prompt** — You enter a description of what you want built (or answered).
-2. **Directory naming** — An async LLM call generates a short `snake_case` directory name from your prompt.
-3. **Parallel execution** — All selected models are queried concurrently (up to 12 at a time) with streaming responses and a live progress display.
-4. **Parsing** — In code mode, responses are parsed to extract the code block and detect the file extension. In text mode, raw Markdown is saved directly.
-5. **Results** — A ranked leaderboard shows pass/fail status, file names, token counts, timing, and cost for each model.
-6. **Analytics** — Every run is recorded and lifetime stats (success rate, average time, token usage, and cost) are displayed.
+1. **Prompt** — You enter a description of what you want built or answered.
+2. **Mode framing** — The selected mode (`CodeMode` or `TextMode`) wraps the user prompt with mode-specific instructions.
+3. **Directory naming** — A fast OpenRouter call generates a short directory name from the prompt.
+4. **Parallel execution** — All selected models are queried concurrently, up to `MAX_CONCURRENCY = 12`, with streaming responses and a live progress display.
+5. **Parsing** — Code mode extracts a single savable artifact from JSON, fenced code blocks, malformed fences, or whole-response fallback. Text mode saves raw Markdown.
+6. **Results** — Outputs are saved to `benchmarkResults/<prompt_dir>/`; a leaderboard shows pass/fail status, file names, token counts, timing, and estimated cost.
+7. **Analytics** — Every run is recorded and lifetime stats show success rate, average time, token usage, and cost.
 
 ## Configuration Menu
 
-The interactive config menu (`--config` or `c` at the mode prompt) has two tabs:
+Open the interactive config menu with `wavebench --config` or by pressing `c` at the startup mode prompt.
 
-- **Models** — Search, browse, and toggle models from the OpenRouter catalog. Models are scored and ranked by provider tier, pricing, recency, and capabilities. Press `+` to manually add a model by its OpenRouter ID (e.g., `qwen/qwen3.6-plus-preview-free`).
+The menu has two tabs:
+
+- **Models** — Search, browse, and toggle models from the OpenRouter catalog. Models are ranked by provider tier, pricing, recency, supported capabilities, and context length. Press `+` to manually add a model by its OpenRouter ID.
 - **Settings** — Configure:
-  - **Reasoning effort** — high / medium / low / off
-  - **Analytics sort** — runs / avg_time / rate / avg_tokens / cost
-  - **Theme** — 9 color schemes: default, plum, lemon, blueberry, grape, pear, acai, tangerine, lime. Live-previewed as you cycle.
-  - **Auto-open files** — off / incremental / after_all
-  - **Auto-install deps** — off / on (only visible when auto-open is enabled)
+  - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Unsupported values are mapped per model where possible.
+  - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`.
+  - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
+  - **Auto-open files** — `off`, `incremental`, or `after_all`.
+  - **Auto-install deps** — `off` or `on`; shown only when auto-open is enabled. Applies to Python code-mode outputs.
 
 Selections persist across runs in local JSON files.
 
@@ -88,7 +95,7 @@ Selections persist across runs in local JSON files.
 
 Results are saved to `benchmarkResults/<prompt_dir>/`:
 
-```
+```text
 benchmarkResults/
 └── snake_game/
     ├── prompt.txt              # The original prompt
@@ -98,59 +105,54 @@ benchmarkResults/
     └── ...
 ```
 
-In text mode, outputs are saved as `.md` files instead.
+In text mode, outputs are saved as `.md` files.
 
 ## Project Structure
 
-```
+```text
 wavebench/
-├── __init__.py
-├── __main__.py        # CLI entry point & argument parsing
-├── api.py             # OpenRouter API client (streaming & non-streaming)
-├── core.py            # Benchmark orchestration & result display
-├── models.py          # Default model mapping & scoring algorithm
-├── parsers.py         # LLM output parsing & directory name generation
-├── storage.py         # JSON persistence (models, config, history)
+├── __main__.py                 # CLI entry point, interactive startup, dispatch
+├── api.py                      # OpenRouter API client: streaming, retries, model catalog
+├── models.py                   # Default model mapping and catalog scoring
+├── parsers.py                  # Code extraction and prompt-derived directory names
+├── storage.py                  # JSON persistence for models/config/history
+├── modes/                      # Response modes and registry
+│   ├── __init__.py             # Mode protocol, ParsedOutput, MODES
+│   ├── code.py                 # CodeMode prompt framing + parser wrapper
+│   └── text.py                 # TextMode prompt framing + Markdown pass-through
+├── core/                       # Benchmark orchestration and artifact handling
+│   ├── __init__.py             # Public re-exports
+│   ├── orchestrator.py         # main_async run coordinator
+│   ├── runner.py               # per-model run_model and unique filenames
+│   ├── auto_open.py            # viewer/terminal/tab launching
+│   └── auto_install.py         # dependency detection and per-output-dir venvs
 └── tui/
-    ├── __init__.py
-    ├── components.py  # ProgressTracker & analytics display
-    ├── interactive.py # Model selection & settings menus
-    └── styles.py      # Theme system, box drawing, formatting helpers
+    ├── styles.py               # Themes, ANSI helpers, box drawing, formatting
+    ├── input.py                # Raw keyboard reads
+    ├── line_editor.py          # Readline-style prompt editor
+    ├── progress/               # Live progress tracker and wave rendering
+    ├── analytics/              # Cost helper and lifetime stats table
+    └── menus/                  # Model browser and tabbed config menu
 ```
 
-### Key Modules
+A more detailed architectural map — including data flow, public seams, and testing tiers — lives in [`docs/architecture.md`](docs/architecture.md).
 
-| Module | Purpose |
-|---|---|
-| `__main__.py` | Parses CLI args, loads state, handles interactive mode/prompt selection, dispatches to `core.main_async()` |
-| `api.py` | Manages OpenRouter calls — API key loading, SSE streaming with progress callbacks, model catalog fetching, retry logic |
-| `core.py` | Runs all models concurrently, manages the progress tracker, writes output files, records analytics |
-| `models.py` | Defines `MODEL_MAPPING` (the default set of models) and `_model_score()` for ranking catalog models |
-| `parsers.py` | Extracts code from LLM responses (JSON, fenced blocks, fallback), detects language/extension, generates directory names |
-| `storage.py` | Reads/writes `.benchmark_models.json`, `.benchmark_config.json`, and `.benchmark_history.json` |
-| `tui/components.py` | Animated multi-line `ProgressTracker` with braille wave bars and per-model status; `display_analytics()` for stats tables |
-| `tui/interactive.py` | Full-screen model selector with search, pagination, toggling, and manual model entry; tabbed config menu with live theme preview |
-| `tui/styles.py` | RGB theme system (9 fruit-named themes with hue-locked gradients), box-drawing primitives, duration formatting, ANSI-aware string utilities |
+## Persistent Files
 
-### Persistent Files
-
-These are created in the project root and are gitignored:
+These are created in the current working directory and are gitignored:
 
 | File | Contents |
 |---|---|
-| `.benchmark_models.json` | Currently selected models |
-| `.benchmark_config.json` | Settings (theme, reasoning effort, etc.) |
+| `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
+| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, auto-open, and auto-install |
 | `.benchmark_history.json` | Lifetime run history for analytics |
-| `.benchmark_query_history` | Readline prompt history |
+| `.benchmark_query_history` | Readline-style prompt history |
+
+Because state paths are based on `os.getcwd()`, running WaveBench from different directories creates separate project-local state.
 
 ## Development
 
-Local setup, test commands, style conventions, and contribution guidelines
-live in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). A more detailed
-architectural map — "where does X live" — is in
-[`docs/architecture.md`](docs/architecture.md).
-
-Quick start for contributors:
+Local setup, test commands, style conventions, and contribution guidelines live in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). Quick start for contributors:
 
 ```bash
 pip install -e '.[dev]'
