@@ -542,9 +542,7 @@ async def test_streaming_retry_sends_identical_payload_every_attempt(
 
     async def handler(request: web.Request) -> web.StreamResponse:
         bodies.append(await request.read())
-        header_snapshots.append(
-            {k: v for k, v in request.headers.items() if k.lower() != "host"}
-        )
+        header_snapshots.append({k: v for k, v in request.headers.items() if k.lower() != "host"})
         if len(bodies) <= 2:
             return web.Response(status=429, text="upstream throttled")
         resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
