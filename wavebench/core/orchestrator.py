@@ -109,6 +109,8 @@ async def main_async(
     if getattr(args, "auto_install", None):
         auto_install = "on"
 
+    directory_naming = config.get("directory_naming", "llm")
+
     _reset_incremental_tabs()
 
     user_prompt = args.prompt
@@ -151,6 +153,7 @@ async def main_async(
     print(_box_divider(w, heavy=True))
     print(_box_row(f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active", w, heavy=True))
     print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
+    print(_box_row(f"{S.DIM}{'NAMING':>8}{S.RST}  {directory_naming}", w, heavy=True))
     print(_box_bot(w, heavy=True))
     print()
 
@@ -210,7 +213,12 @@ async def main_async(
         try:
 
             async def resolve_output_dir() -> str:
-                dir_name = await get_directory_name(session, api_key, user_prompt)
+                dir_name = await get_directory_name(
+                    session,
+                    api_key,
+                    user_prompt,
+                    naming_mode=directory_naming,
+                )
 
                 base_out = os.path.join(os.getcwd(), OUTPUT_DIR)
                 out = os.path.join(base_out, dir_name)

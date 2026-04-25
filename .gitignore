@@ -10,4 +10,5 @@ benchmarkResults/
 .benchmark_query_history
 build/
 *.egg-info/
+.pi/
 
