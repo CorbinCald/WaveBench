@@ -39,7 +39,7 @@ wavebench/
 ├── __main__.py                 CLI args, startup UI, state loading, dispatch
 ├── api.py                      OpenRouter client, SSE parser, retries, catalog fetch
 ├── models.py                   default model mapping, catalog scoring, stealth filter
-├── parsers.py                  code extraction and LLM-derived directory names
+├── parsers.py                  code extraction and prompt-derived directory names
 ├── storage.py                  JSON persistence for local state and analytics
 │
 ├── modes/
@@ -118,7 +118,8 @@ Line counts are approximate and useful mostly for spotting oversized files:
    - Determines default output extension (`.md` for text, `.py` for Python-ish
      prompts, otherwise `.html`).
    - Creates an async task for `parsers.get_directory_name()` so the output
-     directory can be prepared while model calls are starting.
+     directory can be prepared while model calls are starting. Directory
+     naming uses the configured mode: `llm` or local `slug`.
    - Starts `tui.progress.ProgressTracker` and builds any reasoning-effort
      notices for the ticker.
 
@@ -207,7 +208,7 @@ WaveBench stores local state in the current working directory:
 | File | Contents |
 |---|---|
 | `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping |
-| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `auto_open`, `auto_install` |
+| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install` |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
 | `.benchmark_query_history` | prompt-entry history for the interactive editor |
 

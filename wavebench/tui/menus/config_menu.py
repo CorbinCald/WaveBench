@@ -1,6 +1,6 @@
 """Tabbed configuration menu — Models tab (catalog browser + manual add)
-and Settings tab (theme, reasoning-effort, analytics sort, auto-open,
-auto-install).
+and Settings tab (theme, reasoning-effort, analytics sort, directory naming,
+auto-open, auto-install).
 
 ``interactive_config_menu`` is a single ~500-line function that drives
 both tabs through a shared event loop; further decomposition is deferred
@@ -22,6 +22,7 @@ from typing import Any
 
 from wavebench.api import fetch_top_models
 from wavebench.models import MODEL_MAPPING
+from wavebench.parsers import _DIRECTORY_NAMING_CHOICES
 from wavebench.tui import styles as _styles
 from wavebench.tui.input import _read_key_or_resize
 from wavebench.tui.menus._shared import (
@@ -130,6 +131,13 @@ def interactive_config_menu(
             "value": current_config.get("theme", "default"),
             "type": "cycle",
             "choices": THEME_NAMES,
+        },
+        {
+            "key": "directory_naming",
+            "label": "Directory naming",
+            "value": current_config.get("directory_naming", "llm"),
+            "type": "cycle",
+            "choices": list(_DIRECTORY_NAMING_CHOICES),
         },
         {
             "key": "auto_open",
@@ -361,6 +369,7 @@ def interactive_config_menu(
                 "theme": "default",
                 "auto_open": "off",
                 "auto_install": "off",
+                "directory_naming": "llm",
             }
             changed = any(
                 it["value"] != current_config.get(it["key"], defaults.get(it["key"]))

@@ -59,6 +59,7 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
         "theme": "default",
         "auto_open": "off",
         "auto_install": "off",
+        "directory_naming": "llm",
     }
 
 
@@ -71,6 +72,7 @@ def test_save_config_then_load_config_roundtrip(tmp_state_dir: Path) -> None:
     assert loaded["analytics_sort"] == "runs"  # default preserved
     assert loaded["auto_open"] == "off"
     assert loaded["auto_install"] == "off"
+    assert loaded["directory_naming"] == "llm"
 
 
 def test_load_config_corrupted_json_returns_defaults(tmp_state_dir: Path) -> None:

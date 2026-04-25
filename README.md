@@ -69,7 +69,7 @@ wavebench --stats
 
 1. **Prompt** — You enter a description of what you want built or answered.
 2. **Mode framing** — The selected mode (`CodeMode` or `TextMode`) wraps the user prompt with mode-specific instructions.
-3. **Directory naming** — A fast OpenRouter call generates a short directory name from the prompt.
+3. **Directory naming** — The configured naming mode creates a short directory name from the prompt: either the LLM fallback chain or a local slug parser.
 4. **Parallel execution** — All selected models are queried concurrently, up to `MAX_CONCURRENCY = 12`, with streaming responses and a live progress display.
 5. **Parsing** — Code mode extracts a single savable artifact from JSON, fenced code blocks, malformed fences, or whole-response fallback. Text mode saves raw Markdown.
 6. **Results** — Outputs are saved to `benchmarkResults/<prompt_dir>/`; a leaderboard shows pass/fail status, file names, token counts, timing, and estimated cost.
@@ -86,6 +86,7 @@ The menu has two tabs:
   - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Unsupported values are mapped per model where possible.
   - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`.
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
+  - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
   - **Auto-install deps** — `off` or `on`; shown only when auto-open is enabled. Applies to Python code-mode outputs.
 
@@ -144,7 +145,7 @@ These are created in the current working directory and are gitignored:
 | File | Contents |
 |---|---|
 | `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
-| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, auto-open, and auto-install |
+| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, and auto-install |
 | `.benchmark_history.json` | Lifetime run history for analytics |
 | `.benchmark_query_history` | Readline-style prompt history |
 

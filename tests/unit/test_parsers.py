@@ -16,17 +16,123 @@ from __future__ import annotations
 
 import pytest
 
+from wavebench import parsers as parsers_mod
 from wavebench.parsers import (
+    _DIRECTORY_NAME_ATTEMPTS,
+    _DIRECTORY_NAME_REASONING_EFFORT,
+    _DIRECTORY_NAMING_CHOICES,
+    _DIRECTORY_NAMING_DEFAULT,
     _build_parse_result,
+    _clean_directory_name,
     _extract_json_candidates,
     _guess_language_from_code,
     _lang_to_extension,
     _parse_code_blocks,
     _parse_json_payload,
     _salvage_unclosed_fence,
+    _slug_directory_name,
     _strip_trailing_fence,
+    get_directory_name,
     parse_llm_output,
 )
+
+# ---------------------------------------------------------------------------
+# get_directory_name
+# ---------------------------------------------------------------------------
+
+
+def test_directory_name_attempts_use_requested_fallback_order_and_timeouts() -> None:
+    assert _DIRECTORY_NAME_ATTEMPTS == (
+        ("deepseek/deepseek-v4-flash", 5.0),
+        ("qwen/qwen3.5-9b", 5.0),
+        ("google/gemini-3.1-flash-lite-preview", 15.0),
+    )
+    assert _DIRECTORY_NAMING_DEFAULT == "llm"
+    assert _DIRECTORY_NAMING_CHOICES == ("llm", "slug")
+
+
+def test_slug_directory_name_uses_first_meaningful_words() -> None:
+    assert (
+        _slug_directory_name("Create a small Python snake game with keyboard controls")
+        == "python_snake_game"
+    )
+
+
+def test_slug_directory_name_falls_back_for_empty_prompt() -> None:
+    assert _slug_directory_name("!@#$") == "benchmark_output"
+
+
+async def test_get_directory_name_slug_mode_skips_model_calls(monkeypatch) -> None:
+    async def fail_call_model_async(*args, **kwargs):
+        raise AssertionError("slug mode should not call the model")
+
+    monkeypatch.setattr(parsers_mod, "call_model_async", fail_call_model_async)
+
+    name = await get_directory_name(None, "key", "Make me a kanban app", naming_mode="slug")
+
+    assert name == "kanban"
+
+
+async def test_get_directory_name_uses_no_reasoning_and_first_success(monkeypatch) -> None:
+    calls = []
+
+    async def fake_call_model_async(session, api_key, model, prompt, **kwargs):
+        calls.append((session, api_key, model, prompt, kwargs))
+        return "`snake_game`"
+
+    monkeypatch.setattr(parsers_mod, "call_model_async", fake_call_model_async)
+
+    name = await get_directory_name(None, "key", "Create a snake game")
+
+    assert name == "snake_game"
+    assert len(calls) == 1
+    _, _, model, prompt, kwargs = calls[0]
+    assert model == "deepseek/deepseek-v4-flash"
+    assert "Create a snake game" in prompt
+    assert _DIRECTORY_NAME_REASONING_EFFORT == "none"
+    assert kwargs["reasoning_effort"] == "none"
+    assert kwargs["max_tokens"] == 512
+
+
+async def test_get_directory_name_falls_back_on_empty_results(monkeypatch) -> None:
+    calls = []
+    responses = iter([None, "", "gemini_answer"])
+
+    async def fake_call_model_async(session, api_key, model, prompt, **kwargs):
+        calls.append((model, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(parsers_mod, "call_model_async", fake_call_model_async)
+
+    name = await get_directory_name(None, "key", "Explain waves")
+
+    assert name == "gemini_answer"
+    assert [model for model, _ in calls] == [model for model, _timeout in _DIRECTORY_NAME_ATTEMPTS]
+    assert all(kwargs["reasoning_effort"] == "none" for _model, kwargs in calls)
+
+
+async def test_get_directory_name_returns_local_fallback_after_timeouts(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        parsers_mod,
+        "_DIRECTORY_NAME_ATTEMPTS",
+        (("deepseek/deepseek-v4-flash", 0.001), ("qwen/qwen3.5-9b", 0.001)),
+    )
+
+    async def slow_call_model_async(session, api_key, model, prompt, **kwargs):
+        await parsers_mod.asyncio.sleep(1)
+        return "too_late"
+
+    monkeypatch.setattr(parsers_mod, "call_model_async", slow_call_model_async)
+
+    assert await get_directory_name(None, "key", "Create a game") == "benchmark_output"
+    capsys.readouterr()
+
+
+def test_clean_directory_name_removes_unsafe_characters() -> None:
+    assert _clean_directory_name(" `snake/game:$ demo!` ") == "snakegame demo"
+
 
 # ---------------------------------------------------------------------------
 # _lang_to_extension

@@ -3,7 +3,7 @@
 Three files live in the working directory (gitignored):
 
     .benchmark_models.json   — selected models mapping
-    .benchmark_config.json   — settings (theme, reasoning_effort, …)
+    .benchmark_config.json   — settings (theme, reasoning_effort, naming, …)
     .benchmark_history.json  — append-only analytics history
 
 Load functions fall back to defaults on missing or corrupted files so a
@@ -70,6 +70,7 @@ def load_config() -> dict[str, Any]:
         "theme": "default",
         "auto_open": "off",
         "auto_install": "off",
+        "directory_naming": "llm",
     }
     if os.path.exists(path):
         try:
