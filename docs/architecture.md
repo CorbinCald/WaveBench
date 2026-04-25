@@ -1,127 +1,235 @@
 # WaveBench Architecture
 
-A "where does X live" reference for navigating the codebase. Updated as
-structure evolves. Pair with the module-level docstrings (each `.py`
-opens with a paragraph on its role) for the freshest detail.
+A current "where does X live" reference for navigating the codebase. Pair this
+with the module-level docstrings in each `.py` file for local details.
 
 ## 10-second picture
 
+```text
+user prompt
+  │
+  ▼
+wavebench.__main__
+  ├─ loads config/models/history state from storage.py
+  ├─ optionally opens tui.menus.run_config_menu
+  └─ dispatches to core.main_async
+          │
+          ▼
+    core.orchestrator.main_async
+      ├─ resolves CodeMode/TextMode
+      ├─ asks parsers.get_directory_name for benchmarkResults/<dir>
+      ├─ starts tui.progress.ProgressTracker
+      ├─ fans out concurrent core.runner.run_model tasks
+      ├─ auto-opens / auto-installs when configured
+      └─ records analytics with storage.record_run
+                │
+                ▼
+          core.runner.run_model
+            ├─ mode.frame_prompt(user_prompt)
+            ├─ api.call_model_streaming(...)
+            ├─ mode.parse_response(raw)
+            └─ writes one output artifact per model
 ```
-user prompt ──► __main__.py ──► core.main_async ──► parallel [process_model] ──► writes files
-                                    │                        │
-                                    │                        ├─ api.call_model_streaming ──► OpenRouter SSE
-                                    │                        ├─ parsers.parse_llm_output  ──► code + extension
-                                    │                        └─ tui.ProgressTracker      ──► live UI update
-                                    │
-                                    └─ storage.record_run ──► .benchmark_history.json
+
+## Package map
+
+```text
+wavebench/
+├── __init__.py
+├── __main__.py                 CLI args, startup UI, state loading, dispatch
+├── api.py                      OpenRouter client, SSE parser, retries, catalog fetch
+├── models.py                   default model mapping, catalog scoring, stealth filter
+├── parsers.py                  code extraction and LLM-derived directory names
+├── storage.py                  JSON persistence for local state and analytics
+│
+├── modes/
+│   ├── __init__.py             Mode protocol, ParsedOutput, MODES registry
+│   ├── code.py                 CodeMode prompt framing + parser wrapper
+│   └── text.py                 TextMode prompt framing + Markdown pass-through
+│
+├── core/
+│   ├── __init__.py             public re-exports for core package users
+│   ├── orchestrator.py         main_async run coordinator and result display
+│   ├── runner.py               per-model run_model + get_unique_filename
+│   ├── auto_open.py            viewer/terminal/tab launching helpers
+│   └── auto_install.py         dependency detection, venv creation, pip install
+│
+└── tui/
+    ├── __init__.py
+    ├── styles.py               themes, ANSI helpers, box drawing, formatting
+    ├── input.py                raw key reads, resize-aware key handling
+    ├── line_editor.py          prompt editor with history/navigation
+    ├── progress/
+    │   ├── __init__.py         re-exports ProgressTracker, render_idle_wave
+    │   ├── tracker.py          live multi-model progress UI
+    │   └── wave.py             braille wave / pulse rendering primitives
+    ├── analytics/
+    │   ├── __init__.py         re-exports compute_cost, display_analytics
+    │   ├── cost.py             token-cost calculation helper
+    │   └── table.py            lifetime analytics table renderer
+    └── menus/
+        ├── __init__.py         re-exports menu entry points
+        ├── _shared.py          price/name/filter/layout helpers
+        ├── model_list.py       model catalog browser + selection flow
+        └── config_menu.py      tabbed Models/Settings config menu
 ```
 
-## Module map
+## Current module sizes
 
-| Module | Role | Size |
-|---|---|---|
-| `__main__.py` | CLI parsing, state loading, dispatch | 317 |
-| `api.py` | OpenRouter HTTP (streaming + non-streaming), reasoning-effort negotiation, catalog fetch | 681 |
-| `core.py` | Benchmark orchestration, per-model runners, auto-open, auto-install | 1025 |
-| `models.py` | Default MODEL_MAPPING, catalog scoring, stealth classification | 81 |
-| `parsers.py` | LLM-output → code + extension (4-stage cascade) | 256 |
-| `storage.py` | JSON persistence for models/config/history | 115 |
-| `tui/components.py` | ProgressTracker + analytics display + wave math | 1085 |
-| `tui/interactive.py` | Keyboard input + line editor + model/config menus | 1195 |
-| `tui/styles.py` | Theme system, ANSI helpers, box drawing | 456 |
+Line counts are approximate and useful mostly for spotting oversized files:
 
-> **Note:** Three of these (`core.py`, `tui/components.py`,
-> `tui/interactive.py`) exceed 1,000 lines. An active maintainability
-> initiative decomposes them into focused sub-packages. See
-> `docs/superpowers/specs/2026-04-22-maintainability-foundation-design.md`.
+| Module | Lines | Role |
+|---|---:|---|
+| `wavebench/api.py` | 824 | OpenRouter HTTP/SSE client, reasoning-effort negotiation, model catalog |
+| `wavebench/tui/progress/tracker.py` | 728 | Animated progress tracker and final progress-state rendering |
+| `wavebench/tui/styles.py` | 635 | Theme definitions, ANSI helpers, box drawing, formatting |
+| `wavebench/tui/menus/config_menu.py` | 566 | Interactive tabbed Models/Settings menu |
+| `wavebench/core/orchestrator.py` | 382 | Top-level benchmark run coordinator |
+| `wavebench/__main__.py` | 371 | CLI parsing, startup mode/prompt UI, config dispatch |
+| `wavebench/core/auto_open.py` | 324 | Viewer, terminal, and tab launching |
+| `wavebench/tui/menus/model_list.py` | 313 | Interactive model list browser |
+| `wavebench/parsers.py` | 302 | Code extraction and directory naming |
+| `wavebench/tui/progress/wave.py` | 274 | Wave animation primitives |
+| `wavebench/core/runner.py` | 272 | Per-model streaming, parsing, file writing, auto-install hook |
+| `wavebench/tui/line_editor.py` | 263 | Prompt input editor |
+| `wavebench/tui/analytics/table.py` | 207 | Lifetime analytics table |
+| `wavebench/tui/input.py` | 161 | Raw keyboard input helpers |
+| `wavebench/storage.py` | 152 | JSON persistence |
+| `wavebench/core/auto_install.py` | 144 | Dependency detection and venv install helpers |
+| `wavebench/models.py` | 105 | Default models and catalog scoring |
+| `wavebench/modes/__init__.py` | 104 | Mode protocol and registry |
 
-## Data flow: a single benchmark run
+## Data flow: one benchmark run
 
-1. **`__main__.main()`** parses args, loads `.benchmark_models.json` and
-   `.benchmark_config.json` via `storage.load_*`, then picks up the user's
-   prompt (flag, interactive entry, or readline history).
-2. **`core.main_async()`** derives a directory name from the prompt
-   (`parsers.get_directory_name`, a fast LLM call), creates
-   `benchmarkResults/<dir>/prompt.txt`, and starts a `ProgressTracker`.
-3. For each selected model, **`core.process_model()`** (code mode) or
-   **`core.process_model_text()`** (text mode) is spawned as a concurrent
-   task. Each:
-   - calls **`api.call_model_streaming()`** with a progress callback that
-     feeds the `ProgressTracker`;
-   - in code mode, passes the content through **`parsers.parse_llm_output()`**
-     to extract code + language + extension;
-   - writes the output file with a unique filename
-     (`core.get_unique_filename`);
-   - returns a result dict (status, timing, file, usage).
-4. Once all models finish, `main_async` tears down the `ProgressTracker`
-   (which renders the final leaderboard), then calls
-   **`storage.record_run()`** to persist a history entry.
-5. If `--open` is active, **`core._open_files_as_tabs()`** (or the
-   single-file opener) launches the results in a terminal or viewer.
-6. If `--auto-install` is active, **`core._detect_dependencies` + `_install_packages`**
-   spin up a `.venv` inside the output dir and pip-install detected deps.
+1. **CLI / startup (`wavebench.__main__`)**
+   - Parses flags such as `--prompt`, `--mode`, `--text`, `--config`,
+     `--open`, `--auto-install`, `--stats`, and `--clear-history`.
+   - Loads `.benchmark_models.json` and `.benchmark_config.json` through
+     `storage.load_models()` / `storage.load_config()`.
+   - Starts a background OpenRouter catalog fetch for the config menu and
+     pricing lookup.
+   - If no prompt was supplied, renders the interactive Code/Text selector
+     and prompt editor.
+
+2. **Run setup (`core.orchestrator.main_async`)**
+   - Resolves the active mode: explicit `--mode`, then legacy `--text`, then
+     code mode by default. Code mode is instantiated with `allow_deps=True`
+     when auto-install is enabled.
+   - Determines default output extension (`.md` for text, `.py` for Python-ish
+     prompts, otherwise `.html`).
+   - Creates an async task for `parsers.get_directory_name()` so the output
+     directory can be prepared while model calls are starting.
+   - Starts `tui.progress.ProgressTracker` and builds any reasoning-effort
+     notices for the ticker.
+
+3. **Per-model work (`core.runner.run_model`)**
+   - Calls `mode.frame_prompt(user_prompt)`.
+   - Streams from OpenRouter through `api.call_model_streaming()` with progress
+     and retry callbacks.
+   - Passes the raw response to `mode.parse_response()`.
+   - Creates a unique filename with `get_unique_filename()` and writes the
+     parsed content into `benchmarkResults/<prompt_dir>/`.
+   - If code mode + Python output + auto-install + auto-open are enabled,
+     detects packages, ensures a `.venv` in the output directory, and installs
+     packages before opening.
+   - If `auto_open == "incremental"`, opens the artifact as soon as it is saved.
+
+4. **Finish / reporting (`core.orchestrator.main_async`)**
+   - For `auto_open == "after_all"`, opens all successful artifacts after every
+     model has finished.
+   - Stops the progress tracker, prints a fallback run-results table if needed,
+     computes estimated costs, records the run with `storage.record_run()`, and
+     renders compact lifetime analytics.
+
+## Public seams and import compatibility
+
+The package intentionally re-exports common entry points from package
+`__init__.py` files:
+
+| Import | Provided by |
+|---|---|
+| `from wavebench.core import main_async` | `wavebench/core/__init__.py` → `orchestrator.py` |
+| `from wavebench.core import run_model, get_unique_filename` | `wavebench/core/__init__.py` → `runner.py` |
+| `from wavebench.tui.progress import ProgressTracker, render_idle_wave` | `wavebench/tui/progress/__init__.py` |
+| `from wavebench.tui.analytics import compute_cost, display_analytics` | `wavebench/tui/analytics/__init__.py` |
+| `from wavebench.tui.menus import run_model_selection, run_config_menu` | `wavebench/tui/menus/__init__.py` |
+| `from wavebench.modes import MODES, Mode, ParsedOutput` | `wavebench/modes/__init__.py` |
+
+`tests/unit/test_public_api.py` is the contract test for these imports.
 
 ## Where to look for specific changes
 
 | If you want to change… | Start here |
 |---|---|
-| How models are ranked in the config menu | `models._model_score` |
-| The set of built-in themes | `tui/styles.py` (search for theme dict) |
-| How code is extracted from an LLM response | `parsers.parse_llm_output` (4 stages) |
-| The streaming SSE parser | `api.call_model_streaming._do_stream` |
-| Which reasoning-effort formats to try | `api._reasoning_attempts` |
-| The live progress bar animation | `tui/components.py::ProgressTracker._animate` |
-| The leaderboard / analytics display | `tui/components.display_analytics` |
-| The config-menu layout | `tui/interactive.interactive_config_menu` |
-| CLI flag handling | `__main__.main` |
-| What gets saved to history | `storage.record_run` |
-| Auto-open terminal detection | `core._find_terminal` + `_open_file_in_tab` |
+| CLI flags, startup mode selection, prompt history | `wavebench/__main__.py` |
+| OpenRouter request/response behavior, retries, SSE parsing | `wavebench/api.py` |
+| Reasoning-effort payload formats and per-model effort mapping | `wavebench/api.py` (`_reasoning_attempts`, `_supported_efforts`) |
+| Model catalog ranking and default model selection | `wavebench/models.py` |
+| Code extraction from model responses | `wavebench/parsers.py` and `wavebench/modes/code.py` |
+| Adding a new response mode | `wavebench/modes/` and the guide in `docs/CONTRIBUTING.md` |
+| Benchmark fan-out, output directory setup, history recording | `wavebench/core/orchestrator.py` |
+| Per-model file writing and parse-failure handling | `wavebench/core/runner.py` |
+| Auto-open terminal/viewer behavior | `wavebench/core/auto_open.py` |
+| Python dependency detection and venv install | `wavebench/core/auto_install.py` |
+| Live progress animation and model status display | `wavebench/tui/progress/tracker.py` and `wavebench/tui/progress/wave.py` |
+| Lifetime analytics table | `wavebench/tui/analytics/table.py` |
+| Cost calculation | `wavebench/tui/analytics/cost.py` |
+| Model browser menu | `wavebench/tui/menus/model_list.py` |
+| Tabbed configuration menu | `wavebench/tui/menus/config_menu.py` |
+| Themes, colors, box drawing, width helpers | `wavebench/tui/styles.py` |
+| Persistent state files | `wavebench/storage.py` |
+
+## Modes
+
+Modes are small value objects implementing `wavebench.modes.Mode`:
+
+- `CodeMode` frames prompts for dependency-free single-file code by default.
+  When auto-install is on, the orchestrator creates `CodeMode(allow_deps=True)`
+  so the prompt permits PyPI packages.
+- `TextMode` frames prompts for Markdown prose and saves the raw response as
+  `.md`.
+
+A mode must provide:
+
+```python
+def frame_prompt(self, user_prompt: str) -> str: ...
+def parse_response(self, raw: str) -> ParsedOutput: ...
+```
+
+Registered modes are available through `wavebench --mode <name>`. The current
+interactive startup selector displays Code/Text explicitly; add key handling in
+`__main__.py` if a new mode should appear there.
 
 ## Persistent state
 
-Three gitignored JSON files in the working directory:
+WaveBench stores local state in the current working directory:
 
-- `.benchmark_models.json` — `{short_name: openrouter_id}` mapping
-- `.benchmark_config.json` — `{theme, reasoning_effort, analytics_sort, auto_open, auto_install}`
-- `.benchmark_history.json` — `{version: 1, runs: [...]}` append-only log
+| File | Contents |
+|---|---|
+| `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping |
+| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `auto_open`, `auto_install` |
+| `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
+| `.benchmark_query_history` | prompt-entry history for the interactive editor |
 
-Readline prompt history also persists in `.benchmark_query_history`.
-
-### Implicit dependency on CWD
-
-`storage.py` computes its paths via `os.getcwd()` at every call, not via
-an explicit config. This means:
-
-- Tests can isolate with `monkeypatch.chdir(tmp_path)`.
-- Running `wavebench` from a different directory writes state into *that*
-  directory — intentional for per-project separation but surprising if
-  you didn't realize.
-
-A future refactor may make paths explicit at the module boundary; tracked
-in `docs/superpowers/specs/`.
+The path helpers in `storage.py` call `os.getcwd()` at use time. This keeps
+tests easy to isolate with `monkeypatch.chdir(tmp_path)` and gives each project
+directory its own WaveBench state, but it also means running from a different
+directory uses different settings/history.
 
 ## Testing tiers
 
-| Tier | Location | Purpose | Speed |
-|---|---|---|---|
-| Unit | `tests/unit/` | pure functions | milliseconds |
-| Integration | `tests/integration/` | real code paths, mocked collaborators | tens of ms |
-| Characterization | `tests/characterization/` | scaffolding for refactors | varies |
+| Tier | Location | Purpose |
+|---|---|---|
+| Unit | `tests/unit/` | Pure functions, mode behavior, storage round-trips, public imports |
+| Integration | `tests/integration/` | Mocked OpenRouter/SSE behavior through real API-client code paths |
+| Characterization | `tests/characterization/` | Contract tests around refactor-sensitive seams such as core, menus, and progress |
 
 Fixtures in `tests/conftest.py`:
-- `tmp_state_dir` — isolated working directory for storage tests.
-- `isolated_env` — scrubs `OPENROUTER_API_KEY` from env.
 
-Pytest's own `capsys` / `caplog` / `monkeypatch` / `tmp_path` are the
-preferred tools for output capture, env/attr patching, and temp files.
+- `tmp_state_dir` — changes CWD to a temporary directory for state-file tests.
+- `isolated_env` — removes `OPENROUTER_API_KEY` from the environment.
 
-## Design documents
+Use pytest's built-in `capsys`, `monkeypatch`, and `tmp_path` for output,
+patching, and temporary files.
 
-Active specs live in `docs/superpowers/specs/`:
-
-- `2026-04-11-model-attribution-design.md` — auto-open artifact attribution
-- `2026-04-22-maintainability-foundation-design.md` — current three-phase
-  refactor: Foundation → Decompose → Modes
-
-Read the spec before touching a file it names; it explains the boundaries
-being preserved and what the end state looks like.
+This architecture document is the authoritative map of the current codebase.

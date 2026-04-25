@@ -35,7 +35,6 @@ extend-exclude = [
     "venv",
     "build",
     "benchmarkResults",
-    ".superpowers",
     "scripts",            # ad-hoc audit helpers; not part of the package
 ]
 
