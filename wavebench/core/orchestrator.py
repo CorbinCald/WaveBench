@@ -16,7 +16,7 @@ from typing import Any
 import aiohttp
 
 import wavebench.tui.styles as _styles
-from wavebench.api import _map_effort, _supported_efforts
+from wavebench.api import _is_effort_naming_bridge, _map_effort, _supported_efforts
 from wavebench.modes import MODES, Mode
 from wavebench.modes.code import CodeMode
 from wavebench.parsers import get_directory_name
@@ -167,7 +167,9 @@ async def main_async(
                 )
             else:
                 mapped = _map_effort(reasoning_effort, supported)
-                if mapped != reasoning_effort:
+                if mapped != reasoning_effort and not _is_effort_naming_bridge(
+                    model_id, reasoning_effort, mapped
+                ):
                     effort_ticker_msgs.append(f"{short_id}: effort {reasoning_effort} → {mapped}")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
