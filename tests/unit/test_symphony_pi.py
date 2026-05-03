@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import shlex
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from symphony.agent import PiRpcClient
-from symphony.models import Issue, PiConfig
+from symphony.agent import PiRpcClient, _build_turn_prompt
+from symphony.models import Issue, IssueComment, PiConfig
 
 
 @pytest.mark.asyncio
@@ -98,3 +99,29 @@ for line in sys.stdin:
         "output_tokens": 5,
         "total_tokens": 16,
     }
+
+
+def test_build_turn_prompt_appends_latest_linear_comments() -> None:
+    issue = Issue(
+        id="1",
+        identifier="WB-1",
+        title="Test",
+        state="Todo",
+        comments=[
+            IssueComment(
+                id="comment-1",
+                body="TTS fails for multiple providers.",
+                author="Corbin",
+                url="https://linear.app/comment-1",
+                created_at=datetime(2026, 5, 3, 12, 0, tzinfo=UTC),
+            )
+        ],
+    )
+
+    prompt = _build_turn_prompt("Issue {{ issue.identifier }}", issue, None, 1)
+
+    assert "Issue WB-1" in prompt
+    assert "Linear comments (latest first, max 12):" in prompt
+    assert "--- comment 1 | 2026-05-03T12:00:00+00:00 | Corbin | https://linear.app/comment-1 ---" in prompt
+    assert "TTS fails for multiple providers." in prompt
+    assert prompt.rstrip().endswith("--- end comment ---")
