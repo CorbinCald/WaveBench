@@ -65,9 +65,9 @@ Work only inside the provided per-issue workspace.
 
 ## Linear control
 
-Use Linear for comments, blockers, handoff notes, and evidence links.
+Use Linear for comments, blockers, handoff notes, and evidence links. If the last user comment is a question, answer it and end your turn.
 
-## Required operating procedure
+## Project Work Procedures
 
 1. Read `AGENTS.md` and any relevant skill under `.agents/skills/` before making changes. Use the `write-linear` skill for Linear comments, blockers, handoff notes, and evidence links. Use the `interactive-verification` skill when interactive validation or a final demo would help review.
 2. Inspect the issue, repository state, and current workspace diff. If there are existing changes, preserve and build on them instead of restarting.
