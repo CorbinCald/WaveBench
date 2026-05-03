@@ -236,11 +236,17 @@ def test_tts_voice_for_model_maps_default_to_provider_voice(
     assert tts_voice_for_model(model_id, "alloy") == expected_voice
 
 
-def test_tts_response_format_for_model_uses_provider_supported_format() -> None:
+def test_tts_response_format_for_model_maps_default_to_provider_supported_format() -> None:
     assert tts_response_format_for_model("google/gemini-3.1-flash-tts-preview", "mp3") == "pcm"
-    assert tts_response_format_for_model("mistralai/voxtral-mini-tts-2603", "pcm") == "mp3"
-    assert tts_response_format_for_model("zyphra/zonos-v0.1-hybrid", "pcm") == "mp3"
+    assert tts_response_format_for_model("mistralai/voxtral-mini-tts-2603", "mp3") == "mp3"
+    assert tts_response_format_for_model("zyphra/zonos-v0.1-hybrid", "mp3") == "mp3"
     assert tts_response_format_for_model("openai/gpt-4o-mini-tts-2025-12-15", "mp3") == "mp3"
+
+
+def test_tts_response_format_for_model_preserves_explicit_format() -> None:
+    assert tts_response_format_for_model("google/gemini-3.1-flash-tts-preview", "wav") == "wav"
+    assert tts_response_format_for_model("mistralai/voxtral-mini-tts-2603", "pcm") == "pcm"
+    assert tts_response_format_for_model("zyphra/zonos-v0.1-hybrid", "pcm") == "pcm"
 
 
 def test_tts_voice_for_model_preserves_explicit_voice() -> None:

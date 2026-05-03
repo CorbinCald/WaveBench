@@ -104,7 +104,14 @@ def tts_voice_for_model(model_id: str, configured_voice: str) -> str:
 
 
 def tts_response_format_for_model(model_id: str, configured_format: str) -> str:
-    """Return a response format accepted by known OpenRouter TTS providers."""
+    """Return a response format accepted by known OpenRouter TTS providers.
+
+    The app's default TTS format is OpenAI's ``mp3``. When benchmarking known
+    non-OpenAI TTS models, map that default to a provider-supported format.
+    Explicit user formats pass through unchanged.
+    """
+    if configured_format != "mp3":
+        return configured_format
     lower = model_id.lower()
     for marker, response_format in _DEFAULT_TTS_FORMAT_BY_MARKER:
         if marker in lower:

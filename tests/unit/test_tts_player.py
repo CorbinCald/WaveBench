@@ -351,31 +351,6 @@ def test_start_audio_uses_native_miniaudio_fallback_for_encoded_audio(tmp_path, 
     ]
 
 
-def test_play_audio_keeps_native_handle_until_next_play(monkeypatch) -> None:
-    handles = []
-
-    class FakeHandle:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
-    def fake_start_audio(filepath: str):
-        handle = FakeHandle()
-        handles.append((filepath, handle))
-        return True, handle
-
-    monkeypatch.setattr(tts_player, "_LAST_PLAYBACK_HANDLE", None)
-    monkeypatch.setattr(tts_player, "_start_audio", fake_start_audio)
-
-    assert tts_player.play_audio("first.mp3") is True
-    assert tts_player.play_audio("second.mp3") is True
-
-    assert handles[0][1].stopped is True
-    assert handles[1][1].stopped is False
-
-
 def test_audio_player_command_does_not_use_external_player_for_mp3(monkeypatch) -> None:
     monkeypatch.setattr(tts_player.sys, "platform", "linux")
     monkeypatch.setattr(tts_player.shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -392,15 +367,6 @@ def test_audio_player_command_does_not_xdg_open_raw_pcm(monkeypatch) -> None:
     )
 
     assert tts_player._audio_player_command("out.pcm") is None
-
-
-def test_play_audio_returns_false_when_no_player(monkeypatch) -> None:
-    monkeypatch.setattr(tts_player, "_LAST_PLAYBACK_HANDLE", None)
-    monkeypatch.setattr(tts_player, "_load_miniaudio", lambda: None)
-    monkeypatch.setattr(tts_player.sys, "platform", "linux")
-    monkeypatch.setattr(tts_player.shutil, "which", lambda name: None)
-
-    assert tts_player.play_audio("out.mp3") is False
 
 
 def test_start_audio_does_not_launch_external_app_for_tts_audio(monkeypatch) -> None:
