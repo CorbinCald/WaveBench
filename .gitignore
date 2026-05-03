@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 benchmarkResults/
+.symphony/
 .DS_Store
 .benchmark_history.json
 .benchmark_config.json
