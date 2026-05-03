@@ -9,8 +9,9 @@ Internal organization:
   - ``auto_open``     — terminal/viewer/tab launching
   - ``auto_install``  — dep detection + per-output-dir venv management
 
-Response modes (``CodeMode``, ``TextMode``) live in ``wavebench.modes``;
-see ``docs/CONTRIBUTING.md`` for the "Adding a new mode" walkthrough.
+Response modes (``CodeMode``, ``TextMode``, ``TTSMode``) live in
+``wavebench.modes``; see ``docs/CONTRIBUTING.md`` for the "Adding a new mode"
+walkthrough.
 """
 
 from .auto_install import (

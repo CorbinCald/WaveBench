@@ -9,6 +9,7 @@ Key entry points:
   - ``load_api_key()``  — env var or ``.env`` file lookup
   - ``call_model_async()``  — non-streaming completion
   - ``call_model_streaming()``  — SSE completion with progress callback
+  - ``call_tts_speech()``  — raw audio generation via /audio/speech
   - ``fetch_top_models()``  — sync catalog fetch for the config menu
 """
 
@@ -751,6 +752,82 @@ async def call_model_streaming(
     raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
 
 
+async def call_tts_speech(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    model_id: str,
+    input_text: str,
+    voice: str = "alloy",
+    response_format: str = "mp3",
+    speed: float | None = 1.0,
+    on_progress: Callable[[int], None] | None = None,
+    on_retry: RetryCallback | None = None,
+) -> tuple[bytes, dict]:
+    """Generate speech audio via OpenRouter's OpenAI-compatible TTS endpoint.
+
+    Returns ``(audio_bytes, usage)``. The endpoint returns raw audio rather
+    than JSON, so usage is a lightweight local metadata dict containing input
+    character count, output byte count, and the optional generation id header.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Title": "Benchmark Script",
+    }
+    data: dict[str, Any] = {
+        "model": model_id,
+        "input": input_text,
+        "voice": voice,
+        "response_format": response_format,
+    }
+    if speed is not None:
+        data["speed"] = speed
+
+    last_status = 0
+    last_err = ""
+    for attempt in range(1, _MAX_RETRIES + 2):
+        retry_wait_s: float | None = None
+        async with session.post(f"{API_URL}/audio/speech", headers=headers, json=data) as resp:
+            if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
+                last_status = resp.status
+                last_err = await resp.text()
+                retry_wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)
+                if on_retry:
+                    on_retry(last_status, attempt, _MAX_RETRIES, retry_wait_s)
+            elif resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+            else:
+                chunks: list[bytes] = []
+                total_bytes = 0
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    if on_progress:
+                        on_progress(total_bytes)
+
+                audio = b"".join(chunks)
+                if not audio:
+                    raise RuntimeError("empty audio response")
+
+                usage: dict[str, Any] = {
+                    "input_characters": len(input_text),
+                    "audio_bytes": total_bytes,
+                }
+                generation_id = resp.headers.get("X-Generation-Id")
+                if generation_id:
+                    usage["generation_id"] = generation_id
+                return audio, usage
+
+        if retry_wait_s is not None:
+            await asyncio.sleep(retry_wait_s)
+            continue
+
+    raise RuntimeError(f"HTTP {last_status}: {last_err[:120].strip()}")
+
+
 def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch models from OpenRouter, returning (top_for_menu, pricing_lookup).
 
@@ -760,7 +837,7 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
     the user's config).
     """
     req = urllib.request.Request(
-        f"{API_URL}/models",
+        f"{API_URL}/models?output_modalities=all",
         headers={"Authorization": f"Bearer {api_key}"},
     )
     try:
@@ -780,19 +857,23 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
         if mid:
             pricing_lookup[mid] = m.get("pricing", {})
 
-    # Filter candidates for the menu
+    # Filter candidates for the menu. Include regular text-output models plus
+    # speech-output models so TTS models can be selected from the same browser.
     seen_slugs = set()
     filtered = []
+    speech_filtered = []
     for m in all_models:
         mid = m.get("id", "")
         arch = m.get("architecture", {})
         out_mods = arch.get("output_modalities") or []
         in_mods = arch.get("input_modalities") or []
+        has_text_output = "text" in out_mods
+        has_speech_output = "speech" in out_mods
 
-        # Must accept text input and produce text output
-        if "text" not in in_mods or "text" not in out_mods:
+        # Must accept text input and produce either text or speech output.
+        if "text" not in in_mods or not (has_text_output or has_speech_output):
             continue
-        # Skip audio / image output models
+        # Skip image/audio-output models; dedicated TTS models advertise speech.
         if "audio" in out_mods or "image" in out_mods:
             continue
         # Skip :free duplicate variants (keep the paid original)
@@ -811,8 +892,16 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
             continue
         seen_slugs.add(slug)
 
-        filtered.append(m)
+        if has_speech_output:
+            speech_filtered.append(m)
+        else:
+            filtered.append(m)
 
-    # Sort by popularity score descending
+    # Sort by popularity score descending. Reserve a small slice for speech
+    # models so the config menu exposes TTS choices even when the text catalog
+    # has more than *count* high-scoring entries.
     filtered.sort(key=_model_score, reverse=True)
-    return filtered[:count], pricing_lookup
+    speech_filtered.sort(key=_model_score, reverse=True)
+    speech_count = min(len(speech_filtered), count, 20)
+    text_count = max(0, count - speech_count)
+    return filtered[:text_count] + speech_filtered[:speech_count], pricing_lookup

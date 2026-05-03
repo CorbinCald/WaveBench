@@ -28,7 +28,9 @@ class TextMode:
     def frame_prompt(self, user_prompt: str) -> str:
         return f"{_SYSTEM_PROMPT_TEXT}\n\nQuestion: {user_prompt}"
 
-    def parse_response(self, raw: str) -> ParsedOutput:
+    def parse_response(self, raw: str | bytes) -> ParsedOutput:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
         if not raw or not raw.strip():
             return ParsedOutput(
                 content="",
