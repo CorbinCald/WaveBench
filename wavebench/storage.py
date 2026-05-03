@@ -71,6 +71,9 @@ def load_config() -> dict[str, Any]:
         "auto_open": "off",
         "auto_install": "off",
         "directory_naming": "llm",
+        "tts_voice": "alloy",
+        "tts_format": "mp3",
+        "tts_speed": 1.0,
     }
     if os.path.exists(path):
         try:

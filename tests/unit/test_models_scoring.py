@@ -23,8 +23,12 @@ from wavebench.models import (
     _TIER1_PROVIDERS,
     _TIER2_PROVIDERS,
     MODEL_MAPPING,
+    TTS_MODEL_MAPPING,
     _model_score,
     is_stealth,
+    is_tts_model,
+    tts_response_format_for_model,
+    tts_voice_for_model,
 )
 
 # A ``created`` timestamp 5 years in the past — well past any recency bonus
@@ -184,6 +188,74 @@ def test_context_length_below_32k_gets_no_bonus() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TTS model classification
+# ---------------------------------------------------------------------------
+
+
+def test_is_tts_model_detects_tts_slugs() -> None:
+    assert is_tts_model("openai/gpt-4o-mini-tts-2025-12-15")
+    assert is_tts_model("mistralai/voxtral-mini-tts-2603")
+    assert is_tts_model("vendor/speech-synth")
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "google/gemini-3.1-flash-tts-preview",
+        "zyphra/zonos-v0.1-transformer",
+        "zyphra/zonos-v0.1-hybrid",
+        "sesame/csm-1b",
+        "canopylabs/orpheus-3b-0.1-ft",
+        "hexgrad/kokoro-82m",
+    ],
+)
+def test_is_tts_model_detects_current_openrouter_speech_models(model_id: str) -> None:
+    assert is_tts_model(model_id)
+
+
+def test_is_tts_model_false_for_text_model() -> None:
+    assert not is_tts_model("anthropic/claude-opus-4.6")
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected_voice"),
+    [
+        ("google/gemini-3.1-flash-tts-preview", "Kore"),
+        ("mistralai/voxtral-mini-tts-2603", "en_paul_neutral"),
+        ("zyphra/zonos-v0.1-hybrid", "american_female"),
+        ("zyphra/zonos-v0.1-transformer", "american_female"),
+        ("sesame/csm-1b", "conversational_a"),
+        ("canopylabs/orpheus-3b-0.1-ft", "tara"),
+        ("hexgrad/kokoro-82m", "af_alloy"),
+    ],
+)
+def test_tts_voice_for_model_maps_default_to_provider_voice(
+    model_id: str,
+    expected_voice: str,
+) -> None:
+    assert tts_voice_for_model(model_id, "alloy") == expected_voice
+
+
+def test_tts_response_format_for_model_maps_default_to_provider_supported_format() -> None:
+    assert tts_response_format_for_model("google/gemini-3.1-flash-tts-preview", "mp3") == "pcm"
+    assert tts_response_format_for_model("mistralai/voxtral-mini-tts-2603", "mp3") == "mp3"
+    assert tts_response_format_for_model("zyphra/zonos-v0.1-hybrid", "mp3") == "mp3"
+    assert tts_response_format_for_model("openai/gpt-4o-mini-tts-2025-12-15", "mp3") == "mp3"
+
+
+def test_tts_response_format_for_model_preserves_explicit_format() -> None:
+    assert tts_response_format_for_model("google/gemini-3.1-flash-tts-preview", "wav") == "wav"
+    assert tts_response_format_for_model("mistralai/voxtral-mini-tts-2603", "pcm") == "pcm"
+    assert tts_response_format_for_model("zyphra/zonos-v0.1-hybrid", "pcm") == "pcm"
+
+
+def test_tts_voice_for_model_preserves_explicit_voice() -> None:
+    assert tts_voice_for_model("google/gemini-3.1-flash-tts-preview", "Puck") == "Puck"
+    assert tts_voice_for_model("mistralai/voxtral-mini-tts-2603", "gb_oliver_neutral") == "gb_oliver_neutral"
+    assert tts_voice_for_model("openai/gpt-4o-mini-tts-2025-12-15", "nova") == "nova"
+
+
+# ---------------------------------------------------------------------------
 # MODEL_MAPPING sanity
 # ---------------------------------------------------------------------------
 
@@ -195,6 +267,16 @@ def test_model_mapping_has_expected_shape() -> None:
     for short_name, full_id in MODEL_MAPPING.items():
         assert isinstance(short_name, str) and short_name
         assert isinstance(full_id, str) and "/" in full_id
+
+
+def test_tts_model_mapping_has_expected_shape() -> None:
+    assert isinstance(TTS_MODEL_MAPPING, dict)
+    assert len(TTS_MODEL_MAPPING) > 0
+    assert TTS_MODEL_MAPPING["voxtralMiniTts2603"] == "mistralai/voxtral-mini-tts-2603"
+    for short_name, full_id in TTS_MODEL_MAPPING.items():
+        assert isinstance(short_name, str) and short_name
+        assert isinstance(full_id, str) and "/" in full_id
+        assert is_tts_model(full_id)
 
 
 def test_tier_sets_are_disjoint() -> None:

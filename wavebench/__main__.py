@@ -3,7 +3,7 @@
 Parses command-line arguments, loads persistent state (models + config),
 dispatches to either ``core.main_async()`` for a benchmark run or the
 interactive config menu, and prints lifetime analytics on ``--stats``.
-Supports the interactive mode-select screen at startup (Code / Text / config).
+Supports the interactive mode-select screen at startup (Code / Text / TTS / config).
 """
 
 import argparse
@@ -21,7 +21,7 @@ except ImportError:
 import wavebench.tui.styles as _styles
 from wavebench.api import fetch_top_models, load_api_key
 from wavebench.core import main_async
-from wavebench.models import MODEL_MAPPING
+from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING, is_tts_model
 from wavebench.storage import (
     _history_path,
     load_config,
@@ -105,6 +105,19 @@ def main() -> None:
         action="store_true",
         help="Alias for --mode text (kept for backward compatibility).",
     )
+    parser.add_argument("--tts-voice", type=str, default=None, help="Voice for --mode tts")
+    parser.add_argument(
+        "--tts-format",
+        choices=["mp3", "pcm"],
+        default=None,
+        help="Audio format for --mode tts (default: mp3)",
+    )
+    parser.add_argument(
+        "--tts-speed",
+        type=float,
+        default=None,
+        help="Playback speed multiplier for TTS providers that support it",
+    )
     parser.add_argument("--stats", action="store_true", help="Show lifetime analytics and exit")
     parser.add_argument("--clear-history", action="store_true", help="Reset analytics history")
     parser.add_argument(
@@ -120,7 +133,7 @@ def main() -> None:
         dest="auto_open",
         choices=["incremental", "after_all"],
         default=None,
-        help="Auto-open generated files (incremental or after_all)",
+        help="Auto-open generated code/text files (incremental or after_all; TTS uses browser)",
     )
     parser.add_argument(
         "--auto-install",
@@ -202,14 +215,15 @@ def main() -> None:
 
     # ── Interactive prompt ─────────────────────────────────────────────────
     if not args.prompt:
-        text_from_cli = args.text
+        mode_from_cli = args.mode is not None or args.text
 
         def _print_mode_menu() -> None:
             active = selected_models if selected_models is not None else MODEL_MAPPING
             w = _tw() - 4
             row = (
                 f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
-                f"{_styles.ACCENT}[2]{S.RST} Text"
+                f"{_styles.ACCENT}[2]{S.RST} Text  "
+                f"{_styles.ACCENT}[3]{S.RST} TTS"
                 f"  {_dot}  "
                 f"{S.DIM}{len(active)} models{S.RST}  "
                 f"{_styles.ACCENT}[c]{S.RST} config"
@@ -247,10 +261,10 @@ def main() -> None:
         _refresh_header()
 
         while True:
-            text_mode = text_from_cli
+            mode_name = args.mode or ("text" if args.text else "code")
 
-            # ── Mode selection (skip if --text was passed on CLI) ─────
-            if not text_from_cli:
+            # ── Mode selection (skip if --mode/--text was passed on CLI) ────
+            if not mode_from_cli:
                 _print_mode_menu()
                 mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                 sys.stdout.write(mode_prompt)
@@ -297,15 +311,33 @@ def main() -> None:
                         continue
                     if key == "2":
                         sys.stdout.write("2\n")
-                        text_mode = True
+                        mode_name = "text"
+                        mode_done = True
+                    elif key == "3":
+                        sys.stdout.write("3\n")
+                        mode_name = "tts"
                         mode_done = True
                     elif key == "1":
                         sys.stdout.write("1\n")
+                        mode_name = "code"
                         mode_done = True
                 sys.stdout.write("\033[4A\r\033[J")
                 sys.stdout.flush()
 
-            active = selected_models if selected_models is not None else MODEL_MAPPING
+            if mode_name == "tts":
+                if selected_models is None:
+                    active = TTS_MODEL_MAPPING
+                else:
+                    active = {n: m for n, m in selected_models.items() if is_tts_model(m)}
+                    if not active:
+                        active = TTS_MODEL_MAPPING
+            else:
+                if selected_models is None:
+                    active = MODEL_MAPPING
+                else:
+                    active = {n: m for n, m in selected_models.items() if not is_tts_model(m)}
+                    if not active:
+                        active = MODEL_MAPPING
             names = list(active.keys())
             summary = ", ".join(names[:6])
             if len(names) > 6:
@@ -337,7 +369,7 @@ def main() -> None:
             except _TabEscape:
                 sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J")
                 sys.stdout.flush()
-                if text_from_cli:
+                if mode_from_cli:
                     return
                 _refresh_header()
                 continue
@@ -347,7 +379,8 @@ def main() -> None:
                 print(f"  {S.DIM}Interrupted.{S.RST}\n")
                 return
             args.prompt = user_prompt.strip()
-            args.text = text_mode
+            args.mode = mode_name
+            args.text = mode_name == "text"
             break
     else:
         print()

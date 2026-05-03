@@ -1,8 +1,9 @@
 """Per-model benchmark runner and the filename utility it shares.
 
 ``run_model`` is the single mode-parameterized driver that streams an
-LLM response, parses it via the supplied :class:`~wavebench.modes.Mode`,
-writes the output file, and (for code mode) optionally detects Python
+LLM response (or TTS audio bytes), parses it via the supplied
+:class:`~wavebench.modes.Mode`, writes the output file, and (for code mode)
+optionally detects Python
 dependencies and installs them into a shared per-output-dir venv.
 
 Previously this module held a ``process_model`` / ``process_model_text``
@@ -24,8 +25,9 @@ from typing import Any
 
 import aiohttp
 
-from wavebench.api import call_model_streaming
-from wavebench.modes import Mode
+from wavebench.api import call_model_streaming, call_tts_speech
+from wavebench.models import tts_response_format_for_model, tts_voice_for_model
+from wavebench.modes import Mode, ParsedOutput
 from wavebench.tui.styles import (
     S,
     _arrow,
@@ -86,12 +88,12 @@ async def run_model(
 
     ``mode.frame_prompt`` wraps *user_prompt* with mode-specific
     instructions; ``mode.parse_response`` converts the raw streamed
-    response into a :class:`~wavebench.modes.ParsedOutput` whose
+    response/audio into a :class:`~wavebench.modes.ParsedOutput` whose
     ``extension`` drives the saved file's suffix.
 
     When ``mode.name == "code"`` AND ``auto_install == "on"`` AND the
     parsed extension is ``py``, dependency detection + venv setup fire
-    as before. Text mode skips that branch entirely.
+    as before. Text and TTS modes skip that branch entirely.
     """
     start = time.monotonic()
     registered = tracker.is_running
@@ -102,9 +104,10 @@ async def run_model(
         print(f"  {_wait} {model_name:<{pad}}  {S.DIM}calling {model_id}…{S.RST}")
 
     framed_prompt = mode.frame_prompt(user_prompt)
-    content: str | None = None
+    content: str | bytes | None = None
     usage: dict = {}
     retry_events: list[dict[str, Any]] = []
+    effective_tts_format = getattr(mode, "response_format", "mp3")
 
     try:
         async with semaphore:
@@ -126,15 +129,32 @@ async def run_model(
                         f"{S.DIM}retry {attempt}/{max_attempts} in {wait_s:.1f}s{S.RST}"
                     )
 
-            content, usage = await call_model_streaming(
-                session,
-                api_key,
-                model_id,
-                framed_prompt,
-                reasoning_effort=reasoning_effort,
-                on_progress=_on_progress,
-                on_retry=_on_retry,
-            )
+            if mode.name == "tts":
+                effective_tts_format = tts_response_format_for_model(
+                    model_id,
+                    getattr(mode, "response_format", "mp3"),
+                )
+                content, usage = await call_tts_speech(
+                    session,
+                    api_key,
+                    model_id,
+                    framed_prompt,
+                    voice=tts_voice_for_model(model_id, getattr(mode, "voice", "alloy")),
+                    response_format=effective_tts_format,
+                    speed=getattr(mode, "speed", 1.0),
+                    on_progress=_on_progress,
+                    on_retry=_on_retry,
+                )
+            else:
+                content, usage = await call_model_streaming(
+                    session,
+                    api_key,
+                    model_id,
+                    framed_prompt,
+                    reasoning_effort=reasoning_effort,
+                    on_progress=_on_progress,
+                    on_retry=_on_retry,
+                )
 
     except asyncio.CancelledError:
         elapsed = time.monotonic() - start
@@ -230,6 +250,12 @@ async def run_model(
 
     try:
         parsed = mode.parse_response(content)
+        if mode.name == "tts" and parsed.parse_ok:
+            parsed = ParsedOutput(
+                content=parsed.content,
+                extension=effective_tts_format,
+                parse_ok=True,
+            )
 
         if not parsed.parse_ok:
             elapsed = time.monotonic() - start
@@ -253,8 +279,12 @@ async def run_model(
         filename = get_unique_filename(output_dir, model_name, ext)
         filepath = os.path.join(output_dir, filename)
 
-        with open(filepath, "w", encoding="utf-8") as fh:
-            fh.write(parsed.content)
+        if isinstance(parsed.content, bytes):
+            with open(filepath, "wb") as fh:
+                fh.write(parsed.content)
+        else:
+            with open(filepath, "w", encoding="utf-8") as fh:
+                fh.write(parsed.content)
 
         # Code-mode dependency auto-install lives here rather than inside
         # the Mode itself so orchestrator-level config (auto_install,
