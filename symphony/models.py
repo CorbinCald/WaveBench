@@ -17,6 +17,21 @@ class BlockerRef:
 
 
 @dataclass(slots=True)
+class IssueComment:
+    id: str
+    body: str
+    author: str | None = None
+    url: str | None = None
+    created_at: datetime | None = None
+
+    def to_template_data(self) -> dict[str, Any]:
+        data = asdict(self)
+        if isinstance(self.created_at, datetime):
+            data["created_at"] = self.created_at.isoformat()
+        return data
+
+
+@dataclass(slots=True)
 class Issue:
     id: str
     identifier: str
@@ -28,6 +43,7 @@ class Issue:
     url: str | None = None
     labels: list[str] = field(default_factory=list)
     blocked_by: list[BlockerRef] = field(default_factory=list)
+    comments: list[IssueComment] = field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -37,6 +53,7 @@ class Issue:
             value = data[key]
             if isinstance(value, datetime):
                 data[key] = value.isoformat()
+        data["comments"] = [comment.to_template_data() for comment in self.comments]
         return data
 
 
