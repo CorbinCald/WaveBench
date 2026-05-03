@@ -19,6 +19,7 @@ import wavebench.tui.styles as _styles
 from wavebench.api import _is_effort_naming_bridge, _map_effort, _supported_efforts
 from wavebench.modes import MODES, Mode
 from wavebench.modes.code import CodeMode
+from wavebench.modes.tts import TTSMode
 from wavebench.parsers import get_directory_name
 from wavebench.storage import load_history, record_run
 from wavebench.tui.analytics import compute_cost, display_analytics
@@ -58,21 +59,42 @@ MAX_CONCURRENCY = 12
 REQUEST_TIMEOUT = 1800  # seconds
 
 
-def _resolve_mode(args: Any, auto_install: str) -> Mode:
+def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = None) -> Mode:
     """Pick the :class:`Mode` for this run based on CLI args and config.
 
     Precedence: explicit ``--mode <name>`` wins; falls back to the
     legacy ``--text`` flag (→ text mode) or defaults to code mode. When
     code mode is selected and ``auto_install == "on"``, a fresh
     ``CodeMode(allow_deps=True)`` is constructed so the system prompt
-    permits third-party packages.
+    permits third-party packages. TTS mode is constructed with configured
+    voice/format/speed.
     """
+    config = config or {}
+
+    def _configured_tts_mode() -> TTSMode:
+        voice = getattr(args, "tts_voice", None) or config.get("tts_voice", "alloy")
+        response_format = getattr(args, "tts_format", None) or config.get("tts_format", "mp3")
+        speed_raw = getattr(args, "tts_speed", None)
+        if speed_raw is None:
+            speed_raw = config.get("tts_speed", 1.0)
+        try:
+            speed = float(speed_raw)
+        except (TypeError, ValueError):
+            speed = 1.0
+        return TTSMode(
+            voice=str(voice or "alloy"),
+            response_format=str(response_format or "mp3"),
+            speed=speed,
+        )
+
     explicit = getattr(args, "mode", None)
     if explicit:
         mode = MODES.get(explicit)
         if mode is not None:
             if mode.name == "code" and auto_install == "on":
                 return CodeMode(allow_deps=True)
+            if mode.name == "tts":
+                return _configured_tts_mode()
             return mode
 
     if getattr(args, "text", False):
@@ -88,10 +110,7 @@ async def main_async(
     config: dict[str, Any] | None = None,
     pricing_lookup: dict[str, Any] | None = None,
 ) -> None:
-    from wavebench.models import MODEL_MAPPING
-
-    mapping = model_mapping if model_mapping is not None else MODEL_MAPPING
-    pad = max((len(n) for n in mapping), default=12) + 1
+    from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING, is_tts_model
 
     if config is None:
         from wavebench.storage import load_config
@@ -114,10 +133,34 @@ async def main_async(
     _reset_incremental_tabs()
 
     user_prompt = args.prompt
-    mode = _resolve_mode(args, auto_install)
+    mode = _resolve_mode(args, auto_install, config)
     text_mode = mode.name == "text"
+    tts_mode = mode.name == "tts"
+    if tts_mode:
+        reasoning_effort = None
+        # Avoid launching every generated audio file when a user has auto-open
+        # enabled for code/text runs; TTS has its own post-run browser/player.
+        auto_open = "off"
 
-    if text_mode:
+    if tts_mode:
+        if model_mapping is None:
+            mapping = TTS_MODEL_MAPPING
+        else:
+            mapping = {name: mid for name, mid in model_mapping.items() if is_tts_model(mid)}
+            if not mapping:
+                mapping = TTS_MODEL_MAPPING
+    else:
+        if model_mapping is None:
+            mapping = MODEL_MAPPING
+        else:
+            mapping = {name: mid for name, mid in model_mapping.items() if not is_tts_model(mid)}
+            if not mapping:
+                mapping = MODEL_MAPPING
+    pad = max((len(n) for n in mapping), default=12) + 1
+
+    if tts_mode:
+        default_ext = f".{getattr(mode, 'response_format', 'mp3')}"
+    elif text_mode:
         default_ext = ".md"
     else:
         default_ext = (
@@ -126,7 +169,7 @@ async def main_async(
 
     targets = list(mapping.items())
     if not targets:
-        print(f"  {_fail} No models configured in MODEL_MAPPING.")
+        print(f"  {_fail} No models configured.")
         return
 
     mode_label = (
@@ -152,7 +195,23 @@ async def main_async(
     )
     print(_box_divider(w, heavy=True))
     print(_box_row(f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active", w, heavy=True))
-    print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
+    if tts_mode:
+        print(
+            _box_row(
+                f"{S.DIM}{'VOICE':>8}{S.RST}  {S.HGRN}{getattr(mode, 'voice', 'alloy')}{S.RST}",
+                w,
+                heavy=True,
+            )
+        )
+        print(
+            _box_row(
+                f"{S.DIM}{'FORMAT':>8}{S.RST}  {getattr(mode, 'response_format', 'mp3')} (provider-adjusted)",
+                w,
+                heavy=True,
+            )
+        )
+    else:
+        print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
     print(_box_row(f"{S.DIM}{'NAMING':>8}{S.RST}  {directory_naming}", w, heavy=True))
     print(_box_bot(w, heavy=True))
     print()
@@ -160,7 +219,7 @@ async def main_async(
     # Build per-model effort-adjustment notices; these get scrolled as a
     # news-ticker on the summary line once the tracker starts rendering.
     effort_ticker_msgs: list = []
-    if reasoning_effort:
+    if reasoning_effort and not tts_mode:
         for _name, model_id in targets:
             supported = _supported_efforts(model_id)
             short_id = model_id.split("/", 1)[-1]
@@ -202,6 +261,8 @@ async def main_async(
             len(targets),
             results,
             pad=pad,
+            label="Synthesizing" if tts_mode else "Generating",
+            progress_unit="bytes" if tts_mode else "tokens",
             model_names=model_names,
             avg_tokens=avg_tokens,
             pricing_lookup=pricing_lookup or {},
@@ -340,9 +401,15 @@ async def main_async(
                 sym = _ok
                 usage_d = info.get("usage", {})
                 tokens = usage_d.get("total_tokens")
+                audio_bytes = usage_d.get("audio_bytes")
                 fname = info["file"]
-                tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
+                if audio_bytes:
+                    usage_part = f"  {S.DIM}{ProgressTracker._format_bytes(audio_bytes)}{S.RST}"
+                elif tokens:
+                    usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
+                else:
+                    usage_part = ""
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}"
             elif st == "cancelled":
                 sym = _skip
                 detail = f"{S.DIM}cancelled{S.RST}"
@@ -355,7 +422,7 @@ async def main_async(
                 overflow = _vlen(content) + 2 + len(t) - inner_w
                 max_fname = max(8, len(fname) - overflow)
                 fname = _truncate(fname, max_fname)
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}"
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}"
                 content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             gap = max(inner_w - _vlen(content) - len(t), 2)
             print(_box_row(f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
@@ -384,7 +451,11 @@ async def main_async(
         total_time,
         results,
         costs=run_costs,
-        reasoning_effort=raw_effort,
+        reasoning_effort=raw_effort if not tts_mode else None,
     )
     display_analytics(history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs"))
+    if tts_mode and output_dir_final[0]:
+        from wavebench.tui.tts_player import browse_tts_outputs
+
+        browse_tts_outputs(output_dir_final[0], results)
     print()

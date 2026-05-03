@@ -53,6 +53,14 @@ def test_compute_cost_returns_none_for_zero_cost() -> None:
     assert compute_cost(usage, pricing) is None
 
 
+def test_compute_cost_handles_tts_input_characters() -> None:
+    from wavebench.tui.analytics import compute_cost
+
+    usage = {"input_characters": 120}
+    pricing = {"prompt": "0.000001", "request": "0.01"}
+    assert compute_cost(usage, pricing) == pytest.approx(120 * 0.000001 + 0.01)
+
+
 def test_compute_cost_handles_invalid_pricing_strings() -> None:
     from wavebench.tui.analytics import compute_cost
 
@@ -107,6 +115,34 @@ def test_progress_tracker_constructs_with_minimal_args() -> None:
     tracker = ProgressTracker(total=3, results={})
     assert tracker.is_running is False
     assert tracker.rendered_final is False
+
+
+def test_progress_tracker_accepts_byte_progress_unit() -> None:
+    from wavebench.tui.progress import ProgressTracker
+
+    tracker = ProgressTracker(total=1, results={}, progress_unit="bytes")
+    tracker.register("tts_model")
+    tracker.update("tts_model", 4096)
+    tracker.unregister("tts_model")
+
+
+def test_progress_tracker_result_row_formats_audio_bytes() -> None:
+    from wavebench.tui.progress import ProgressTracker
+
+    tracker = ProgressTracker(total=1, results={})
+    row = tracker._format_result_row(
+        "tts_model",
+        {
+            "status": "success",
+            "time_s": 1.0,
+            "file": "tts_model.mp3",
+            "usage": {"audio_bytes": 4096},
+        },
+        rank=1,
+        inner_w=100,
+    )
+
+    assert "4.0 KiB" in row
 
 
 def test_progress_tracker_register_update_unregister() -> None:

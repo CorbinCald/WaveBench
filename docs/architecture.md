@@ -16,7 +16,7 @@ wavebench.__main__
           │
           ▼
     core.orchestrator.main_async
-      ├─ resolves CodeMode/TextMode
+      ├─ resolves CodeMode/TextMode/TTSMode
       ├─ asks parsers.get_directory_name for benchmarkResults/<dir>
       ├─ starts tui.progress.ProgressTracker
       ├─ fans out concurrent core.runner.run_model tasks
@@ -37,15 +37,16 @@ wavebench.__main__
 wavebench/
 ├── __init__.py
 ├── __main__.py                 CLI args, startup UI, state loading, dispatch
-├── api.py                      OpenRouter client, SSE parser, retries, catalog fetch
-├── models.py                   default model mapping, catalog scoring, stealth filter
+├── api.py                      OpenRouter client, SSE parser, TTS speech, retries, catalog fetch
+├── models.py                   default text/TTS mappings, catalog scoring, TTS helpers
 ├── parsers.py                  code extraction and prompt-derived directory names
 ├── storage.py                  JSON persistence for local state and analytics
 │
 ├── modes/
 │   ├── __init__.py             Mode protocol, ParsedOutput, MODES registry
 │   ├── code.py                 CodeMode prompt framing + parser wrapper
-│   └── text.py                 TextMode prompt framing + Markdown pass-through
+│   ├── text.py                 TextMode prompt framing + Markdown pass-through
+│   └── tts.py                  TTSMode prompt framing + audio-byte pass-through
 │
 ├── core/
 │   ├── __init__.py             public re-exports for core package users
@@ -59,6 +60,7 @@ wavebench/
     ├── styles.py               themes, ANSI helpers, box drawing, formatting
     ├── input.py                raw key reads, resize-aware key handling
     ├── line_editor.py          prompt editor with history/navigation
+    ├── tts_player.py           arrow-key TTS output browser/player
     ├── progress/
     │   ├── __init__.py         re-exports ProgressTracker, render_idle_wave
     │   ├── tracker.py          live multi-model progress UI
@@ -71,7 +73,7 @@ wavebench/
         ├── __init__.py         re-exports menu entry points
         ├── _shared.py          price/name/filter/layout helpers
         ├── model_list.py       model catalog browser + selection flow
-        └── config_menu.py      tabbed Models/Settings config menu
+        └── config_menu.py      tabbed Models/TTS/Settings config menu
 ```
 
 ## Current module sizes
@@ -80,10 +82,10 @@ Line counts are approximate and useful mostly for spotting oversized files:
 
 | Module | Lines | Role |
 |---|---:|---|
-| `wavebench/api.py` | 824 | OpenRouter HTTP/SSE client, reasoning-effort negotiation, model catalog |
+| `wavebench/api.py` | 880+ | OpenRouter HTTP/SSE client, TTS speech, reasoning-effort negotiation, model catalog |
 | `wavebench/tui/progress/tracker.py` | 728 | Animated progress tracker and final progress-state rendering |
 | `wavebench/tui/styles.py` | 635 | Theme definitions, ANSI helpers, box drawing, formatting |
-| `wavebench/tui/menus/config_menu.py` | 566 | Interactive tabbed Models/Settings menu |
+| `wavebench/tui/menus/config_menu.py` | 710 | Interactive tabbed Models/TTS/Settings menu |
 | `wavebench/core/orchestrator.py` | 382 | Top-level benchmark run coordinator |
 | `wavebench/__main__.py` | 371 | CLI parsing, startup mode/prompt UI, config dispatch |
 | `wavebench/core/auto_open.py` | 324 | Viewer, terminal, and tab launching |
@@ -114,7 +116,8 @@ Line counts are approximate and useful mostly for spotting oversized files:
 2. **Run setup (`core.orchestrator.main_async`)**
    - Resolves the active mode: explicit `--mode`, then legacy `--text`, then
      code mode by default. Code mode is instantiated with `allow_deps=True`
-     when auto-install is enabled.
+     when auto-install is enabled; TTS mode is instantiated with configured
+     voice/format/speed.
    - Determines default output extension (`.md` for text, `.py` for Python-ish
      prompts, otherwise `.html`).
    - Creates an async task for `parsers.get_directory_name()` so the output
@@ -126,7 +129,7 @@ Line counts are approximate and useful mostly for spotting oversized files:
 3. **Per-model work (`core.runner.run_model`)**
    - Calls `mode.frame_prompt(user_prompt)`.
    - Streams from OpenRouter through `api.call_model_streaming()` with progress
-     and retry callbacks.
+     and retry callbacks, or calls `api.call_tts_speech()` for TTS audio bytes.
    - Passes the raw response to `mode.parse_response()`.
    - Creates a unique filename with `get_unique_filename()` and writes the
      parsed content into `benchmarkResults/<prompt_dir>/`.
@@ -134,6 +137,9 @@ Line counts are approximate and useful mostly for spotting oversized files:
      detects packages, ensures a `.venv` in the output directory, and installs
      packages before opening.
    - If `auto_open == "incremental"`, opens the artifact as soon as it is saved.
+   - In TTS mode, successful audio artifacts can be browsed with arrow keys and
+     played through WaveBench's native audio backend with Enter/Space in the
+     post-run `tui.tts_player` screen, without launching an external app.
 
 4. **Finish / reporting (`core.orchestrator.main_async`)**
    - For `auto_open == "after_all"`, opens all successful artifacts after every
@@ -163,11 +169,12 @@ The package intentionally re-exports common entry points from package
 | If you want to change… | Start here |
 |---|---|
 | CLI flags, startup mode selection, prompt history | `wavebench/__main__.py` |
-| OpenRouter request/response behavior, retries, SSE parsing | `wavebench/api.py` |
+| OpenRouter request/response behavior, retries, SSE parsing, TTS speech | `wavebench/api.py` |
 | Reasoning-effort payload formats and per-model effort mapping | `wavebench/api.py` (`_reasoning_attempts`, `_supported_efforts`) |
-| Model catalog ranking and default model selection | `wavebench/models.py` |
+| Model catalog ranking, default text/TTS mappings, and TTS model/voice/format helpers | `wavebench/models.py` |
 | Code extraction from model responses | `wavebench/parsers.py` and `wavebench/modes/code.py` |
 | Adding a new response mode | `wavebench/modes/` and the guide in `docs/CONTRIBUTING.md` |
+| TTS output navigation/playback | `wavebench/tui/tts_player.py` |
 | Benchmark fan-out, output directory setup, history recording | `wavebench/core/orchestrator.py` |
 | Per-model file writing and parse-failure handling | `wavebench/core/runner.py` |
 | Auto-open terminal/viewer behavior | `wavebench/core/auto_open.py` |
@@ -189,6 +196,12 @@ Modes are small value objects implementing `wavebench.modes.Mode`:
   so the prompt permits PyPI packages.
 - `TextMode` frames prompts for Markdown prose and saves the raw response as
   `.md`.
+- `TTSMode` sends the user text to OpenRouter's `/audio/speech` endpoint,
+  saves returned audio bytes with provider-compatible extensions (`.mp3` by default
+  for OpenAI/Voxtral/Zonos and most speech models, `.pcm` for Gemini TTS), maps
+  known non-OpenAI defaults to provider voices such as Gemini `Kore`, Zonos
+  `american_female`, Voxtral `en_paul_neutral`, and Kokoro `af_alloy`, and plays
+  saved outputs through the native TTS player without launching an external app.
 
 A mode must provide:
 
@@ -207,8 +220,8 @@ WaveBench stores local state in the current working directory:
 
 | File | Contents |
 |---|---|
-| `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping |
-| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install` |
+| `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping; TTS mode filters this to TTS-capable IDs and falls back to bundled TTS defaults if none are selected |
+| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `tts_voice`, `tts_format`, `tts_speed` |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
 | `.benchmark_query_history` | prompt-entry history for the interactive editor |
 

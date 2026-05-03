@@ -79,6 +79,7 @@ class ProgressTracker:
         pricing_lookup: dict[str, Any] | None = None,
         model_id_map: dict[str, str] | None = None,
         alt_screen: bool = False,
+        progress_unit: str = "tokens",
     ):
         self._total = total
         self._results = results
@@ -104,6 +105,7 @@ class ProgressTracker:
         self._pricing_lookup = pricing_lookup or {}
         self._model_id_map = model_id_map or {}
         self._alt_screen = alt_screen and self._is_tty
+        self._progress_unit = progress_unit
         self._entered_alt_screen = False
         self._saved_termios = None
         self._wave_intensity = 0.0
@@ -187,6 +189,8 @@ class ProgressTracker:
 
     def _live_cost_for_active(self, model_name: str, chars: int) -> float | None:
         """Estimate live cost for an in-progress model from streamed chars."""
+        if self._progress_unit == "bytes":
+            return None
         pricing = self._model_pricing(model_name)
         if not pricing:
             return None
@@ -312,6 +316,15 @@ class ProgressTracker:
     # ── internal rendering ────────────────────────────────────────────────
 
     @staticmethod
+    def _format_bytes(num_bytes: float) -> str:
+        """Format byte counts for TTS audio progress."""
+        if num_bytes < 1024:
+            return f"{int(num_bytes)} B"
+        if num_bytes < 1024 * 1024:
+            return f"{num_bytes / 1024:.1f} KiB"
+        return f"{num_bytes / (1024 * 1024):.1f} MiB"
+
+    @staticmethod
     def _phase_boxes(filled: int) -> str:
         """Render a 5-stage inline progress indicator with uniform color that
         shifts from deep blue → bright neon cyan as more boxes fill."""
@@ -323,9 +336,12 @@ class ProgressTracker:
 
     def _token_boxes(self, model_name: str, chars: int) -> str:
         """Boxes based on token progress: each box = 20% of avg tokens."""
-        avg = self._avg_tokens.get(model_name, self.DEFAULT_AVG_TOKENS)
-        est_tokens = chars / 4
-        pct = min(est_tokens / max(avg, 1), 1.0)
+        if self._progress_unit == "bytes":
+            pct = min(chars / (64 * 1024), 1.0)
+        else:
+            avg = self._avg_tokens.get(model_name, self.DEFAULT_AVG_TOKENS)
+            est_tokens = chars / 4
+            pct = min(est_tokens / max(avg, 1), 1.0)
         filled = int(pct * 5)
         if pct > 0 and filled == 0:
             filled = 1
@@ -388,9 +404,15 @@ class ProgressTracker:
             sym = _ok
             usage = info.get("usage", {})
             tokens = usage.get("total_tokens")
+            audio_bytes = usage.get("audio_bytes")
             fname = info.get("file", "")
-            tk_part = f"  {S.DIM}{tokens:,} tk{S.RST}" if tokens else ""
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}{retry_s}"
+            if audio_bytes:
+                usage_part = f"  {S.DIM}{self._format_bytes(audio_bytes)}{S.RST}"
+            elif tokens:
+                usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
+            else:
+                usage_part = ""
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}"
         elif st == "cancelled":
             sym = _skip
             detail = f"{S.DIM}cancelled{S.RST}{retry_s}"
@@ -405,7 +427,7 @@ class ProgressTracker:
             overflow = _vlen(content) + 2 + len(t) - inner_w
             max_fname = max(8, len(fname) - overflow)
             fname = _truncate(fname, max_fname)
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{tk_part}{cost_s}{retry_s}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}"
             content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
         gap = max(inner_w - _vlen(content) - len(t), 2)
         return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
@@ -480,7 +502,7 @@ class ProgressTracker:
                 lines = 0
 
                 wave = _title_wave(idx)
-                buf.append(_box_top(f"Generating \033[22m{wave}", w) + "\033[K\n")
+                buf.append(_box_top(f"{self._label} \033[22m{wave}", w) + "\033[K\n")
                 lines += 1
 
                 od = self._format_output_dir(inner_w)
@@ -559,34 +581,47 @@ class ProgressTracker:
                                     ainfo["last_rate_time"] = now
                                 else:
                                     d_chars = ainfo["chars"] - ainfo["last_chars"]
-                                    instant_tks = (d_chars / 4) / dt
+                                    instant_rate = (
+                                        d_chars / dt
+                                        if self._progress_unit == "bytes"
+                                        else (d_chars / 4) / dt
+                                    )
                                     if ainfo["smoothed_rate"] <= 0:
-                                        ainfo["smoothed_rate"] = instant_tks
+                                        ainfo["smoothed_rate"] = instant_rate
                                     else:
                                         ainfo["smoothed_rate"] = (
-                                            0.3 * instant_tks + 0.7 * ainfo["smoothed_rate"]
+                                            0.3 * instant_rate + 0.7 * ainfo["smoothed_rate"]
                                         )
                                     ainfo["last_chars"] = ainfo["chars"]
                                     ainfo["last_rate_time"] = now
 
                             boxes = self._token_boxes(name, ainfo["chars"])
                             avg_tk = self._avg_tokens.get(name, self.DEFAULT_AVG_TOKENS)
-                            model_scale = avg_tk * 4
+                            model_scale = (
+                                64 * 1024 if self._progress_unit == "bytes" else avg_tk * 4
+                            )
 
                             rate = ainfo["smoothed_rate"]
-                            rf = min(1.0, math.sqrt(max(0.0, rate) / 200.0))
+                            rate_scale = 50_000.0 if self._progress_unit == "bytes" else 200.0
+                            rf = min(1.0, math.sqrt(max(0.0, rate) / rate_scale))
                             spd = 0.12 + 0.33 * rf
                             self._phases[name] = self._phases.get(name, 0.0) + spd
 
-                            est_tk = ainfo["chars"] // 4
                             rate_s = ""
-                            if ainfo["smoothed_rate"] > 0:
-                                rate_s = (
-                                    f"  {_styles.ACCENT}{int(ainfo['smoothed_rate']):,} tk/s{S.RST}"
-                                )
+                            if self._progress_unit == "bytes":
+                                meta = f"{S.DIM}{self._format_bytes(ainfo['chars'])}{S.RST}"
+                                if ainfo["smoothed_rate"] > 0:
+                                    rate_s = (
+                                        f"  {_styles.ACCENT}"
+                                        f"{self._format_bytes(ainfo['smoothed_rate'])}/s{S.RST}"
+                                    )
+                            else:
+                                est_tk = ainfo["chars"] // 4
+                                meta = f"{S.DIM}~{est_tk:,} tk{S.RST}"
+                                if ainfo["smoothed_rate"] > 0:
+                                    rate_s = f"  {_styles.ACCENT}{int(ainfo['smoothed_rate']):,} tk/s{S.RST}"
                             live_c = self._live_cost_for_active(name, ainfo["chars"])
                             cost_s = f"  {S.HYEL}{format_cost(live_c)}{S.RST}" if live_c else ""
-                            meta = f"{S.DIM}~{est_tk:,} tk{S.RST}"
                             time_s = f"  {S.DIM}{mel}{S.RST}"
 
                             pfx = 5 + 3 + self._pad + 2 + 2

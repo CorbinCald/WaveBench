@@ -1,4 +1,4 @@
-"""Response modes — first-class abstractions over Code / Text / future variants.
+"""Response modes — first-class abstractions over Code / Text / TTS variants.
 
 A ``Mode`` captures two mode-specific decisions that used to be spread
 across ``process_model``/``process_model_text``:
@@ -8,9 +8,10 @@ across ``process_model``/``process_model_text``:
   - **Response parsing** — how to convert a raw LLM response into a
     :class:`ParsedOutput` (content, extension, pass/fail).
 
-Concrete modes live in ``code.py`` (``CodeMode``) and ``text.py``
-(``TextMode``). The ``MODES`` registry is populated on import and keyed
-by each mode's ``name`` for CLI lookup (``--mode code``, ``--mode text``).
+Concrete modes live in ``code.py`` (``CodeMode``), ``text.py``
+(``TextMode``), and ``tts.py`` (``TTSMode``). The ``MODES`` registry is
+populated on import and keyed by each mode's ``name`` for CLI lookup
+(``--mode code``, ``--mode text``, ``--mode tts``).
 
 ## Adding a new mode
 
@@ -35,8 +36,8 @@ class ParsedOutput:
     """Result of converting a raw LLM response into a savable file payload.
 
     Attributes:
-        content: Bytes to write to the output file (including any trailing
-            newline the mode wants to enforce).
+        content: Text or bytes to write to the output file (including any
+            trailing newline the mode wants to enforce).
         extension: File extension without the leading dot — e.g., ``"py"``,
             ``"md"``, ``"html"``. Empty string means "unknown".
         parse_ok: True if the mode was able to recognize meaningful output,
@@ -46,7 +47,7 @@ class ParsedOutput:
             ``None`` otherwise.
     """
 
-    content: str
+    content: str | bytes
     extension: str
     parse_ok: bool
     parse_error: str | None = None
@@ -68,14 +69,15 @@ class Mode(Protocol):
         """Wrap the raw user prompt with mode-specific instructions.
 
         Returns a single string that the OpenRouter client will send as
-        the ``user`` message content. (The spec envisioned an OpenAI-style
-        messages list; the current client accepts only a string prompt,
-        so we match that — upgrading is a separate concern.)
+        the ``user`` message content for chat modes or as ``input`` for
+        TTS mode. (The spec envisioned an OpenAI-style messages list; the
+        current chat client accepts only a string prompt, so we match that
+        — upgrading is a separate concern.)
         """
         ...
 
-    def parse_response(self, raw: str) -> ParsedOutput:
-        """Turn a raw streamed LLM response into a :class:`ParsedOutput`."""
+    def parse_response(self, raw: str | bytes) -> ParsedOutput:
+        """Turn a raw model response into a :class:`ParsedOutput`."""
         ...
 
 
@@ -90,14 +92,17 @@ def register(mode: Mode) -> None:
 # ── Built-in modes ───────────────────────────────────────────────────────
 from .code import CODE_MODE  # noqa: E402  (avoid circular import)
 from .text import TEXT_MODE  # noqa: E402
+from .tts import TTS_MODE  # noqa: E402
 
 register(CODE_MODE)
 register(TEXT_MODE)
+register(TTS_MODE)
 
 __all__ = [
     "CODE_MODE",
     "MODES",
     "TEXT_MODE",
+    "TTS_MODE",
     "Mode",
     "ParsedOutput",
     "register",
