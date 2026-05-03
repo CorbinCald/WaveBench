@@ -301,11 +301,31 @@ class AgentRunner:
 
 def _build_turn_prompt(template: str, issue: Issue, attempt: int | None, turn_number: int) -> str:
     if turn_number == 1:
-        return render_prompt(template, issue, attempt)
-    return (
-        f"Continue working on Linear issue {issue.identifier}. "
-        "Resume from the current workspace state. Do not repeat completed investigation."
-    )
+        prompt = render_prompt(template, issue, attempt)
+    else:
+        prompt = (
+            f"Continue working on Linear issue {issue.identifier}. "
+            "Resume from the current workspace state. Do not repeat completed investigation."
+        )
+    return _append_issue_comments(prompt, issue)
+
+
+def _append_issue_comments(prompt: str, issue: Issue) -> str:
+    if not issue.comments:
+        return prompt
+    lines = [prompt.rstrip(), "", "Linear comments (latest first, max 12):"]
+    for index, comment in enumerate(issue.comments, start=1):
+        metadata = [f"comment {index}"]
+        if comment.created_at is not None:
+            metadata.append(comment.created_at.isoformat())
+        if comment.author:
+            metadata.append(comment.author)
+        if comment.url:
+            metadata.append(comment.url)
+        lines.append(f"--- {' | '.join(metadata)} ---")
+        lines.append(comment.body)
+        lines.append("--- end comment ---")
+    return "\n".join(lines)
 
 
 def _extract_usage(message: dict[str, Any]) -> dict[str, int]:

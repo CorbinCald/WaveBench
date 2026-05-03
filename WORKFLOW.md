@@ -36,7 +36,7 @@ agent:
   max_turns: 3
   max_retry_backoff_ms: 300000
 pi:
-  command: pi --mode rpc --no-session
+  command: pi --mode rpc --no-session --model openai/gpt-5.5 --thinking high
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000

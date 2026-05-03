@@ -16,6 +16,24 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
             "priority": "2",
             "state": {"name": "Todo"},
             "labels": {"nodes": [{"name": "Bug"}, {"name": "CLI"}]},
+            "comments": {
+                "nodes": [
+                    {
+                        "id": "comment-old",
+                        "body": "Older note",
+                        "url": "https://linear.app/comment-old",
+                        "createdAt": "2026-05-01T12:00:00.000Z",
+                        "user": {"displayName": "Alice", "name": "alice"},
+                    },
+                    {
+                        "id": "comment-new",
+                        "body": "Latest note",
+                        "url": "https://linear.app/comment-new",
+                        "createdAt": "2026-05-02T12:00:00.000Z",
+                        "botActor": {"name": "Symphony"},
+                    },
+                ]
+            },
             "inverseRelations": {
                 "nodes": [
                     {
@@ -30,6 +48,9 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
     assert issue.labels == ["bug", "cli"]
     assert issue.priority == 2
     assert issue.blocked_by[0].identifier == "WB-0"
+    assert [comment.body for comment in issue.comments] == ["Latest note", "Older note"]
+    assert issue.comments[0].author == "Symphony"
+    assert issue.comments[1].author == "Alice"
 
 
 @pytest.mark.asyncio

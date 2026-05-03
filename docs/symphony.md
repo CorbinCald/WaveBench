@@ -15,7 +15,7 @@ The Symphony package lives under `symphony/` and exposes a `symphony` console sc
 - `WORKFLOW.md` loading with optional YAML front matter.
 - Typed config defaults and `$VAR` indirection for tracker credentials and workspace paths.
 - Strict Liquid-like prompt rendering for `{{ issue.* }}`, `{{ attempt }}`, `{% if %}`, and `{% for %}`.
-- Linear GraphQL reader/writer for candidate issues, state refresh, state transitions, comments, description updates, URL attachments, and the optional raw `linear_graphql` helper.
+- Linear GraphQL reader/writer for candidate issues, latest issue comments, state refresh, state transitions, comments, description updates, URL attachments, and the optional raw `linear_graphql` helper.
 - Per-issue workspace creation under `workspace.root`, sanitized directory names, root containment checks, and lifecycle hooks.
 - A polling orchestrator with bounded global/per-state concurrency, blocker checks, reconciliation, stall detection, and exponential retry scheduling.
 - A Pi RPC JSONL client that launches `pi --mode rpc --no-session`, sends rendered prompts, consumes Pi events until `agent_end`, and auto-cancels extension UI dialogs so unattended runs do not stall indefinitely.
@@ -101,6 +101,10 @@ pi:
 ```
 
 Because Symphony starts Pi inside the per-issue workspace, Pi's project-local discovery (`AGENTS.md`, `.pi/extensions/`, `.pi/skills/`, `.agents/skills/`, `.pi/prompts/`) applies to each workspace copy.
+
+## Linear comments in prompts
+
+Symphony fetches up to 12 latest Linear comments for each issue and appends them to the Pi prompt after the rendered workflow text. Comments are included verbatim, newest first, with minimal `--- comment ... ---` / `--- end comment ---` delimiters. They are not summarized.
 
 ## Linear state machine
 

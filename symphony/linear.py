@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
 
 from symphony.errors import TrackerError
-from symphony.models import BlockerRef, Issue, TrackerConfig
+from symphony.models import BlockerRef, Issue, IssueComment, TrackerConfig
+
+_COMMENT_LIMIT = 12
 
 _CANDIDATE_QUERY = """
 query SymphonyCandidateIssues($projectSlug: String!, $states: [String!], $after: String) {
@@ -34,6 +36,16 @@ query SymphonyCandidateIssues($projectSlug: String!, $states: [String!], $after:
       updatedAt
       state { name }
       labels { nodes { name } }
+      comments(first: 12, orderBy: createdAt) {
+        nodes {
+          id
+          body
+          url
+          createdAt
+          user { displayName name }
+          botActor { name }
+        }
+      }
       inverseRelations { nodes { type issue { id identifier state { name } } } }
     }
     pageInfo { hasNextPage endCursor }
@@ -58,6 +70,16 @@ query SymphonyIssuesByIds($ids: [ID!]!) {
       updatedAt
       state { name }
       labels { nodes { name } }
+      comments(first: 12, orderBy: createdAt) {
+        nodes {
+          id
+          body
+          url
+          createdAt
+          user { displayName name }
+          botActor { name }
+        }
+      }
       inverseRelations { nodes { type issue { id identifier state { name } } } }
     }
     pageInfo { hasNextPage endCursor }
@@ -334,9 +356,39 @@ def _normalize_issue(node: dict[str, Any]) -> Issue:
         url=node.get("url"),
         labels=labels,
         blocked_by=blockers,
+        comments=_normalize_comments(node),
         created_at=_parse_iso_datetime(node.get("createdAt")),
         updated_at=_parse_iso_datetime(node.get("updatedAt")),
     )
+
+
+def _normalize_comments(node: dict[str, Any]) -> list[IssueComment]:
+    comments: list[IssueComment] = []
+    for raw_comment in ((node.get("comments") or {}).get("nodes") or []):
+        if not isinstance(raw_comment, dict):
+            continue
+        user = raw_comment.get("user") or {}
+        bot_actor = raw_comment.get("botActor") or {}
+        author = (
+            user.get("displayName")
+            or user.get("name")
+            or bot_actor.get("name")
+            or None
+        )
+        comments.append(
+            IssueComment(
+                id=str(raw_comment.get("id") or ""),
+                body=str(raw_comment.get("body") or ""),
+                author=str(author) if author else None,
+                url=raw_comment.get("url"),
+                created_at=_parse_iso_datetime(raw_comment.get("createdAt")),
+            )
+        )
+    comments.sort(
+        key=lambda comment: comment.created_at or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return comments[:_COMMENT_LIMIT]
 
 
 def _normalize_priority(value: Any) -> int | None:
