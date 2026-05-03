@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from wavebench.modes import CODE_MODE, MODES, TEXT_MODE, ParsedOutput
+from wavebench.modes import CODE_MODE, MODES, TEXT_MODE, TTS_MODE, ParsedOutput
 from wavebench.modes.code import CodeMode
 from wavebench.modes.text import TextMode
+from wavebench.modes.tts import TTSMode
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -22,12 +23,13 @@ from wavebench.modes.text import TextMode
 
 
 def test_registry_contains_both_builtins() -> None:
-    assert set(MODES.keys()) == {"code", "text"}
+    assert set(MODES.keys()) == {"code", "text", "tts"}
 
 
 def test_registry_maps_name_to_canonical_instance() -> None:
     assert MODES["code"] is CODE_MODE
     assert MODES["text"] is TEXT_MODE
+    assert MODES["tts"] is TTS_MODE
 
 
 def test_code_mode_defaults_disallow_deps() -> None:
@@ -39,6 +41,8 @@ def test_mode_identity_attrs() -> None:
     assert CODE_MODE.display_name == "Code"
     assert TEXT_MODE.name == "text"
     assert TEXT_MODE.display_name == "Text"
+    assert TTS_MODE.name == "tts"
+    assert TTS_MODE.display_name == "TTS"
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +189,39 @@ def test_text_mode_parse_whitespace_returns_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TTSMode
+# ---------------------------------------------------------------------------
+
+
+def test_tts_mode_frame_prompt_preserves_text_to_synthesize() -> None:
+    framed = TTS_MODE.frame_prompt("  Hello from WaveBench.  ")
+    assert framed == "Hello from WaveBench."
+
+
+def test_tts_mode_parse_audio_bytes() -> None:
+    out = TTS_MODE.parse_response(b"ID3audio")
+    assert out.parse_ok is True
+    assert out.content == b"ID3audio"
+    assert out.extension == "mp3"
+    assert out.parse_error is None
+
+
+def test_tts_mode_parse_empty_audio_returns_failure() -> None:
+    out = TTS_MODE.parse_response(b"")
+    assert out.parse_ok is False
+    assert out.extension == "mp3"
+    assert out.parse_error == "empty audio response"
+
+
+def test_tts_mode_can_configure_voice_and_format() -> None:
+    mode = TTSMode(voice="nova", response_format="pcm", speed=1.2)
+    out = mode.parse_response(b"\x00\x01")
+    assert mode.voice == "nova"
+    assert mode.speed == 1.2
+    assert out.extension == "pcm"
+
+
+# ---------------------------------------------------------------------------
 # Cross-mode: independence of registry default from runtime instances
 # ---------------------------------------------------------------------------
 
@@ -199,3 +236,8 @@ def test_construct_deps_variant_without_touching_registry() -> None:
 def test_text_mode_singleton_identity() -> None:
     assert MODES["text"] is TEXT_MODE
     assert isinstance(TEXT_MODE, TextMode)
+
+
+def test_tts_mode_singleton_identity() -> None:
+    assert MODES["tts"] is TTS_MODE
+    assert isinstance(TTS_MODE, TTSMode)
