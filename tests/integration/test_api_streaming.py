@@ -189,6 +189,203 @@ async def test_streaming_http_error_raises_runtime_error(
 
 
 # ---------------------------------------------------------------------------
+# TTS audio endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_tts_speech_posts_audio_request_and_returns_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def handler(request: web.Request) -> web.Response:
+        seen["body"] = await request.json()
+        return web.Response(
+            body=b"ID3audio",
+            headers={"Content-Type": "audio/mpeg", "X-Generation-Id": "gen_123"},
+        )
+
+    app = web.Application()
+    app.router.add_post("/audio/speech", handler)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            audio, usage = await api_mod.call_tts_speech(
+                session,
+                api_key="test-key",
+                model_id="openai/test-tts",
+                input_text="Hello",
+                voice="nova",
+                response_format="mp3",
+                speed=1.25,
+            )
+
+    assert audio == b"ID3audio"
+    assert seen["body"] == {
+        "model": "openai/test-tts",
+        "input": "Hello",
+        "voice": "nova",
+        "response_format": "mp3",
+        "speed": 1.25,
+    }
+    assert usage == {"input_characters": 5, "audio_bytes": 8, "generation_id": "gen_123"}
+
+
+async def test_tts_speech_retries_429_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_mod, "_retry_wait_seconds", lambda h, a: 0.0)
+
+    call_log: list[int] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        if len(call_log) < 2:
+            call_log.append(429)
+            return web.Response(status=429, text="upstream throttled")
+        call_log.append(200)
+        return web.Response(body=b"ID3audio", headers={"Content-Type": "audio/mpeg"})
+
+    retries: list[tuple[int, int, int, float]] = []
+    app = web.Application()
+    app.router.add_post("/audio/speech", handler)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            audio, usage = await api_mod.call_tts_speech(
+                session,
+                api_key="test-key",
+                model_id="openai/test-tts",
+                input_text="Hello",
+                on_retry=lambda *args: retries.append(args),
+            )
+
+    assert audio == b"ID3audio"
+    assert usage["audio_bytes"] == 8
+    assert call_log == [429, 429, 200]
+    assert [r[0] for r in retries] == [429, 429]
+    assert [r[1] for r in retries] == [1, 2]
+
+
+async def test_tts_speech_reports_byte_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "audio/mpeg"})
+        await resp.prepare(request)
+        await resp.write(b"abc")
+        await resp.write(b"defg")
+        await resp.write_eof()
+        return resp
+
+    progress_updates: list[int] = []
+    app = web.Application()
+    app.router.add_post("/audio/speech", handler)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            audio, _ = await api_mod.call_tts_speech(
+                session,
+                api_key="test-key",
+                model_id="openai/test-tts",
+                input_text="Hello",
+                on_progress=progress_updates.append,
+            )
+
+    assert audio == b"abcdefg"
+    assert progress_updates[-1] == len(audio)
+    assert all(a <= b for a, b in pairwise(progress_updates))
+
+
+async def test_tts_speech_http_error_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def handler(request: web.Request) -> web.Response:
+        return web.Response(status=400, text='{"error":"bad voice"}')
+
+    app = web.Application()
+    app.router.add_post("/audio/speech", handler)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(RuntimeError, match="HTTP 400"):
+                await api_mod.call_tts_speech(
+                    session,
+                    api_key="test-key",
+                    model_id="openai/test-tts",
+                    input_text="Hello",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Model catalog fetch
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_top_models_includes_reserved_speech_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def model(mid: str, output_modalities: list[str]) -> dict:
+        return {
+            "id": mid,
+            "canonical_slug": mid,
+            "name": mid,
+            "created": 0,
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": output_modalities,
+            },
+            "pricing": {"prompt": "0.000001", "completion": "0.000001"},
+            "supported_parameters": [],
+            "context_length": 8192,
+        }
+
+    body = {
+        "data": [
+            model("provider/text-a", ["text"]),
+            model("provider/text-b", ["text"]),
+            model("provider/text-c", ["text"]),
+            model("openai/gpt-4o-mini-tts-2025-12-15", ["speech"]),
+            model("mistralai/voxtral-mini-tts-2603", ["speech"]),
+            model("provider/image", ["image"]),
+            model("provider/audio", ["audio"]),
+        ]
+    }
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(body).encode()
+
+    def fake_urlopen(req: object, timeout: int) -> FakeResponse:
+        requested_urls.append(req.full_url)  # type: ignore[attr-defined]
+        assert timeout == 15
+        return FakeResponse()
+
+    monkeypatch.setattr(api_mod.urllib.request, "urlopen", fake_urlopen)
+
+    models, pricing = api_mod.fetch_top_models("test-key", count=3)
+
+    ids = [m["id"] for m in models]
+    assert requested_urls == [f"{api_mod.API_URL}/models?output_modalities=all"]
+    assert len(ids) == 3
+    assert "openai/gpt-4o-mini-tts-2025-12-15" in ids
+    assert "mistralai/voxtral-mini-tts-2603" in ids
+    assert not {"provider/image", "provider/audio"} & set(ids)
+    assert "provider/image" in pricing  # pricing lookup still covers all models
+
+
+# ---------------------------------------------------------------------------
 # Pure helpers in api.py that don't need a server
 # ---------------------------------------------------------------------------
 

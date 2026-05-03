@@ -64,14 +64,15 @@ globally.
 ```text
 wavebench/
 ├── __main__.py                 CLI entry point, interactive startup, dispatch
-├── api.py                      OpenRouter HTTP/SSE client and model catalog fetch
-├── models.py                   default model mapping and catalog scoring
+├── api.py                      OpenRouter HTTP/SSE client, TTS speech, catalog fetch
+├── models.py                   default text/TTS mappings, TTS voice/format helpers, catalog scoring
 ├── parsers.py                  LLM output → code + extension; directory names
 ├── storage.py                  JSON persistence for models/config/history
 ├── modes/                      response-mode protocol and built-ins
 │   ├── __init__.py             Mode, ParsedOutput, MODES registry
 │   ├── code.py                 CodeMode prompt framing + parser wrapper
-│   └── text.py                 TextMode prompt framing + Markdown pass-through
+│   ├── text.py                 TextMode prompt framing + Markdown pass-through
+│   └── tts.py                  TTSMode prompt framing + audio-byte pass-through
 ├── core/                       benchmark run orchestration and artifact handling
 │   ├── orchestrator.py         main_async, concurrency, result display, history
 │   ├── runner.py               run_model and get_unique_filename
@@ -81,6 +82,7 @@ wavebench/
     ├── styles.py               themes, ANSI helpers, boxes, formatting
     ├── input.py                raw key reads
     ├── line_editor.py          prompt editor
+    ├── tts_player.py           arrow-key TTS output browser/player
     ├── progress/               ProgressTracker and wave rendering
     ├── analytics/              display_analytics and compute_cost
     └── menus/                  model browser and configuration menu
@@ -114,7 +116,7 @@ Helpful fixtures in `tests/conftest.py`:
 
 ## Adding a new mode
 
-WaveBench's response modes — currently `CodeMode` and `TextMode` — implement
+WaveBench's response modes — currently `CodeMode`, `TextMode`, and `TTSMode` — implement
 the `Mode` protocol in `wavebench/modes/__init__.py`. A mode captures two
 mode-specific decisions: how to frame the user's prompt, and how to parse the
 raw LLM response into savable content with a file extension.
@@ -147,7 +149,7 @@ To add a new mode, for example `JsonMode`:
        def frame_prompt(self, user_prompt: str) -> str:
            return f"{_SYSTEM_PROMPT_JSON}\n\nSchema: {user_prompt}"
 
-       def parse_response(self, raw: str) -> ParsedOutput:
+       def parse_response(self, raw: str | bytes) -> ParsedOutput:
            text = raw.strip()
            try:
                _json.loads(text)
@@ -183,7 +185,7 @@ To add a new mode, for example `JsonMode`:
 4. **Decide how it appears in the interactive startup UI.** Once registered,
    your mode is automatically accepted by `wavebench --mode json` and appears
    in `wavebench --help`. The interactive startup selector currently displays
-   Code/Text shortcuts explicitly, so update `_print_mode_menu()` and key
+   Code/Text/TTS shortcuts explicitly, so update `_print_mode_menu()` and key
    handling in `wavebench/__main__.py` if the new mode should be selectable
    there too.
 

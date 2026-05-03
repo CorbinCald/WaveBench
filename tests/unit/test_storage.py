@@ -60,6 +60,9 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
         "auto_open": "off",
         "auto_install": "off",
         "directory_naming": "llm",
+        "tts_voice": "alloy",
+        "tts_format": "mp3",
+        "tts_speed": 1.0,
     }
 
 
@@ -73,6 +76,9 @@ def test_save_config_then_load_config_roundtrip(tmp_state_dir: Path) -> None:
     assert loaded["auto_open"] == "off"
     assert loaded["auto_install"] == "off"
     assert loaded["directory_naming"] == "llm"
+    assert loaded["tts_voice"] == "alloy"
+    assert loaded["tts_format"] == "mp3"
+    assert loaded["tts_speed"] == 1.0
 
 
 def test_load_config_corrupted_json_returns_defaults(tmp_state_dir: Path) -> None:

@@ -198,6 +198,63 @@ def test_line_editor_module_exports_read_line_and_tabescape() -> None:
     assert issubclass(_TabEscape, Exception)
 
 
+def test_config_menu_builds_separate_default_model_tabs() -> None:
+    from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING
+    from wavebench.tui.menus.config_menu import (
+        _build_config_model_items,
+        _filter_config_model_indices,
+    )
+
+    items = _build_config_model_items([], {}, {})
+    normal_ids = {items[i]["id"] for i in _filter_config_model_indices(items, "", tts=False)}
+    tts_ids = {items[i]["id"] for i in _filter_config_model_indices(items, "", tts=True)}
+
+    assert set(MODEL_MAPPING.values()).issubset(normal_ids)
+    assert set(TTS_MODEL_MAPPING.values()).issubset(tts_ids)
+    assert normal_ids.isdisjoint(tts_ids)
+
+
+def test_config_menu_seeds_tts_defaults_when_current_mapping_has_only_text() -> None:
+    from wavebench.models import TTS_MODEL_MAPPING
+    from wavebench.tui.menus.config_menu import (
+        _build_config_model_items,
+        _filter_config_model_indices,
+    )
+
+    items = _build_config_model_items(
+        [], {"claude": "anthropic/claude-opus-4.6"}, pricing_lookup={}
+    )
+    selected_tts_ids = {
+        items[i]["id"]
+        for i in _filter_config_model_indices(items, "", tts=True)
+        if items[i]["selected"]
+    }
+
+    assert set(TTS_MODEL_MAPPING.values()).issubset(selected_tts_ids)
+
+
+def test_config_menu_filters_catalog_models_into_matching_tabs() -> None:
+    from wavebench.tui.menus.config_menu import (
+        _build_config_model_items,
+        _filter_config_model_indices,
+    )
+
+    items = _build_config_model_items(
+        [
+            {"id": "anthropic/claude-opus-4.6"},
+            {"id": "google/gemini-3.1-flash-tts-preview"},
+        ],
+        {},
+        pricing_lookup={},
+    )
+
+    normal_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "claude", tts=False)]
+    tts_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "tts", tts=True)]
+
+    assert normal_matches == ["anthropic/claude-opus-4.6"]
+    assert "google/gemini-3.1-flash-tts-preview" in tts_matches
+
+
 def test_menus_package_exports_public_entries() -> None:
     from wavebench.tui.menus import (
         interactive_config_menu,

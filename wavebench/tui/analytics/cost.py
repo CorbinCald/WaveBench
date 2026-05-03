@@ -20,9 +20,14 @@ def compute_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None
     try:
         pp = float(pricing.get("prompt") or 0)
         cp = float(pricing.get("completion") or 0)
+        request_cost = float(pricing.get("request") or 0)
     except (TypeError, ValueError):
         return None
+    input_chars = usage.get("input_characters")
+    if input_chars is not None:
+        cost = input_chars * pp + request_cost
+        return cost if cost > 0 else None
     prompt_tokens = usage.get("prompt_tokens") or 0
     completion_tokens = usage.get("completion_tokens") or 0
-    cost = prompt_tokens * pp + completion_tokens * cp
+    cost = prompt_tokens * pp + completion_tokens * cp + request_cost
     return cost if cost > 0 else None
