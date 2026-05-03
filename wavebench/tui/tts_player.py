@@ -33,7 +33,6 @@ _MPG123_ENC_SIGNED_16 = 0x0D0
 _MPG123_READ_BYTES = 8192
 _ENCODED_PLAYBACK_RATE = 44_100
 _ENCODED_PLAYBACK_CHANNELS = 2
-_LAST_PLAYBACK_HANDLE: Any | None = None
 
 
 class _PulseSampleSpec(ctypes.Structure):
@@ -569,16 +568,6 @@ def _start_audio(filepath: str) -> tuple[bool, Any | None]:
         return True, proc if _managed_player(cmd) else None
     except (OSError, FileNotFoundError):
         return False, None
-
-
-def play_audio(filepath: str) -> bool:
-    """Start playback for *filepath* and return whether a player was launched."""
-    global _LAST_PLAYBACK_HANDLE
-    _stop_audio(_LAST_PLAYBACK_HANDLE)
-    launched, _LAST_PLAYBACK_HANDLE = _start_audio(filepath)
-    if not launched:
-        _LAST_PLAYBACK_HANDLE = None
-    return launched
 
 
 def _tts_items(output_dir: str, results: dict[str, Any]) -> list[tuple[str, str, str]]:
