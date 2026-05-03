@@ -50,7 +50,9 @@ class CodeMode:
         sys_prompt = _SYSTEM_PROMPT_CODE_DEPS if self.allow_deps else _SYSTEM_PROMPT_CODE
         return f"{sys_prompt}\n\nTask: {user_prompt}"
 
-    def parse_response(self, raw: str) -> ParsedOutput:
+    def parse_response(self, raw: str | bytes) -> ParsedOutput:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
         parsed = extract_code(raw)
         if not parsed or not parsed.get("code"):
             return ParsedOutput(
