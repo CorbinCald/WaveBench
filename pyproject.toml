@@ -23,9 +23,10 @@ dev = [
 
 [project.scripts]
 wavebench = "wavebench.__main__:main"
+symphony = "symphony.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["wavebench*"]
+include = ["wavebench*", "symphony*"]
 
 [tool.ruff]
 line-length = 100
