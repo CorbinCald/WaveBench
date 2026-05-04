@@ -62,7 +62,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     workflow = load_workflow(workflow_path)
     config = resolve_config(workflow)
     tracker = LinearClient(config.tracker)
-    workspace_manager = WorkspaceManager(config.workspace_root, config.hooks)
+    workspace_manager = WorkspaceManager(config.workspace_root, config.hooks, config.git)
     agent_runner = AgentRunner(config, workflow, workspace_manager, tracker)
     orchestrator = Orchestrator(config, workflow, tracker, agent_runner, workspace_manager)
     await orchestrator.startup_terminal_workspace_cleanup()

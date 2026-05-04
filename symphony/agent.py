@@ -267,7 +267,7 @@ class AgentRunner:
     async def run_attempt(
         self, issue: Issue, attempt: int | None = None, on_event: EventCallback | None = None
     ) -> RunResult:
-        workspace = await self.workspace_manager.create_for_issue(issue.identifier)
+        workspace = await self.workspace_manager.create_for_issue(issue)
         client: PiRpcClient | None = None
         try:
             await self.workspace_manager.before_run(workspace.path)

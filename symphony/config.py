@@ -12,6 +12,7 @@ from typing import Any
 from symphony.errors import ConfigError
 from symphony.models import (
     AgentConfig,
+    GitConfig,
     HooksConfig,
     PiConfig,
     ServiceConfig,
@@ -41,6 +42,7 @@ def resolve_config(
     hooks_raw = _map(raw.get("hooks"), "hooks")
     agent_raw = _map(raw.get("agent"), "agent")
     pi_raw = _map(raw.get("pi"), "pi")
+    git_raw = _map(raw.get("git"), "git")
 
     tracker_kind = _optional_str(tracker_raw.get("kind"))
     endpoint = _optional_str(tracker_raw.get("endpoint")) or _LINEAR_ENDPOINT
@@ -96,6 +98,20 @@ def resolve_config(
         read_timeout_ms=_positive_int(pi_raw.get("read_timeout_ms"), 5_000, "pi.read_timeout_ms"),
         stall_timeout_ms=_int_value(pi_raw.get("stall_timeout_ms"), 300_000, "pi.stall_timeout_ms"),
     )
+    pr_on_merging = _bool_value(git_raw.get("pr_on_merging"), False, "git.pr_on_merging")
+    git = GitConfig(
+        enabled=_bool_value(git_raw.get("enabled"), False, "git.enabled"),
+        repo=_resolve_env_ref(_optional_str(git_raw.get("repo")), env),
+        remote=_optional_str(git_raw.get("remote")) or "origin",
+        base_branch=_optional_str(git_raw.get("base_branch")) or "main",
+        branch_prefix=_optional_str(git_raw.get("branch_prefix")) or "symphony",
+        rebase_policy=_optional_str(git_raw.get("rebase_policy")) or "clean-only",
+        push_on_merging=_bool_value(
+            git_raw.get("push_on_merging"), pr_on_merging, "git.push_on_merging"
+        ),
+        pr_on_merging=pr_on_merging,
+        timeout_ms=_positive_int(git_raw.get("timeout_ms"), 120_000, "git.timeout_ms"),
+    )
     config = ServiceConfig(
         workflow_path=workflow.path,
         workflow_mtime_ns=workflow.mtime_ns,
@@ -107,6 +123,7 @@ def resolve_config(
         hooks=hooks,
         agent=agent,
         pi=pi,
+        git=git,
     )
     if validate:
         validate_dispatch_config(config)
@@ -128,6 +145,13 @@ def validate_dispatch_config(config: ServiceConfig) -> None:
         )
     if not config.pi.command.strip():
         raise ConfigError("missing_pi_command", "pi.command must be non-empty")
+    if config.git.enabled and not config.git.repo:
+        raise ConfigError("missing_git_repo", "git.repo is required when git.enabled is true")
+    if config.git.rebase_policy not in {"clean-only", "never"}:
+        raise ConfigError(
+            "unsupported_git_rebase_policy",
+            "git.rebase_policy must be 'clean-only' or 'never'",
+        )
 
 
 def _map(value: Any, name: str) -> dict[str, Any]:
