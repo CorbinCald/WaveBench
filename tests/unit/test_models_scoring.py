@@ -22,9 +22,12 @@ from wavebench.models import (
     _OPENROUTER_UTILITY,
     _TIER1_PROVIDERS,
     _TIER2_PROVIDERS,
+    IMAGE_MODEL_MAPPING,
     MODEL_MAPPING,
     TTS_MODEL_MAPPING,
     _model_score,
+    image_modalities_for_model,
+    is_image_model,
     is_stealth,
     is_tts_model,
     tts_response_format_for_model,
@@ -217,6 +220,37 @@ def test_is_tts_model_false_for_text_model() -> None:
     assert not is_tts_model("anthropic/claude-opus-4.6")
 
 
+# ---------------------------------------------------------------------------
+# Image model classification
+# ---------------------------------------------------------------------------
+
+
+def test_is_image_model_detects_bundled_defaults() -> None:
+    for model_id in IMAGE_MODEL_MAPPING.values():
+        assert is_image_model(model_id)
+
+
+def test_is_image_model_uses_catalog_output_modalities() -> None:
+    assert is_image_model(
+        "vendor/custom",
+        {"architecture": {"output_modalities": ["image"], "input_modalities": ["text"]}},
+    )
+    assert not is_image_model(
+        "vendor/custom",
+        {"architecture": {"output_modalities": ["text"], "input_modalities": ["text"]}},
+    )
+
+
+def test_image_modalities_follow_catalog_metadata_and_fallback() -> None:
+    assert image_modalities_for_model(
+        "vendor/both", {"__output_modalities": ["image", "text"]}
+    ) == ["image", "text"]
+    assert image_modalities_for_model("vendor/image-only", {"__output_modalities": ["image"]}) == [
+        "image"
+    ]
+    assert image_modalities_for_model("vendor/manual") == ["image", "text"]
+
+
 @pytest.mark.parametrize(
     ("model_id", "expected_voice"),
     [
@@ -277,6 +311,19 @@ def test_tts_model_mapping_has_expected_shape() -> None:
         assert isinstance(short_name, str) and short_name
         assert isinstance(full_id, str) and "/" in full_id
         assert is_tts_model(full_id)
+
+
+def test_image_model_mapping_has_expected_shape() -> None:
+    assert isinstance(IMAGE_MODEL_MAPPING, dict)
+    assert set(IMAGE_MODEL_MAPPING.values()) == {
+        "openai/gpt-5.4-image-2",
+        "google/gemini-3.1-flash-image-preview",
+        "sourceful/riverflow-v2-pro",
+    }
+    for short_name, full_id in IMAGE_MODEL_MAPPING.items():
+        assert isinstance(short_name, str) and short_name
+        assert isinstance(full_id, str) and "/" in full_id
+        assert is_image_model(full_id)
 
 
 def test_tier_sets_are_disjoint() -> None:

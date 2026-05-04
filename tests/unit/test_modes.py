@@ -10,10 +10,13 @@ Covers:
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
-from wavebench.modes import CODE_MODE, MODES, TEXT_MODE, TTS_MODE, ParsedOutput
+from wavebench.modes import CODE_MODE, IMAGE_MODE, MODES, TEXT_MODE, TTS_MODE, ParsedOutput
 from wavebench.modes.code import CodeMode
+from wavebench.modes.image import ImageMode, extract_image_outputs, write_image_gallery
 from wavebench.modes.text import TextMode
 from wavebench.modes.tts import TTSMode
 
@@ -23,13 +26,14 @@ from wavebench.modes.tts import TTSMode
 
 
 def test_registry_contains_both_builtins() -> None:
-    assert set(MODES.keys()) == {"code", "text", "tts"}
+    assert set(MODES.keys()) == {"code", "text", "tts", "image"}
 
 
 def test_registry_maps_name_to_canonical_instance() -> None:
     assert MODES["code"] is CODE_MODE
     assert MODES["text"] is TEXT_MODE
     assert MODES["tts"] is TTS_MODE
+    assert MODES["image"] is IMAGE_MODE
 
 
 def test_code_mode_defaults_disallow_deps() -> None:
@@ -43,6 +47,8 @@ def test_mode_identity_attrs() -> None:
     assert TEXT_MODE.display_name == "Text"
     assert TTS_MODE.name == "tts"
     assert TTS_MODE.display_name == "TTS"
+    assert IMAGE_MODE.name == "image"
+    assert IMAGE_MODE.display_name == "Image"
 
 
 # ---------------------------------------------------------------------------
@@ -241,3 +247,96 @@ def test_text_mode_singleton_identity() -> None:
 def test_tts_mode_singleton_identity() -> None:
     assert MODES["tts"] is TTS_MODE
     assert isinstance(TTS_MODE, TTSMode)
+
+
+# ---------------------------------------------------------------------------
+# ImageMode
+# ---------------------------------------------------------------------------
+
+
+def test_image_mode_frame_prompt_preserves_text_to_image_prompt() -> None:
+    framed = IMAGE_MODE.frame_prompt("  A neon wave at sunset  ")
+    assert framed == "A neon wave at sunset"
+
+
+def test_image_mode_provider_defaults_do_not_send_image_config() -> None:
+    assert IMAGE_MODE.aspect_ratio == "1:1"
+    assert IMAGE_MODE.image_config() is None
+
+
+def test_image_mode_custom_settings_send_image_config() -> None:
+    mode = ImageMode(aspect_ratio="1:1", image_size="2K", custom_settings=True)
+    assert mode.image_config() == {"aspect_ratio": "1:1", "image_size": "2K"}
+
+
+def test_image_mode_extracts_base64_data_urls_and_extensions() -> None:
+    raw = {
+        "content": "assistant text is ignored",
+        "images": [
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,d29ybGQ="},
+            },
+        ],
+    }
+
+    images = extract_image_outputs(raw)
+
+    assert [image.data for image in images] == [b"hello", b"world"]
+    assert [image.extension for image in images] == ["png", "jpg"]
+
+
+def test_image_mode_detects_actual_image_mime_over_data_url_label() -> None:
+    webp = b"RIFF\x04\x00\x00\x00WEBPVP8 "
+    raw = {"image_url": {"url": "data:image/png;base64," + base64.b64encode(webp).decode()}}
+
+    images = extract_image_outputs(raw)
+
+    assert images[0].mime_type == "image/webp"
+    assert images[0].extension == "webp"
+
+
+def test_image_mode_parse_fails_without_valid_data_url() -> None:
+    out = IMAGE_MODE.parse_response({"content": "plain assistant text"})  # type: ignore[arg-type]
+    assert out.parse_ok is False
+    assert out.parse_error == "no valid base64 image data URLs"
+
+
+def test_image_gallery_includes_summary_actions_and_prompt_formatting(tmp_path) -> None:
+    path = write_image_gallery(
+        str(tmp_path),
+        "A neon wave\nwith clouds",
+        {
+            "modelOne": {
+                "status": "success",
+                "images": ["modelOne.png", "modelOne_2.webp"],
+            },
+            "modelTwo": {"status": "failed"},
+        },
+        theme_name="plum",
+    )
+
+    html = (tmp_path / "gallery.html").read_text(encoding="utf-8")
+
+    assert path == str(tmp_path / "gallery.html")
+    assert "2 images" in html
+    assert "1 successful model" in html
+    assert "1 failed model" in html
+    assert '<span class="prompt-label">Prompt</span>' in html
+    assert "white-space: pre-wrap" in html
+    assert 'loading="lazy"' in html
+    assert "Open full size" in html
+    assert "Download" in html
+    assert "modelOne_2.webp" in html
+    assert 'data-theme="plum"' in html
+    assert "--wb-accent-rgb: 153, 0, 204;" in html
+    assert 'id="image-modal"' in html
+    assert 'data-gallery-index="1"' in html
+    assert 'data-action="prev"' in html
+    assert 'data-action="next"' in html
+    assert "ArrowLeft" in html
+    assert "ArrowRight" in html

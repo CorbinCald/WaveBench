@@ -10,6 +10,7 @@ Key entry points:
   - ``call_model_async()``  — non-streaming completion
   - ``call_model_streaming()``  — SSE completion with progress callback
   - ``call_tts_speech()``  — raw audio generation via /audio/speech
+  - ``call_image_generation()``  — non-streaming image-output chat completion
   - ``fetch_top_models()``  — sync catalog fetch for the config menu
 """
 
@@ -25,7 +26,7 @@ from typing import Any
 
 import aiohttp
 
-from wavebench.models import _model_score, is_stealth
+from wavebench.models import _model_score, is_image_model, is_stealth
 from wavebench.tui.styles import S, _tri
 
 API_URL = "https://openrouter.ai/api/v1"
@@ -828,6 +829,65 @@ async def call_tts_speech(
     raise RuntimeError(f"HTTP {last_status}: {last_err[:120].strip()}")
 
 
+async def call_image_generation(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    modalities: list[str] | None = None,
+    image_config: dict[str, str] | None = None,
+    on_retry: RetryCallback | None = None,
+) -> tuple[dict[str, Any], dict]:
+    """Generate images through non-streaming /chat/completions.
+
+    Returns the assistant message and usage metadata. Image data URLs are
+    decoded by the image mode/runner so assistant text can be ignored there.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Title": "Benchmark Script",
+    }
+    data: dict[str, Any] = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": modalities or ["image", "text"],
+        "stream": False,
+    }
+    if image_config:
+        data["image_config"] = image_config
+
+    last_status = 0
+    last_err = ""
+    for attempt in range(1, _MAX_RETRIES + 2):
+        retry_wait_s: float | None = None
+        async with session.post(f"{API_URL}/chat/completions", headers=headers, json=data) as resp:
+            if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
+                last_status = resp.status
+                last_err = await resp.text()
+                retry_wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)
+                if on_retry:
+                    on_retry(last_status, attempt, _MAX_RETRIES, retry_wait_s)
+            elif resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+            else:
+                try:
+                    body = await resp.json()
+                    message = body["choices"][0]["message"]
+                except (KeyError, IndexError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(f"parse error: {exc}")
+                if not isinstance(message, dict):
+                    raise RuntimeError("parse error: assistant message was not an object")
+                return message, body.get("usage", {})
+
+        if retry_wait_s is not None:
+            await asyncio.sleep(retry_wait_s)
+            continue
+
+    raise RuntimeError(f"HTTP {last_status}: {last_err[:120].strip()}")
+
+
 def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch models from OpenRouter, returning (top_for_menu, pricing_lookup).
 
@@ -850,18 +910,26 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
 
     all_models = data.get("data", [])
 
-    # Build pricing lookup for every model
+    # Build pricing/metadata lookup for every model. The extra private keys are
+    # ignored by cost computation but let image mode choose OpenRouter modalities
+    # from catalog metadata when available.
     pricing_lookup = {}
     for m in all_models:
         mid = m.get("id", "")
         if mid:
-            pricing_lookup[mid] = m.get("pricing", {})
+            arch = m.get("architecture", {}) or {}
+            pricing_lookup[mid] = {
+                **(m.get("pricing", {}) or {}),
+                "__output_modalities": arch.get("output_modalities") or [],
+                "__input_modalities": arch.get("input_modalities") or [],
+            }
 
-    # Filter candidates for the menu. Include regular text-output models plus
-    # speech-output models so TTS models can be selected from the same browser.
+    # Filter candidates for the menu. Include regular text-output models,
+    # speech-output models for TTS, and image-output models for Image mode.
     seen_slugs = set()
     filtered = []
     speech_filtered = []
+    image_filtered = []
     for m in all_models:
         mid = m.get("id", "")
         arch = m.get("architecture", {})
@@ -869,12 +937,13 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
         in_mods = arch.get("input_modalities") or []
         has_text_output = "text" in out_mods
         has_speech_output = "speech" in out_mods
+        has_image_output = "image" in out_mods or is_image_model(mid, m)
 
-        # Must accept text input and produce either text or speech output.
-        if "text" not in in_mods or not (has_text_output or has_speech_output):
+        # Must accept text input and produce a supported output modality.
+        if "text" not in in_mods or not (has_text_output or has_speech_output or has_image_output):
             continue
-        # Skip image/audio-output models; dedicated TTS models advertise speech.
-        if "audio" in out_mods or "image" in out_mods:
+        # Skip audio-output models that are not dedicated speech/TTS models.
+        if "audio" in out_mods and not has_speech_output:
             continue
         # Skip :free duplicate variants (keep the paid original)
         if ":free" in mid:
@@ -892,16 +961,23 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
             continue
         seen_slugs.add(slug)
 
-        if has_speech_output:
+        if has_image_output:
+            image_filtered.append(m)
+        elif has_speech_output:
             speech_filtered.append(m)
         else:
             filtered.append(m)
 
-    # Sort by popularity score descending. Reserve a small slice for speech
-    # models so the config menu exposes TTS choices even when the text catalog
-    # has more than *count* high-scoring entries.
+    # Sort by popularity score descending. Reserve slices for speech/image
+    # models so each dedicated config tab has useful catalog rows.
     filtered.sort(key=_model_score, reverse=True)
     speech_filtered.sort(key=_model_score, reverse=True)
-    speech_count = min(len(speech_filtered), count, 20)
-    text_count = max(0, count - speech_count)
-    return filtered[:text_count] + speech_filtered[:speech_count], pricing_lookup
+    image_filtered.sort(key=_model_score, reverse=True)
+    image_count = min(len(image_filtered), count, 20)
+    speech_count = min(len(speech_filtered), max(0, count - image_count), 20)
+    text_count = max(0, count - image_count - speech_count)
+    return (
+        filtered[:text_count]
+        + speech_filtered[:speech_count]
+        + image_filtered[:image_count]
+    ), pricing_lookup

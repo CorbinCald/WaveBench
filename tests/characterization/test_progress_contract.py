@@ -126,6 +126,15 @@ def test_progress_tracker_accepts_byte_progress_unit() -> None:
     tracker.unregister("tts_model")
 
 
+def test_progress_tracker_accepts_image_progress_unit() -> None:
+    from wavebench.tui.progress import ProgressTracker
+
+    tracker = ProgressTracker(total=1, results={}, progress_unit="images")
+    tracker.register("image_model")
+    tracker.update("image_model", 1)
+    tracker.unregister("image_model")
+
+
 def test_progress_tracker_result_row_formats_audio_bytes() -> None:
     from wavebench.tui.progress import ProgressTracker
 
@@ -143,6 +152,25 @@ def test_progress_tracker_result_row_formats_audio_bytes() -> None:
     )
 
     assert "4.0 KiB" in row
+
+
+def test_progress_tracker_result_row_formats_image_count() -> None:
+    from wavebench.tui.progress import ProgressTracker
+
+    tracker = ProgressTracker(total=1, results={})
+    row = tracker._format_result_row(
+        "image_model",
+        {
+            "status": "success",
+            "time_s": 1.0,
+            "file": "image_model.png",
+            "usage": {"image_count": 2},
+        },
+        rank=1,
+        inner_w=100,
+    )
+
+    assert "2 images" in row
 
 
 def test_progress_tracker_register_update_unregister() -> None:

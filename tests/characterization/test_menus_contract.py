@@ -199,7 +199,7 @@ def test_line_editor_module_exports_read_line_and_tabescape() -> None:
 
 
 def test_config_menu_builds_separate_default_model_tabs() -> None:
-    from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING
+    from wavebench.models import IMAGE_MODEL_MAPPING, MODEL_MAPPING, TTS_MODEL_MAPPING
     from wavebench.tui.menus.config_menu import (
         _build_config_model_items,
         _filter_config_model_indices,
@@ -208,10 +208,14 @@ def test_config_menu_builds_separate_default_model_tabs() -> None:
     items = _build_config_model_items([], {}, {})
     normal_ids = {items[i]["id"] for i in _filter_config_model_indices(items, "", tts=False)}
     tts_ids = {items[i]["id"] for i in _filter_config_model_indices(items, "", tts=True)}
+    image_ids = {items[i]["id"] for i in _filter_config_model_indices(items, "", image=True)}
 
     assert set(MODEL_MAPPING.values()).issubset(normal_ids)
     assert set(TTS_MODEL_MAPPING.values()).issubset(tts_ids)
+    assert set(IMAGE_MODEL_MAPPING.values()).issubset(image_ids)
     assert normal_ids.isdisjoint(tts_ids)
+    assert normal_ids.isdisjoint(image_ids)
+    assert tts_ids.isdisjoint(image_ids)
 
 
 def test_config_menu_seeds_tts_defaults_when_current_mapping_has_only_text() -> None:
@@ -243,6 +247,10 @@ def test_config_menu_filters_catalog_models_into_matching_tabs() -> None:
         [
             {"id": "anthropic/claude-opus-4.6"},
             {"id": "google/gemini-3.1-flash-tts-preview"},
+            {
+                "id": "openai/test-image",
+                "architecture": {"output_modalities": ["image", "text"]},
+            },
         ],
         {},
         pricing_lookup={},
@@ -250,9 +258,13 @@ def test_config_menu_filters_catalog_models_into_matching_tabs() -> None:
 
     normal_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "claude", tts=False)]
     tts_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "tts", tts=True)]
+    image_matches = [
+        items[i]["id"] for i in _filter_config_model_indices(items, "test-image", image=True)
+    ]
 
     assert normal_matches == ["anthropic/claude-opus-4.6"]
     assert "google/gemini-3.1-flash-tts-preview" in tts_matches
+    assert image_matches == ["openai/test-image"]
 
 
 def test_menus_package_exports_public_entries() -> None:
