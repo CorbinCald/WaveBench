@@ -9,9 +9,10 @@ across ``process_model``/``process_model_text``:
     :class:`ParsedOutput` (content, extension, pass/fail).
 
 Concrete modes live in ``code.py`` (``CodeMode``), ``text.py``
-(``TextMode``), and ``tts.py`` (``TTSMode``). The ``MODES`` registry is
-populated on import and keyed by each mode's ``name`` for CLI lookup
-(``--mode code``, ``--mode text``, ``--mode tts``).
+(``TextMode``), ``tts.py`` (``TTSMode``), and ``image.py`` (``ImageMode``).
+The ``MODES`` registry is populated on import and keyed by each mode's
+``name`` for CLI lookup (``--mode code``, ``--mode text``, ``--mode tts``,
+``--mode image``).
 
 ## Adding a new mode
 
@@ -91,15 +92,18 @@ def register(mode: Mode) -> None:
 
 # ── Built-in modes ───────────────────────────────────────────────────────
 from .code import CODE_MODE  # noqa: E402  (avoid circular import)
+from .image import IMAGE_MODE  # noqa: E402
 from .text import TEXT_MODE  # noqa: E402
 from .tts import TTS_MODE  # noqa: E402
 
 register(CODE_MODE)
 register(TEXT_MODE)
 register(TTS_MODE)
+register(IMAGE_MODE)
 
 __all__ = [
     "CODE_MODE",
+    "IMAGE_MODE",
     "MODES",
     "TEXT_MODE",
     "TTS_MODE",
