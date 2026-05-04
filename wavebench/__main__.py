@@ -3,7 +3,7 @@
 Parses command-line arguments, loads persistent state (models + config),
 dispatches to either ``core.main_async()`` for a benchmark run or the
 interactive config menu, and prints lifetime analytics on ``--stats``.
-Supports the interactive mode-select screen at startup (Code / Text / TTS / config).
+Supports the interactive mode-select screen at startup (Code / Text / TTS / Image / config).
 """
 
 import argparse
@@ -21,7 +21,13 @@ except ImportError:
 import wavebench.tui.styles as _styles
 from wavebench.api import fetch_top_models, load_api_key
 from wavebench.core import main_async
-from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING, is_tts_model
+from wavebench.models import (
+    IMAGE_MODEL_MAPPING,
+    MODEL_MAPPING,
+    TTS_MODEL_MAPPING,
+    is_image_model,
+    is_tts_model,
+)
 from wavebench.storage import (
     _history_path,
     load_config,
@@ -118,6 +124,29 @@ def main() -> None:
         default=None,
         help="Playback speed multiplier for TTS providers that support it",
     )
+    parser.add_argument(
+        "--image-aspect-ratio",
+        choices=[
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9",
+        ],
+        default=None,
+        help="Aspect ratio for --mode image (default display: 1:1; implies custom settings)",
+    )
+    parser.add_argument(
+        "--image-size",
+        choices=["1K", "2K", "4K"],
+        default=None,
+        help="Image size for --mode image (default display: 1K; implies custom settings)",
+    )
     parser.add_argument("--stats", action="store_true", help="Show lifetime analytics and exit")
     parser.add_argument("--clear-history", action="store_true", help="Reset analytics history")
     parser.add_argument(
@@ -133,7 +162,10 @@ def main() -> None:
         dest="auto_open",
         choices=["incremental", "after_all"],
         default=None,
-        help="Auto-open generated code/text files (incremental or after_all; TTS uses browser)",
+        help=(
+            "Auto-open generated code/text files "
+            "(incremental or after_all; TTS/image use run viewers)"
+        ),
     )
     parser.add_argument(
         "--auto-install",
@@ -223,7 +255,8 @@ def main() -> None:
             row = (
                 f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
                 f"{_styles.ACCENT}[2]{S.RST} Text  "
-                f"{_styles.ACCENT}[3]{S.RST} TTS"
+                f"{_styles.ACCENT}[3]{S.RST} TTS  "
+                f"{_styles.ACCENT}[4]{S.RST} Image"
                 f"  {_dot}  "
                 f"{S.DIM}{len(active)} models{S.RST}  "
                 f"{_styles.ACCENT}[c]{S.RST} config"
@@ -317,6 +350,10 @@ def main() -> None:
                         sys.stdout.write("3\n")
                         mode_name = "tts"
                         mode_done = True
+                    elif key == "4":
+                        sys.stdout.write("4\n")
+                        mode_name = "image"
+                        mode_done = True
                     elif key == "1":
                         sys.stdout.write("1\n")
                         mode_name = "code"
@@ -324,6 +361,7 @@ def main() -> None:
                 sys.stdout.write("\033[4A\r\033[J")
                 sys.stdout.flush()
 
+            explicit_image_ids = set(config.get("image_model_ids") or [])
             if mode_name == "tts":
                 if selected_models is None:
                     active = TTS_MODEL_MAPPING
@@ -331,11 +369,28 @@ def main() -> None:
                     active = {n: m for n, m in selected_models.items() if is_tts_model(m)}
                     if not active:
                         active = TTS_MODEL_MAPPING
+            elif mode_name == "image":
+                if selected_models is None:
+                    active = IMAGE_MODEL_MAPPING
+                else:
+                    active = {
+                        n: m
+                        for n, m in selected_models.items()
+                        if m in explicit_image_ids or is_image_model(m)
+                    }
+                    if not active:
+                        active = IMAGE_MODEL_MAPPING
             else:
                 if selected_models is None:
                     active = MODEL_MAPPING
                 else:
-                    active = {n: m for n, m in selected_models.items() if not is_tts_model(m)}
+                    active = {
+                        n: m
+                        for n, m in selected_models.items()
+                        if not is_tts_model(m)
+                        and m not in explicit_image_ids
+                        and not is_image_model(m)
+                    }
                     if not active:
                         active = MODEL_MAPPING
             names = list(active.keys())
