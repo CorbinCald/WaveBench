@@ -317,7 +317,7 @@ class ProgressTracker:
 
     @staticmethod
     def _format_bytes(num_bytes: float) -> str:
-        """Format byte counts for TTS audio progress."""
+        """Format byte counts for generated binary outputs."""
         if num_bytes < 1024:
             return f"{int(num_bytes)} B"
         if num_bytes < 1024 * 1024:
@@ -338,6 +338,8 @@ class ProgressTracker:
         """Boxes based on token progress: each box = 20% of avg tokens."""
         if self._progress_unit == "bytes":
             pct = min(chars / (64 * 1024), 1.0)
+        elif self._progress_unit == "images":
+            pct = min(chars, 1.0)
         else:
             avg = self._avg_tokens.get(model_name, self.DEFAULT_AVG_TOKENS)
             est_tokens = chars / 4
@@ -405,9 +407,13 @@ class ProgressTracker:
             usage = info.get("usage", {})
             tokens = usage.get("total_tokens")
             audio_bytes = usage.get("audio_bytes")
+            image_count = usage.get("image_count")
             fname = info.get("file", "")
             if audio_bytes:
                 usage_part = f"  {S.DIM}{self._format_bytes(audio_bytes)}{S.RST}"
+            elif image_count:
+                label = "image" if image_count == 1 else "images"
+                usage_part = f"  {S.DIM}{image_count} {label}{S.RST}"
             elif tokens:
                 usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
             else:

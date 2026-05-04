@@ -63,6 +63,10 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
         "tts_voice": "alloy",
         "tts_format": "mp3",
         "tts_speed": 1.0,
+        "image_settings": "provider defaults",
+        "image_aspect_ratio": "1:1",
+        "image_size": "1K",
+        "image_model_ids": [],
     }
 
 
@@ -79,6 +83,10 @@ def test_save_config_then_load_config_roundtrip(tmp_state_dir: Path) -> None:
     assert loaded["tts_voice"] == "alloy"
     assert loaded["tts_format"] == "mp3"
     assert loaded["tts_speed"] == 1.0
+    assert loaded["image_settings"] == "provider defaults"
+    assert loaded["image_aspect_ratio"] == "1:1"
+    assert loaded["image_size"] == "1K"
+    assert loaded["image_model_ids"] == []
 
 
 def test_load_config_corrupted_json_returns_defaults(tmp_state_dir: Path) -> None:
