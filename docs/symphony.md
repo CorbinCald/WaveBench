@@ -16,11 +16,11 @@ The Symphony package lives under `symphony/` and exposes a `symphony` console sc
 - Typed config defaults and `$VAR` indirection for tracker credentials and workspace paths.
 - Strict Liquid-like prompt rendering for `{{ issue.* }}`, `{{ attempt }}`, `{% if %}`, and `{% for %}`.
 - Linear GraphQL reader/writer for candidate issues, latest issue comments, state refresh, state transitions, comments, description updates, URL attachments, and the optional raw `linear_graphql` helper.
-- Per-issue workspace creation under `workspace.root`, sanitized directory names, root containment checks, and lifecycle hooks.
+- Per-issue workspace creation under `workspace.root`, sanitized directory names, root containment checks, native per-issue git branches, clean-worktree rebasing, and lifecycle hooks.
 - A polling orchestrator with bounded global/per-state concurrency, blocker checks, reconciliation, stall detection, and exponential retry scheduling.
 - A Pi RPC JSONL client that launches `pi --mode rpc --no-session`, sends rendered prompts, consumes Pi events until `agent_end`, and auto-cancels extension UI dialogs so unattended runs do not stall indefinitely.
 - Structured Python logging as the operator-visible status surface.
-- A Linear state-machine workflow: `Todo` → `In Progress` → `Human Review`, with `Merging` reserved for future PR automation and terminal states cleaned up.
+- A Linear state-machine workflow: `Todo` → `In Progress` → `Human Review` → `Merging`, where `Merging` commits any remaining workspace changes, rebases, pushes the issue branch, and creates or finds a GitHub pull request through `gh`.
 - Project Pi skills under `.agents/skills/` for Linear ticket handling and optional interactive Playwright validation evidence posted to Linear.
 
 ## Trust and safety posture
@@ -29,6 +29,7 @@ This implementation is for trusted local automation experiments. Workspace path 
 
 Implementation-defined policies:
 
+- Native git automation is trusted repo configuration. It clones `git.repo`, creates/switches per-issue branches, skips rebases while the worktree is dirty, and uses `gh pr` for pull requests when configured.
 - Hook scripts are trusted repo configuration and run with `sh -lc` inside the per-issue workspace.
 - Pi is launched with `bash -lc <pi.command>` in the per-issue workspace.
 - Pi authentication, model selection, tools, extensions, skills, and provider policy come from your normal Pi setup and/or flags in `pi.command`.
@@ -69,9 +70,16 @@ Before production use, harden the host environment: run under a dedicated OS use
    export LINEAR_API_KEY=...
    ```
 
-5. Edit the repo-root `WORKFLOW.md` and replace `project_slug` with your Linear project slug.
+5. For PR automation, install/authenticate the GitHub CLI in the host environment used by Symphony:
 
-6. Start the daemon only when you are ready to dispatch real Linear work:
+   ```bash
+   gh auth login
+   gh auth status
+   ```
+
+6. Edit the repo-root `WORKFLOW.md` and replace `project_slug` with your Linear project slug.
+
+7. Start the daemon only when you are ready to dispatch real Linear work:
 
    ```bash
    symphony ./WORKFLOW.md
@@ -81,13 +89,38 @@ Before production use, harden the host environment: run under a dedicated OS use
 
 The default workflow stores issue workspaces under `.symphony/workspaces/`, which is gitignored.
 
+## Git and branch lifecycle
+
+The workflow uses this git config block:
+
+```yaml
+git:
+  enabled: true
+  repo: https://github.com/CorbinCald/WaveBench.git
+  remote: origin
+  base_branch: main
+  branch_prefix: symphony
+  rebase_policy: clean-only
+  push_on_merging: true
+  pr_on_merging: true
+```
+
+Behavior:
+
+- Every Linear issue gets its own workspace under `workspace.root` and its own branch.
+- Branch naming prefers Linear's `issue.branch_name`; otherwise Symphony generates `symphony/<issue-id>-<title-slug>`.
+- Newly created workspaces are cloned from `git.repo`, switched to the issue branch from `origin/main`, and then `hooks.after_create` runs.
+- Existing dirty workspaces that were accidentally left on `main` are migrated by creating the issue branch at the current `HEAD`; dirty changes are preserved.
+- Before each worker run, Symphony fetches the remote. If the worktree is clean, it rebases the issue branch onto `origin/main`. If the worktree is dirty, it skips the rebase and logs that fact.
+- When a Linear issue is moved to `Merging`, Symphony commits remaining workspace changes, fetches/rebases, pushes the branch, runs `gh pr view` / `gh pr create`, posts the PR URL to Linear, and attaches the PR URL to the issue.
+
 ## Pi configuration
 
 The workflow uses this Pi config block:
 
 ```yaml
 pi:
-  command: pi --mode rpc --no-session
+  command: pi --mode rpc --no-session --model openai/gpt-5.5 --thinking high
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
@@ -127,7 +160,7 @@ Behavior:
 - `Todo`: ready for Symphony pickup.
 - `In Progress`: active work. Symphony moves picked-up `Todo` issues here.
 - `Human Review`: ready for human review. Symphony moves successful runs here and does not redispatch them.
-- `Merging`: reserved for future PR creation/merge automation; it is not an active state today.
+- `Merging`: ready for PR automation. Symphony does not dispatch a worker; it prepares the issue branch, pushes it, creates/finds a PR, comments with the PR URL, and leaves the issue in `Merging`.
 - terminal states (`Done`, `Closed`, `Cancelled`, `Canceled`, `Duplicate`): workspaces may be cleaned up.
 
 Create the configured Linear states before enabling a long-running daemon. If a configured Linear state does not exist, Symphony logs a warning and leaves the issue in its current state.
@@ -149,4 +182,4 @@ Run the deterministic tests:
 pytest tests/unit/test_symphony_*.py
 ```
 
-Real Linear/Pi execution requires valid `LINEAR_API_KEY`, a real Linear project slug, network access, and an authenticated/configured Pi installation.
+Real Linear/Pi execution requires valid `LINEAR_API_KEY`, a real Linear project slug, network access, an authenticated/configured Pi installation, and authenticated `gh` for PR automation.

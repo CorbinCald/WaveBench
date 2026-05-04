@@ -15,6 +15,7 @@ from symphony.config import validate_dispatch_config
 from symphony.models import (
     Issue,
     OrchestratorState,
+    PullRequestResult,
     RetryEntry,
     RunningEntry,
     RunResult,
@@ -60,6 +61,8 @@ class Orchestrator:
             self.workspace_manager.root = config.workspace_root.resolve()
         if hasattr(self.workspace_manager, "hooks"):
             self.workspace_manager.hooks = config.hooks
+        if hasattr(self.workspace_manager, "git"):
+            self.workspace_manager.git = config.git
 
     async def run(self) -> None:
         await self.startup_terminal_workspace_cleanup()
@@ -104,6 +107,7 @@ class Orchestrator:
         except Exception as exc:
             _LOG.error("dispatch_validation_failed error=%s", exc)
             return
+        await self.process_merging_issues()
         try:
             issues = await self.tracker.fetch_candidate_issues()
         except Exception as exc:
@@ -114,6 +118,53 @@ class Orchestrator:
                 break
             if self.should_dispatch(issue):
                 self.dispatch_issue(issue, attempt=None)
+
+    async def process_merging_issues(self) -> None:
+        if not (self.config.git.enabled and self.config.git.pr_on_merging):
+            return
+        merging_state = self.config.tracker.merging_state
+        if not merging_state:
+            return
+        try:
+            issues = await self.tracker.fetch_issues_by_states([merging_state])
+        except Exception as exc:
+            _LOG.warning("merging_fetch_failed error=%s", exc)
+            return
+        now_ms = time.monotonic() * 1000
+        for issue in sort_for_dispatch(issues):
+            if issue.id in self.state.running or issue.id in self.state.claimed:
+                continue
+            if issue.id in self.state.merging_processed:
+                continue
+            retry_after = self.state.merging_retry_after_ms.get(issue.id, 0)
+            if retry_after > now_ms:
+                continue
+            self.state.claimed.add(issue.id)
+            try:
+                result = await self.workspace_manager.create_pull_request_for_issue(issue)
+            except Exception as exc:
+                self.state.merging_retry_after_ms[issue.id] = (
+                    now_ms + self.config.agent.max_retry_backoff_ms
+                )
+                _LOG.warning(
+                    "merging_pr_failed issue_id=%s issue_identifier=%s error=%s",
+                    issue.id,
+                    issue.identifier,
+                    exc,
+                )
+                await self._post_status_comment(
+                    issue,
+                    (
+                        f"Symphony could not prepare a pull request for {issue.identifier}: {exc}. "
+                        "It will retry later."
+                    ),
+                )
+            else:
+                self.state.merging_processed.add(issue.id)
+                self.state.merging_retry_after_ms.pop(issue.id, None)
+                await self._mark_pull_request_ready(issue, result)
+            finally:
+                self.state.claimed.discard(issue.id)
 
     async def reconcile_running_issues(self) -> None:
         await self._reconcile_stalled_runs()
@@ -311,10 +362,37 @@ class Orchestrator:
                 (
                     f"Symphony completed {entry.identifier} and moved it to {review_state}.\n\n"
                     f"Workspace: `{self._workspace_path_for_comment(entry.identifier)}`\n"
-                    "Review the workspace diff and validation output before merging."
+                    "Review the workspace diff and validation output before moving it to Merging."
                 ),
             )
         return moved
+
+    async def _mark_pull_request_ready(self, issue: Issue, result: PullRequestResult) -> None:
+        pr_line = f"\nPR: {result.pr_url}" if result.pr_url else ""
+        await self._post_status_comment(
+            issue,
+            (
+                f"Symphony prepared {issue.identifier} for merging.\n\n"
+                f"Branch: `{result.branch}`\n"
+                f"Base: `{result.base_branch}`\n"
+                f"Ahead/behind: {result.ahead}/{result.behind}\n"
+                f"Pushed: {'yes' if result.pushed else 'no'}"
+                f"{pr_line}"
+            ),
+        )
+        if result.pr_url:
+            creator = getattr(self.tracker, "create_attachment", None)
+            if creator is None:
+                return
+            try:
+                await creator(issue.id, "Symphony pull request", result.pr_url, result.branch)
+            except Exception as exc:
+                _LOG.warning(
+                    "linear_attachment_failed issue_id=%s issue_identifier=%s error=%s",
+                    issue.id,
+                    issue.identifier,
+                    exc,
+                )
 
     async def _update_issue_state(self, issue: Issue, state_name: str, action: str) -> bool:
         if issue.state.lower() == state_name.lower():

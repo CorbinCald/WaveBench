@@ -9,9 +9,11 @@ import pytest
 from symphony.models import (
     AgentConfig,
     BlockerRef,
+    GitConfig,
     HooksConfig,
     Issue,
     PiConfig,
+    PullRequestResult,
     RunResult,
     ServiceConfig,
     TrackerConfig,
@@ -26,6 +28,7 @@ class FakeTracker:
         self.issues = issues
         self.transitions: list[tuple[str, str]] = []
         self.comments: list[tuple[str, str]] = []
+        self.attachments: list[tuple[str, str, str, str | None]] = []
 
     async def fetch_candidate_issues(self) -> list[Issue]:
         return self.issues
@@ -47,6 +50,12 @@ class FakeTracker:
         self.comments.append((issue_id, body))
         return True
 
+    async def create_attachment(
+        self, issue_id: str, title: str, url: str, subtitle: str | None = None
+    ) -> bool:
+        self.attachments.append((issue_id, title, url, subtitle))
+        return True
+
 
 class BlockingRunner:
     def __init__(self) -> None:
@@ -58,6 +67,32 @@ class BlockingRunner:
         if self.release is not None:
             await self.release.wait()
         return RunResult(True, "succeeded")
+
+
+class FakePrWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.hooks = HooksConfig()
+        self.git = None
+        self.created_for: list[str] = []
+
+    def path_for(self, identifier: str) -> Path:
+        return self.root / identifier
+
+    async def remove(self, identifier: str) -> None:
+        return None
+
+    async def create_pull_request_for_issue(self, issue: Issue) -> PullRequestResult:
+        self.created_for.append(issue.identifier)
+        return PullRequestResult(
+            branch=f"symphony/{issue.identifier.lower()}",
+            base_branch="main",
+            pr_url=f"https://github.com/example/repo/pull/{issue.identifier}",
+            pushed=True,
+            created=True,
+            ahead=1,
+            behind=0,
+        )
 
 
 def make_config(
@@ -196,3 +231,33 @@ async def test_auto_transition_moves_issue_to_working_then_human_review(
     assert orchestrator.state.retry_attempts == {}
     assert "picked up WB-1" in tracker.comments[0][1]
     assert "moved it to Human Review" in tracker.comments[1][1]
+
+
+@pytest.mark.asyncio
+async def test_merging_state_creates_pull_request_without_dispatching_worker(tmp_path: Path) -> None:
+    config = make_config(tmp_path, max_concurrent=2, post_status_comments=True)
+    config.git = GitConfig(
+        enabled=True,
+        repo="https://example.invalid/repo.git",
+        push_on_merging=True,
+        pr_on_merging=True,
+    )
+    issue = Issue("issue-1", "WB-1", "Implement thing", "Merging", priority=1)
+    tracker = FakeTracker([issue])
+    runner = BlockingRunner()
+    workspace = FakePrWorkspace(config.workspace_root)
+    orchestrator = Orchestrator(config, make_workflow(tmp_path), tracker, runner, workspace)
+
+    await orchestrator.tick()
+
+    assert runner.started == []
+    assert workspace.created_for == ["WB-1"]
+    assert "prepared WB-1 for merging" in tracker.comments[0][1]
+    assert tracker.attachments == [
+        (
+            "issue-1",
+            "Symphony pull request",
+            "https://github.com/example/repo/pull/WB-1",
+            "symphony/wb-1",
+        )
+    ]

@@ -106,6 +106,30 @@ class PiConfig:
 
 
 @dataclass(slots=True)
+class GitConfig:
+    enabled: bool = False
+    repo: str | None = None
+    remote: str = "origin"
+    base_branch: str = "main"
+    branch_prefix: str = "symphony"
+    rebase_policy: str = "clean-only"
+    push_on_merging: bool = False
+    pr_on_merging: bool = False
+    timeout_ms: int = 120_000
+
+
+@dataclass(slots=True)
+class PullRequestResult:
+    branch: str
+    base_branch: str
+    pr_url: str | None = None
+    pushed: bool = False
+    created: bool = False
+    ahead: int = 0
+    behind: int = 0
+
+
+@dataclass(slots=True)
 class ServiceConfig:
     workflow_path: Path
     workflow_mtime_ns: int | None
@@ -115,6 +139,7 @@ class ServiceConfig:
     hooks: HooksConfig
     agent: AgentConfig
     pi: PiConfig
+    git: GitConfig = field(default_factory=GitConfig)
 
 
 @dataclass(slots=True)
@@ -179,3 +204,5 @@ class OrchestratorState:
         }
     )
     agent_rate_limits: dict[str, Any] | None = None
+    merging_processed: set[str] = field(default_factory=set)
+    merging_retry_after_ms: dict[str, float] = field(default_factory=dict)

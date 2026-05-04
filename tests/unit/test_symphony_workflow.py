@@ -28,6 +28,15 @@ tracker:
   post_status_comments: true
 workspace:
   root: ./workspaces
+git:
+  enabled: true
+  repo: $GIT_REPO_URL
+  remote: upstream
+  base_branch: trunk
+  branch_prefix: auto
+  rebase_policy: never
+  push_on_merging: true
+  pr_on_merging: true
 hooks:
   after_create: |
     echo created
@@ -43,7 +52,10 @@ Hello {{ issue.identifier }} attempt={{ attempt }}
     )
 
     workflow = load_workflow(workflow_path)
-    config = resolve_config(workflow, env={"LINEAR_API_KEY": "secret"})
+    config = resolve_config(
+        workflow,
+        env={"LINEAR_API_KEY": "secret", "GIT_REPO_URL": "https://example.invalid/repo.git"},
+    )
 
     assert workflow.config["tracker"]["active_states"] == ["Todo", "In Progress"]
     assert workflow.config["hooks"]["after_create"] == "echo created\npwd"
@@ -56,6 +68,14 @@ Hello {{ issue.identifier }} attempt={{ attempt }}
     assert config.tracker.auto_transition is True
     assert config.tracker.post_status_comments is True
     assert config.pi.command == "pi --mode rpc --no-session"
+    assert config.git.enabled is True
+    assert config.git.repo == "https://example.invalid/repo.git"
+    assert config.git.remote == "upstream"
+    assert config.git.base_branch == "trunk"
+    assert config.git.branch_prefix == "auto"
+    assert config.git.rebase_policy == "never"
+    assert config.git.push_on_merging is True
+    assert config.git.pr_on_merging is True
     assert config.agent.max_concurrent_agents_by_state == {"todo": 1}
 
 

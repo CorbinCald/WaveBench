@@ -21,16 +21,24 @@ polling:
   interval_ms: 30000
 workspace:
   root: .symphony/workspaces
+git:
+  enabled: true
+  repo: https://github.com/CorbinCald/WaveBench.git
+  remote: origin
+  base_branch: main
+  branch_prefix: symphony
+  rebase_policy: clean-only
+  push_on_merging: true
+  pr_on_merging: true
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/CorbinCald/WaveBench.git .
     python3 -m venv .venv
     . .venv/bin/activate
     pip install -e '.[dev]'
   before_run: |
-    git status --short
+    git status --short --branch
   after_run: |
-    git status --short
+    git status --short --branch
 agent:
   max_concurrent_agents: 2
   max_turns: 3
@@ -61,7 +69,7 @@ Description:
 No description was provided.
 {% endif %}
 
-Work only inside the provided per-issue workspace.
+Work only inside the provided per-issue workspace. Symphony prepares an issue-specific git branch; do not switch back to `main` or reuse another issue's branch.
 
 ## Linear control
 
