@@ -74,6 +74,10 @@ def load_config() -> dict[str, Any]:
         "tts_voice": "alloy",
         "tts_format": "mp3",
         "tts_speed": 1.0,
+        "image_settings": "provider defaults",
+        "image_aspect_ratio": "1:1",
+        "image_size": "1K",
+        "image_model_ids": [],
     }
     if os.path.exists(path):
         try:

@@ -1,10 +1,11 @@
 """Default model mapping and ranking algorithm.
 
-Holds the fallback ``MODEL_MAPPING`` and ``TTS_MODEL_MAPPING`` used when no
-persistent selection exists, and ``_model_score()`` — the heuristic that ranks
-the OpenRouter catalog by provider tier, pricing, recency, reasoning/tool
-capability, and context length. Also exposes ``is_stealth()`` and
-``is_tts_model()`` classifiers plus TTS provider defaults.
+Holds the fallback ``MODEL_MAPPING``, ``TTS_MODEL_MAPPING``, and
+``IMAGE_MODEL_MAPPING`` used when no persistent selection exists, and
+``_model_score()`` — the heuristic that ranks the OpenRouter catalog by
+provider tier, pricing, recency, reasoning/tool capability, and context
+length. Also exposes ``is_stealth()``, ``is_tts_model()``, and
+``is_image_model()`` classifiers plus TTS provider defaults.
 """
 
 import time
@@ -26,6 +27,12 @@ TTS_MODEL_MAPPING: dict[str, str] = {
     "zonosV0.1Transformer": "zyphra/zonos-v0.1-transformer",
     "orpheus3b": "canopylabs/orpheus-3b-0.1-ft",
     "kokoro82m": "hexgrad/kokoro-82m",
+}
+
+IMAGE_MODEL_MAPPING: dict[str, str] = {
+    "gpt5.4Image2": "openai/gpt-5.4-image-2",
+    "gemini3.1FlashImage": "google/gemini-3.1-flash-image-preview",
+    "riverflowV2Pro": "sourceful/riverflow-v2-pro",
 }
 
 _TIER1_PROVIDERS: frozenset[str] = frozenset(
@@ -66,6 +73,20 @@ _KNOWN_TTS_MODEL_IDS: frozenset[str] = frozenset(
 _TTS_ID_MARKERS: frozenset[str] = frozenset(
     {"tts", "speech", "voxtral", "zonos", "csm-1b", "orpheus", "kokoro"}
 )
+_KNOWN_IMAGE_MODEL_IDS: frozenset[str] = frozenset(IMAGE_MODEL_MAPPING.values())
+_IMAGE_ID_MARKERS: frozenset[str] = frozenset(
+    {
+        "image",
+        "imagen",
+        "flux",
+        "riverflow",
+        "stable-diffusion",
+        "dall-e",
+        "seedream",
+        "hidream",
+        "qwen-image",
+    }
+)
 _DEFAULT_TTS_VOICE_BY_MARKER: tuple[tuple[str, str], ...] = (
     ("google/", "Kore"),
     ("mistralai/voxtral", "en_paul_neutral"),
@@ -81,10 +102,47 @@ _DEFAULT_TTS_FORMAT_BY_MARKER: tuple[tuple[str, str], ...] = (
 )
 
 
+def output_modalities_from_metadata(metadata: dict | None) -> list[str]:
+    """Return OpenRouter output modalities from catalog metadata when present."""
+    if not metadata:
+        return []
+    mods = metadata.get("__output_modalities") or metadata.get("output_modalities")
+    if not mods:
+        arch = metadata.get("architecture") or {}
+        if isinstance(arch, dict):
+            mods = arch.get("output_modalities")
+    if not isinstance(mods, list):
+        return []
+    return [str(m).lower() for m in mods if m]
+
+
 def is_tts_model(model_id: str) -> bool:
     """Heuristic for user-configured models that target speech synthesis."""
     lower = model_id.lower()
     return lower in _KNOWN_TTS_MODEL_IDS or any(marker in lower for marker in _TTS_ID_MARKERS)
+
+
+def is_image_model(model_id: str, metadata: dict | None = None) -> bool:
+    """True for models that generate image outputs.
+
+    Catalog metadata is authoritative when available. For bundled/manual
+    models, fall back to known IDs and conservative image-generation markers.
+    """
+    out_mods = output_modalities_from_metadata(metadata)
+    if out_mods:
+        return "image" in out_mods
+    lower = model_id.lower()
+    return lower in _KNOWN_IMAGE_MODEL_IDS or any(marker in lower for marker in _IMAGE_ID_MARKERS)
+
+
+def image_modalities_for_model(model_id: str, metadata: dict | None = None) -> list[str]:
+    """Return the OpenRouter ``modalities`` value for an image generation model."""
+    out_mods = output_modalities_from_metadata(metadata)
+    if "image" in out_mods:
+        if "text" in out_mods:
+            return ["image", "text"]
+        return ["image"]
+    return ["image", "text"]
 
 
 def tts_voice_for_model(model_id: str, configured_voice: str) -> str:
