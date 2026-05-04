@@ -189,6 +189,60 @@ async def test_streaming_http_error_raises_runtime_error(
 
 
 # ---------------------------------------------------------------------------
+# Image generation endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_image_generation_posts_non_streaming_chat_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def handler(request: web.Request) -> web.Response:
+        seen["body"] = await request.json()
+        return web.json_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "images": [
+                                {"image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 5},
+            }
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            message, usage = await api_mod.call_image_generation(
+                session,
+                api_key="test-key",
+                model_id="openai/test-image",
+                prompt="A wave",
+                modalities=["image", "text"],
+                image_config={"aspect_ratio": "16:9", "image_size": "1K"},
+            )
+
+    assert seen["body"] == {
+        "model": "openai/test-image",
+        "messages": [{"role": "user", "content": "A wave"}],
+        "modalities": ["image", "text"],
+        "stream": False,
+        "image_config": {"aspect_ratio": "16:9", "image_size": "1K"},
+    }
+    assert message["images"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert usage == {"total_tokens": 5}
+
+
+# ---------------------------------------------------------------------------
 # TTS audio endpoint
 # ---------------------------------------------------------------------------
 
@@ -325,7 +379,7 @@ async def test_tts_speech_http_error_raises_runtime_error(
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_top_models_includes_reserved_speech_models(
+def test_fetch_top_models_includes_reserved_speech_and_image_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_urls: list[str] = []
@@ -374,15 +428,16 @@ def test_fetch_top_models_includes_reserved_speech_models(
 
     monkeypatch.setattr(api_mod.urllib.request, "urlopen", fake_urlopen)
 
-    models, pricing = api_mod.fetch_top_models("test-key", count=3)
+    models, pricing = api_mod.fetch_top_models("test-key", count=4)
 
     ids = [m["id"] for m in models]
     assert requested_urls == [f"{api_mod.API_URL}/models?output_modalities=all"]
-    assert len(ids) == 3
+    assert len(ids) == 4
     assert "openai/gpt-4o-mini-tts-2025-12-15" in ids
     assert "mistralai/voxtral-mini-tts-2603" in ids
-    assert not {"provider/image", "provider/audio"} & set(ids)
-    assert "provider/image" in pricing  # pricing lookup still covers all models
+    assert "provider/image" in ids
+    assert "provider/audio" not in ids
+    assert pricing["provider/image"]["__output_modalities"] == ["image"]
 
 
 # ---------------------------------------------------------------------------

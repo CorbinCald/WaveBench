@@ -1,9 +1,9 @@
 """Per-model benchmark runner and the filename utility it shares.
 
 ``run_model`` is the single mode-parameterized driver that streams an
-LLM response (or TTS audio bytes), parses it via the supplied
-:class:`~wavebench.modes.Mode`, writes the output file, and (for code mode)
-optionally detects Python
+LLM response (or TTS audio bytes), or calls an image model non-streaming,
+parses it via the supplied :class:`~wavebench.modes.Mode`, writes the output
+file(s), and (for code mode) optionally detects Python
 dependencies and installs them into a shared per-output-dir venv.
 
 Previously this module held a ``process_model`` / ``process_model_text``
@@ -25,9 +25,10 @@ from typing import Any
 
 import aiohttp
 
-from wavebench.api import call_model_streaming, call_tts_speech
+from wavebench.api import call_image_generation, call_model_streaming, call_tts_speech
 from wavebench.models import tts_response_format_for_model, tts_voice_for_model
 from wavebench.modes import Mode, ParsedOutput
+from wavebench.modes.image import extract_image_outputs
 from wavebench.tui.styles import (
     S,
     _arrow,
@@ -83,17 +84,19 @@ async def run_model(
     reasoning_effort: str | None = "high",
     auto_open: str = "off",
     auto_install: str = "off",
+    image_modalities: list[str] | None = None,
 ) -> None:
     """Execute one model against *mode*; write output; record result.
 
     ``mode.frame_prompt`` wraps *user_prompt* with mode-specific
     instructions; ``mode.parse_response`` converts the raw streamed
     response/audio into a :class:`~wavebench.modes.ParsedOutput` whose
-    ``extension`` drives the saved file's suffix.
+    ``extension`` drives the saved file's suffix. Image mode instead decodes
+    one or more base64 data URLs from a non-streaming chat response.
 
     When ``mode.name == "code"`` AND ``auto_install == "on"`` AND the
     parsed extension is ``py``, dependency detection + venv setup fire
-    as before. Text and TTS modes skip that branch entirely.
+    as before. Text, TTS, and image modes skip that branch entirely.
     """
     start = time.monotonic()
     registered = tracker.is_running
@@ -104,7 +107,7 @@ async def run_model(
         print(f"  {_wait} {model_name:<{pad}}  {S.DIM}calling {model_id}…{S.RST}")
 
     framed_prompt = mode.frame_prompt(user_prompt)
-    content: str | bytes | None = None
+    content: Any = None
     usage: dict = {}
     retry_events: list[dict[str, Any]] = []
     effective_tts_format = getattr(mode, "response_format", "mp3")
@@ -143,6 +146,16 @@ async def run_model(
                     response_format=effective_tts_format,
                     speed=getattr(mode, "speed", 1.0),
                     on_progress=_on_progress,
+                    on_retry=_on_retry,
+                )
+            elif mode.name == "image":
+                content, usage = await call_image_generation(
+                    session,
+                    api_key,
+                    model_id,
+                    framed_prompt,
+                    modalities=image_modalities,
+                    image_config=mode.image_config(),  # type: ignore[attr-defined]
                     on_retry=_on_retry,
                 )
             else:
@@ -249,6 +262,62 @@ async def run_model(
         print(f"  {_work} {model_name:<{pad}}  {S.DIM}{action}…{S.RST}")
 
     try:
+        if mode.name == "image":
+            images = extract_image_outputs(content)
+            if not images:
+                elapsed = time.monotonic() - start
+                if not registered:
+                    print(
+                        f"  {_fail} {model_name:<{pad}}  "
+                        f"{S.RED}no valid images{S.RST}  "
+                        f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
+                    )
+                results[model_name] = {
+                    "status": "failed",
+                    "time_s": elapsed,
+                    "file": None,
+                    "usage": usage,
+                    "retries": retry_events,
+                }
+                return
+
+            output_dir = await output_dir_task
+            filenames: list[str] = []
+            total_bytes = 0
+            for idx, image in enumerate(images, 1):
+                suffix = "" if idx == 1 else f"_{idx}"
+                filename = get_unique_filename(
+                    output_dir, f"{model_name}{suffix}", image.extension
+                )
+                filepath = os.path.join(output_dir, filename)
+                with open(filepath, "wb") as fh:
+                    fh.write(image.data)
+                filenames.append(filename)
+                total_bytes += len(image.data)
+
+            elapsed = time.monotonic() - start
+            usage = {
+                **usage,
+                "image_count": len(filenames),
+                "image_bytes": total_bytes,
+            }
+            if not registered:
+                more = f" (+{len(filenames) - 1})" if len(filenames) > 1 else ""
+                print(
+                    f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
+                    f"saved {_arrow} {S.GRN}{filenames[0]}{S.RST}{more}  "
+                    f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
+                )
+            results[model_name] = {
+                "status": "success",
+                "time_s": elapsed,
+                "file": filenames[0],
+                "images": filenames,
+                "usage": usage,
+                "retries": retry_events,
+            }
+            return
+
         parsed = mode.parse_response(content)
         if mode.name == "tts" and parsed.parse_ok:
             parsed = ParsedOutput(

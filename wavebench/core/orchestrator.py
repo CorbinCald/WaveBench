@@ -19,6 +19,7 @@ import wavebench.tui.styles as _styles
 from wavebench.api import _is_effort_naming_bridge, _map_effort, _supported_efforts
 from wavebench.modes import MODES, Mode
 from wavebench.modes.code import CodeMode
+from wavebench.modes.image import ImageMode, write_image_gallery
 from wavebench.modes.tts import TTSMode
 from wavebench.parsers import get_directory_name
 from wavebench.storage import load_history, record_run
@@ -87,6 +88,19 @@ def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = 
             speed=speed,
         )
 
+    def _configured_image_mode() -> ImageMode:
+        cli_aspect = getattr(args, "image_aspect_ratio", None)
+        cli_size = getattr(args, "image_size", None)
+        config_custom = config.get("image_settings") == "custom"
+        custom = bool(cli_aspect or cli_size) or config_custom
+        aspect_ratio = cli_aspect or (config.get("image_aspect_ratio") if config_custom else None)
+        image_size = cli_size or (config.get("image_size") if config_custom else None)
+        return ImageMode(
+            aspect_ratio=str(aspect_ratio or "1:1"),
+            image_size=str(image_size or "1K"),
+            custom_settings=custom,
+        )
+
     explicit = getattr(args, "mode", None)
     if explicit:
         mode = MODES.get(explicit)
@@ -95,6 +109,8 @@ def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = 
                 return CodeMode(allow_deps=True)
             if mode.name == "tts":
                 return _configured_tts_mode()
+            if mode.name == "image":
+                return _configured_image_mode()
             return mode
 
     if getattr(args, "text", False):
@@ -110,7 +126,14 @@ async def main_async(
     config: dict[str, Any] | None = None,
     pricing_lookup: dict[str, Any] | None = None,
 ) -> None:
-    from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING, is_tts_model
+    from wavebench.models import (
+        IMAGE_MODEL_MAPPING,
+        MODEL_MAPPING,
+        TTS_MODEL_MAPPING,
+        image_modalities_for_model,
+        is_image_model,
+        is_tts_model,
+    )
 
     if config is None:
         from wavebench.storage import load_config
@@ -136,12 +159,19 @@ async def main_async(
     mode = _resolve_mode(args, auto_install, config)
     text_mode = mode.name == "text"
     tts_mode = mode.name == "tts"
+    image_mode = mode.name == "image"
     if tts_mode:
         reasoning_effort = None
         # Avoid launching every generated audio file when a user has auto-open
         # enabled for code/text runs; TTS has its own post-run browser/player.
         auto_open = "off"
+    if image_mode:
+        reasoning_effort = None
+        if auto_open == "incremental":
+            print(f"  {_skip} {S.DIM}incremental auto-open is ignored for image mode.{S.RST}")
+            auto_open = "off"
 
+    explicit_image_ids = set(config.get("image_model_ids") or [])
     if tts_mode:
         if model_mapping is None:
             mapping = TTS_MODEL_MAPPING
@@ -149,17 +179,37 @@ async def main_async(
             mapping = {name: mid for name, mid in model_mapping.items() if is_tts_model(mid)}
             if not mapping:
                 mapping = TTS_MODEL_MAPPING
+    elif image_mode:
+        if model_mapping is None:
+            mapping = IMAGE_MODEL_MAPPING
+        else:
+            _pricing = pricing_lookup or {}
+            mapping = {
+                name: mid
+                for name, mid in model_mapping.items()
+                if mid in explicit_image_ids or is_image_model(mid, _pricing.get(mid, {}))
+            }
+            if not mapping:
+                mapping = IMAGE_MODEL_MAPPING
     else:
         if model_mapping is None:
             mapping = MODEL_MAPPING
         else:
-            mapping = {name: mid for name, mid in model_mapping.items() if not is_tts_model(mid)}
+            mapping = {
+                name: mid
+                for name, mid in model_mapping.items()
+                if not is_tts_model(mid)
+                and mid not in explicit_image_ids
+                and not is_image_model(mid, (pricing_lookup or {}).get(mid, {}))
+            }
             if not mapping:
                 mapping = MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 1
 
     if tts_mode:
         default_ext = f".{getattr(mode, 'response_format', 'mp3')}"
+    elif image_mode:
+        default_ext = ".png"
     elif text_mode:
         default_ext = ".md"
     else:
@@ -210,6 +260,13 @@ async def main_async(
                 heavy=True,
             )
         )
+    elif image_mode:
+        settings = "custom" if getattr(mode, "custom_settings", False) else "provider defaults"
+        details = (
+            f"{settings} "
+            f"({getattr(mode, 'aspect_ratio', '1:1')}, {getattr(mode, 'image_size', '1K')})"
+        )
+        print(_box_row(f"{S.DIM}{'IMAGE':>8}{S.RST}  {details}", w, heavy=True))
     else:
         print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
     print(_box_row(f"{S.DIM}{'NAMING':>8}{S.RST}  {directory_naming}", w, heavy=True))
@@ -219,7 +276,7 @@ async def main_async(
     # Build per-model effort-adjustment notices; these get scrolled as a
     # news-ticker on the summary line once the tracker starts rendering.
     effort_ticker_msgs: list = []
-    if reasoning_effort and not tts_mode:
+    if reasoning_effort and not tts_mode and not image_mode:
         for _name, model_id in targets:
             supported = _supported_efforts(model_id)
             short_id = model_id.split("/", 1)[-1]
@@ -262,7 +319,7 @@ async def main_async(
             results,
             pad=pad,
             label="Synthesizing" if tts_mode else "Generating",
-            progress_unit="bytes" if tts_mode else "tokens",
+            progress_unit="bytes" if tts_mode else ("images" if image_mode else "tokens"),
             model_names=model_names,
             avg_tokens=avg_tokens,
             pricing_lookup=pricing_lookup or {},
@@ -297,29 +354,48 @@ async def main_async(
             output_dir_task = asyncio.create_task(resolve_output_dir())
             await tracker.start()
 
-            tasks = [
-                run_model(
-                    mode,
-                    session,
-                    api_key,
-                    name,
-                    mid,
-                    user_prompt,
-                    default_ext,
-                    output_dir_task,
-                    semaphore,
-                    results,
-                    pad,
-                    tracker,
-                    reasoning_effort=reasoning_effort,
-                    auto_open=auto_open,
-                    auto_install=auto_install,
+            def _run_model_task(name: str, mid: str) -> asyncio.Task:
+                kwargs: dict[str, Any] = {
+                    "reasoning_effort": reasoning_effort,
+                    "auto_open": auto_open,
+                    "auto_install": auto_install,
+                }
+                if image_mode:
+                    kwargs["image_modalities"] = image_modalities_for_model(
+                        mid, (pricing_lookup or {}).get(mid, {})
+                    )
+                return asyncio.create_task(
+                    run_model(
+                        mode,
+                        session,
+                        api_key,
+                        name,
+                        mid,
+                        user_prompt,
+                        default_ext,
+                        output_dir_task,
+                        semaphore,
+                        results,
+                        pad,
+                        tracker,
+                        **kwargs,
+                    )
                 )
-                for name, mid in targets
-            ]
+
+            tasks = [_run_model_task(name, mid) for name, mid in targets]
             await asyncio.gather(*tasks, return_exceptions=True)
 
-            if auto_open == "after_all" and output_dir_task.done():
+            if image_mode and output_dir_task.done():
+                out = output_dir_task.result()
+                gallery_path = write_image_gallery(
+                    out,
+                    user_prompt,
+                    results,
+                    theme_name=str(config.get("theme", "default")),
+                )
+                if auto_open == "after_all":
+                    _open_with_viewer(gallery_path)
+            elif auto_open == "after_all" and output_dir_task.done():
                 out = output_dir_task.result()
                 code_tabs: list[tuple] = []
                 for name, info in results.items():
@@ -402,9 +478,13 @@ async def main_async(
                 usage_d = info.get("usage", {})
                 tokens = usage_d.get("total_tokens")
                 audio_bytes = usage_d.get("audio_bytes")
+                image_count = usage_d.get("image_count")
                 fname = info["file"]
                 if audio_bytes:
                     usage_part = f"  {S.DIM}{ProgressTracker._format_bytes(audio_bytes)}{S.RST}"
+                elif image_count:
+                    label = "image" if image_count == 1 else "images"
+                    usage_part = f"  {S.DIM}{image_count} {label}{S.RST}"
                 elif tokens:
                     usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
                 else:
@@ -443,17 +523,20 @@ async def main_async(
         print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
-    run_costs = {name: _result_cost(name, info) for name, info in results.items()}
-    record_run(
-        history,
-        user_prompt,
-        output_dir_final[0],
-        total_time,
-        results,
-        costs=run_costs,
-        reasoning_effort=raw_effort if not tts_mode else None,
-    )
-    display_analytics(history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs"))
+    if not image_mode:
+        run_costs = {name: _result_cost(name, info) for name, info in results.items()}
+        record_run(
+            history,
+            user_prompt,
+            output_dir_final[0],
+            total_time,
+            results,
+            costs=run_costs,
+            reasoning_effort=raw_effort if not tts_mode else None,
+        )
+        display_analytics(
+            history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs")
+        )
     if tts_mode and output_dir_final[0]:
         from wavebench.tui.tts_player import browse_tts_outputs
 

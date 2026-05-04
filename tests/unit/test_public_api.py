@@ -51,9 +51,12 @@ def test_wavebench_storage_public_names() -> None:
 
 def test_wavebench_models_public_names() -> None:
     from wavebench.models import (
+        IMAGE_MODEL_MAPPING,
         MODEL_MAPPING,
         TTS_MODEL_MAPPING,
         _model_score,
+        image_modalities_for_model,
+        is_image_model,
         is_stealth,
         is_tts_model,
         tts_voice_for_model,
@@ -61,9 +64,12 @@ def test_wavebench_models_public_names() -> None:
 
     assert isinstance(MODEL_MAPPING, dict)
     assert isinstance(TTS_MODEL_MAPPING, dict)
+    assert isinstance(IMAGE_MODEL_MAPPING, dict)
     assert callable(_model_score)
     assert callable(is_stealth)
     assert callable(is_tts_model)
+    assert callable(is_image_model)
+    assert callable(image_modalities_for_model)
     assert callable(tts_voice_for_model)
 
 
@@ -71,6 +77,7 @@ def test_wavebench_api_public_names() -> None:
     from wavebench.api import (
         _map_effort,
         _supported_efforts,
+        call_image_generation,
         call_model_async,
         call_model_streaming,
         call_tts_speech,
@@ -79,6 +86,7 @@ def test_wavebench_api_public_names() -> None:
     )
 
     for fn in (
+        call_image_generation,
         call_model_async,
         call_model_streaming,
         call_tts_speech,

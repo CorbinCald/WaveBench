@@ -1,4 +1,4 @@
-"""Tabbed configuration menu — Models/TTS tabs (catalog browser + manual add)
+"""Tabbed configuration menu — Models/TTS/Image tabs (catalog browser + manual add)
 and Settings tab (theme, reasoning-effort, analytics sort, directory naming,
 auto-open, auto-install).
 
@@ -20,7 +20,13 @@ import sys
 from typing import Any
 
 from wavebench.api import fetch_top_models
-from wavebench.models import MODEL_MAPPING, TTS_MODEL_MAPPING, is_tts_model
+from wavebench.models import (
+    IMAGE_MODEL_MAPPING,
+    MODEL_MAPPING,
+    TTS_MODEL_MAPPING,
+    is_image_model,
+    is_tts_model,
+)
 from wavebench.parsers import _DIRECTORY_NAMING_CHOICES
 from wavebench.tui import styles as _styles
 from wavebench.tui.input import _read_key_or_resize
@@ -51,32 +57,62 @@ except ImportError:
 _HAS_SIGWINCH = hasattr(signal, "SIGWINCH")
 
 
+def _model_category(model_id: str, metadata: dict[str, Any] | None = None) -> str:
+    """Return the config-tab category for a model id."""
+    if is_image_model(model_id, metadata):
+        return "image"
+    if is_tts_model(model_id):
+        return "tts"
+    return "model"
+
+
 def _build_config_model_items(
     available_models: list[dict[str, Any]],
     current_mapping: dict[str, str],
     pricing_lookup: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build config-menu model rows with text and TTS defaults separated."""
+    """Build config-menu model rows with text, TTS, and Image defaults separated."""
     pricing_lookup = pricing_lookup or {}
     items: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     existing_names: set[str] = set()
-    category_counts = {False: 0, True: 0}
+    category_counts = {"model": 0, "tts": 0, "image": 0}
 
     selected_pairs = list(current_mapping.items())
     selected_ids = {model_id for _, model_id in selected_pairs}
-    if not any(not is_tts_model(model_id) for _, model_id in selected_pairs):
+    if not any(
+        _model_category(model_id, pricing_lookup.get(model_id, {})) == "model"
+        for _, model_id in selected_pairs
+    ):
         for short_name, model_id in MODEL_MAPPING.items():
             if model_id not in selected_ids:
                 selected_pairs.append((short_name, model_id))
                 selected_ids.add(model_id)
-    if not any(is_tts_model(model_id) for _, model_id in selected_pairs):
+    if not any(
+        _model_category(model_id, pricing_lookup.get(model_id, {})) == "tts"
+        for _, model_id in selected_pairs
+    ):
         for short_name, model_id in TTS_MODEL_MAPPING.items():
             if model_id not in selected_ids:
                 selected_pairs.append((short_name, model_id))
                 selected_ids.add(model_id)
+    if not any(
+        _model_category(model_id, pricing_lookup.get(model_id, {})) == "image"
+        for _, model_id in selected_pairs
+    ):
+        for short_name, model_id in IMAGE_MODEL_MAPPING.items():
+            if model_id not in selected_ids:
+                selected_pairs.append((short_name, model_id))
+                selected_ids.add(model_id)
 
-    def add_item(short_name: str, model_id: str, *, selected: bool) -> int | None:
+    def add_item(
+        short_name: str,
+        model_id: str,
+        *,
+        selected: bool,
+        metadata: dict[str, Any] | None = None,
+        category_override: str | None = None,
+    ) -> int | None:
         if not model_id or model_id in seen_ids:
             return None
         if selected and short_name and short_name not in existing_names:
@@ -85,15 +121,18 @@ def _build_config_model_items(
             short = _unique_short_name(model_id, existing_names)
         seen_ids.add(model_id)
         existing_names.add(short)
-        is_tts = is_tts_model(model_id)
-        category_counts[is_tts] += 1
+        metadata = metadata or pricing_lookup.get(model_id, {})
+        category = category_override or _model_category(model_id, metadata)
+        category_counts[category] += 1
         items.append(
             {
                 "short": short,
                 "id": model_id,
                 "selected": selected,
                 "pricing": _format_price(pricing_lookup.get(model_id, {})),
-                "is_tts": is_tts,
+                "category": category,
+                "is_tts": category == "tts",
+                "is_image": category == "image",
             }
         )
         return len(items) - 1
@@ -103,19 +142,20 @@ def _build_config_model_items(
 
     for m in available_models:
         mid = m.get("id", "")
-        is_tts = is_tts_model(mid)
-        if category_counts[is_tts] >= MODEL_MENU_LIMIT or mid in seen_ids:
+        category = _model_category(mid, m)
+        if category_counts[category] >= MODEL_MENU_LIMIT or mid in seen_ids:
             continue
-        add_item("", mid, selected=False)
+        add_item("", mid, selected=False, metadata=m, category_override=category)
 
     return items
 
 
 def _filter_config_model_indices(
-    items: list[dict[str, Any]], query: str, *, tts: bool
+    items: list[dict[str, Any]], query: str, *, tts: bool = False, image: bool = False
 ) -> list[int]:
     """Return model row indices for one config-menu model tab."""
-    tab_indices = [i for i, item in enumerate(items) if bool(item.get("is_tts")) is tts]
+    category = "image" if image else ("tts" if tts else "model")
+    tab_indices = [i for i, item in enumerate(items) if item.get("category") == category]
     needle = query.strip().lower()
     if not needle:
         return tab_indices
@@ -142,9 +182,10 @@ def interactive_config_menu(
     pricing_lookup = pricing_lookup or {}
     MODEL_TAB = 0
     TTS_TAB = 1
-    SETTINGS_TAB = 2
-    MODEL_TABS = (MODEL_TAB, TTS_TAB)
-    tabs = ["Models", "TTS", "Settings"]
+    IMAGE_TAB = 2
+    SETTINGS_TAB = 3
+    MODEL_TABS = (MODEL_TAB, TTS_TAB, IMAGE_TAB)
+    tabs = ["Models", "TTS", "Image", "Settings"]
     active_tab = MODEL_TAB
 
     model_items = _build_config_model_items(available_models, current_mapping, pricing_lookup)
@@ -177,6 +218,26 @@ def interactive_config_menu(
         "af_alloy",
     ]
     TTS_SPEED_CHOICES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    IMAGE_ASPECT_RATIO_CHOICES = [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9",
+    ]
+    IMAGE_SIZE_CHOICES = ["1K", "2K", "4K"]
+    image_settings_value = current_config.get("image_settings", "provider defaults")
+    if image_settings_value == "custom":
+        image_aspect_ratio_value = current_config.get("image_aspect_ratio", "1:1")
+        image_size_value = current_config.get("image_size", "1K")
+    else:
+        image_aspect_ratio_value = "1:1"
+        image_size_value = "1K"
 
     settings_items = [
         {
@@ -236,6 +297,31 @@ def interactive_config_menu(
             "choices": TTS_SPEED_CHOICES,
         },
         {
+            "key": "image_settings",
+            "label": "Image settings",
+            "value": image_settings_value,
+            "type": "cycle",
+            "choices": ["provider defaults", "custom"],
+        },
+        {
+            "key": "image_aspect_ratio",
+            "label": "Image aspect ratio",
+            "value": image_aspect_ratio_value,
+            "type": "cycle",
+            "choices": IMAGE_ASPECT_RATIO_CHOICES,
+            "parent_key": "image_settings",
+            "parent_hidden_when": "provider defaults",
+        },
+        {
+            "key": "image_size",
+            "label": "Image size",
+            "value": image_size_value,
+            "type": "cycle",
+            "choices": IMAGE_SIZE_CHOICES,
+            "parent_key": "image_settings",
+            "parent_hidden_when": "provider defaults",
+        },
+        {
             "key": "auto_install",
             "label": "Auto-install deps",
             "value": current_config.get("auto_install", "off"),
@@ -259,12 +345,19 @@ def interactive_config_menu(
             visible.append((i, item))
         return visible
 
+    def _model_tab_category(tab: int) -> str:
+        if tab == TTS_TAB:
+            return "tts"
+        if tab == IMAGE_TAB:
+            return "image"
+        return "model"
+
     model_cursor = {
         tab: next(
             (
                 i
                 for i, item in enumerate(model_items)
-                if bool(item.get("is_tts")) is (tab == TTS_TAB)
+                if item.get("category") == _model_tab_category(tab)
             ),
             0,
         )
@@ -272,11 +365,12 @@ def interactive_config_menu(
     }
     _CHROME_LINES = 8
     model_page_size = max(1, min(14, shutil.get_terminal_size((80, 24)).lines - _CHROME_LINES))
-    model_page = {MODEL_TAB: 0, TTS_TAB: 0}
-    model_search_query = {MODEL_TAB: "", TTS_TAB: ""}
+    model_page = {MODEL_TAB: 0, TTS_TAB: 0, IMAGE_TAB: 0}
+    model_search_query = {MODEL_TAB: "", TTS_TAB: "", IMAGE_TAB: ""}
     filtered_model_indices = {
         MODEL_TAB: _filter_config_model_indices(model_items, "", tts=False),
         TTS_TAB: _filter_config_model_indices(model_items, "", tts=True),
+        IMAGE_TAB: _filter_config_model_indices(model_items, "", image=True),
     }
     settings_cursor = 0
     adding_model = False
@@ -302,6 +396,9 @@ def interactive_config_menu(
 
     def _model_tab_is_tts(tab: int) -> bool:
         return tab == TTS_TAB
+
+    def _model_tab_is_image(tab: int) -> bool:
+        return tab == IMAGE_TAB
 
     def _model_page_count(tab: int | None = None) -> int:
         tab = active_tab if tab is None else tab
@@ -329,7 +426,10 @@ def interactive_config_menu(
         tab = active_tab if tab is None else tab
         current = model_cursor[tab]
         filtered_model_indices[tab] = _filter_config_model_indices(
-            model_items, model_search_query[tab], tts=_model_tab_is_tts(tab)
+            model_items,
+            model_search_query[tab],
+            tts=_model_tab_is_tts(tab),
+            image=_model_tab_is_image(tab),
         )
         indices = filtered_model_indices[tab]
         if not indices:
@@ -376,7 +476,12 @@ def interactive_config_menu(
 
         if _is_model_tab():
             if adding_model:
-                label = "add TTS model" if adding_model_tab == TTS_TAB else "add model"
+                if adding_model_tab == TTS_TAB:
+                    label = "add TTS model"
+                elif adding_model_tab == IMAGE_TAB:
+                    label = "add image model"
+                else:
+                    label = "add model"
                 add_label = f"{S.HGRN}{label}{S.RST}"
                 add_query = add_model_buffer or f"{S.DIM}provider/model-id{S.RST}"
                 buf.append(_box_row(f"{add_label}: {add_query}", w) + "\033[K\n")
@@ -411,7 +516,9 @@ def interactive_config_menu(
                     buf.append(_box_row(f"{mk} [{chk}] {ns} {ids}{ps}", w) + "\033[K\n")
                 elif row == 0 and not indices:
                     message = "No TTS models match the current search."
-                    if active_tab == MODEL_TAB:
+                    if active_tab == IMAGE_TAB:
+                        message = "No image models match the current search."
+                    elif active_tab == MODEL_TAB:
                         message = "No models match the current search."
                     buf.append(_box_row(f"{S.DIM}{message}{S.RST}", w) + "\033[K\n")
                 else:
@@ -474,12 +581,12 @@ def interactive_config_menu(
         buf.append(_box_row("", w) + "\033[K\n")
 
         if _is_model_tab():
-            is_tts_tab = active_tab == TTS_TAB
-            tab_total = sum(1 for it in model_items if bool(it.get("is_tts")) is is_tts_tab)
+            category = _model_tab_category(active_tab)
+            tab_total = sum(1 for it in model_items if it.get("category") == category)
             sel = sum(
                 1
                 for it in model_items
-                if it["selected"] and bool(it.get("is_tts")) is is_tts_tab
+                if it["selected"] and it.get("category") == category
             )
             pcount = _model_page_count()
             status = (
@@ -499,6 +606,10 @@ def interactive_config_menu(
                 "tts_voice": "alloy",
                 "tts_format": "mp3",
                 "tts_speed": 1.0,
+                "image_settings": "provider defaults",
+                "image_aspect_ratio": "1:1",
+                "image_size": "1K",
+                "image_model_ids": [],
             }
             changed = any(
                 it["value"] != current_config.get(it["key"], defaults.get(it["key"]))
@@ -554,7 +665,7 @@ def interactive_config_menu(
                     mid = add_model_buffer.strip()
                     if mid and mid not in seen_ids:
                         short = _unique_short_name(mid, existing_names)
-                        is_tts = is_tts_model(mid)
+                        category = _model_tab_category(adding_model_tab)
                         existing_names.add(short)
                         seen_ids.add(mid)
                         model_items.append(
@@ -563,14 +674,17 @@ def interactive_config_menu(
                                 "id": mid,
                                 "selected": True,
                                 "pricing": "",
-                                "is_tts": is_tts,
+                                "category": category,
+                                "is_tts": category == "tts",
+                                "is_image": category == "image",
                             }
                         )
                         _nat_short_w = max(_nat_short_w, len(short) + 2)
                         _nat_id_w = max(_nat_id_w, len(mid) + 2)
-                        added_tab = TTS_TAB if is_tts else MODEL_TAB
+                        added_tab = adding_model_tab
                         _refresh_model_filter(MODEL_TAB, preserve_current=True)
                         _refresh_model_filter(TTS_TAB, preserve_current=True)
+                        _refresh_model_filter(IMAGE_TAB, preserve_current=True)
                         model_cursor[added_tab] = len(model_items) - 1
                         _sync_model_page_from_cursor(added_tab)
                         active_tab = added_tab
@@ -635,12 +749,14 @@ def interactive_config_menu(
             elif key in ("enter", "tab"):
                 break
             elif key == "ctrl-a" and _is_model_tab():
+                category = _model_tab_category(active_tab)
                 for it in model_items:
-                    if bool(it.get("is_tts")) is (active_tab == TTS_TAB):
+                    if it.get("category") == category:
                         it["selected"] = True
             elif key == "ctrl-n" and _is_model_tab():
+                category = _model_tab_category(active_tab)
                 for it in model_items:
-                    if bool(it.get("is_tts")) is (active_tab == TTS_TAB):
+                    if it.get("category") == category:
                         it["selected"] = False
             elif key in ("[", "]") and _is_model_tab() and filtered_model_indices[active_tab]:
                 pcount = _model_page_count()
@@ -679,6 +795,9 @@ def interactive_config_menu(
     new_config = dict(current_config)
     for item in settings_items:
         new_config[item["key"]] = item["value"]
+    new_config["image_model_ids"] = [
+        it["id"] for it in model_items if it["selected"] and it.get("category") == "image"
+    ]
 
     print()
     return selected, new_config
