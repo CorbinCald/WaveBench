@@ -302,7 +302,8 @@ def run_model_selection(
 ) -> dict[str, str] | None:
     """Fetch available models from OpenRouter and open the selector."""
     print(f"  {_work} {S.DIM}Fetching models from OpenRouter…{S.RST}")
-    available, pricing_lookup = fetch_top_models(api_key, count=100)
+    # Keep this at least as high as MODEL_MENU_LIMIT; the UI applies its own cap.
+    available, pricing_lookup = fetch_top_models(api_key, count=200)
     if not available:
         print(f"  {S.DIM}Could not fetch remote models — showing local config only.{S.RST}")
     print()

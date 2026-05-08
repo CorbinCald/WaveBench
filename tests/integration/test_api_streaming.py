@@ -440,6 +440,55 @@ def test_fetch_top_models_includes_reserved_speech_and_image_models(
     assert pricing["provider/image"]["__output_modalities"] == ["image"]
 
 
+def test_fetch_top_models_keeps_free_model_when_no_non_free_counterpart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def model(mid: str) -> dict:
+        return {
+            "id": mid,
+            "canonical_slug": mid.removesuffix(":free"),
+            "name": mid,
+            "created": 0,
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {"prompt": "0", "completion": "0"},
+            "supported_parameters": [],
+            "context_length": 8192,
+        }
+
+    body = {
+        "data": [
+            model("provider/has-paid:free"),
+            model("provider/has-paid"),
+            model("provider/free-only:free"),
+        ]
+    }
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(body).encode()
+
+    def fake_urlopen(req: object, timeout: int) -> FakeResponse:
+        return FakeResponse()
+
+    monkeypatch.setattr(api_mod.urllib.request, "urlopen", fake_urlopen)
+
+    models, _pricing = api_mod.fetch_top_models("test-key", count=10)
+
+    ids = [m["id"] for m in models]
+    assert "provider/has-paid" in ids
+    assert "provider/has-paid:free" not in ids
+    assert "provider/free-only:free" in ids
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers in api.py that don't need a server
 # ---------------------------------------------------------------------------

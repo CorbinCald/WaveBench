@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-MODEL_MENU_LIMIT = 100
+# UI-side cap applied after fetch_top_models(); fetch call sites should
+# request at least this many so the catalog is not capped twice.
+MODEL_MENU_LIMIT = 200
 
 
 def _format_price(pricing_dict: dict[str, Any]) -> str:

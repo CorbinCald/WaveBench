@@ -205,7 +205,8 @@ def main() -> None:
 
     # ── Pre-fetch models in background ────────────────────────────────────
     _executor = ThreadPoolExecutor(max_workers=1)
-    models_future: Future = _executor.submit(fetch_top_models, api_key, 100)
+    # Keep this at least as high as MODEL_MENU_LIMIT; the UI applies its own cap.
+    models_future: Future = _executor.submit(fetch_top_models, api_key, 200)
 
     # ── Load persisted state ─────────────────────────────────────────────
     selected_models = load_models()
