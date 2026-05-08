@@ -267,6 +267,26 @@ def test_config_menu_filters_catalog_models_into_matching_tabs() -> None:
     assert image_matches == ["openai/test-image"]
 
 
+def test_config_menu_includes_catalog_models_beyond_old_100_item_cap() -> None:
+    from wavebench.tui.menus.config_menu import (
+        _build_config_model_items,
+        _filter_config_model_indices,
+    )
+
+    available = [
+        {
+            "id": f"provider/model-{i}",
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+        }
+        for i in range(150)
+    ]
+
+    items = _build_config_model_items(available, {"selected": "provider/selected"}, {})
+    model_ids = [items[i]["id"] for i in _filter_config_model_indices(items, "", tts=False)]
+
+    assert "provider/model-149" in model_ids
+
+
 def test_menus_package_exports_public_entries() -> None:
     from wavebench.tui.menus import (
         interactive_config_menu,

@@ -909,6 +909,9 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
         return [], {}
 
     all_models = data.get("data", [])
+    non_free_model_ids = {
+        m.get("id", "") for m in all_models if ":free" not in (m.get("id", "") or "")
+    }
 
     # Build pricing/metadata lookup for every model. The extra private keys are
     # ignored by cost computation but let image mode choose OpenRouter modalities
@@ -945,8 +948,8 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
         # Skip audio-output models that are not dedicated speech/TTS models.
         if "audio" in out_mods and not has_speech_output:
             continue
-        # Skip :free duplicate variants (keep the paid original)
-        if ":free" in mid:
+        # Skip :free duplicate variants only when a non-free counterpart exists.
+        if mid.endswith(":free") and mid.removesuffix(":free") in non_free_model_ids:
             continue
         # Skip OpenRouter utility models (routers, etc.) but keep stealth models
         if mid.startswith("openrouter/") and not is_stealth(mid):
