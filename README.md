@@ -40,7 +40,7 @@ wavebench
 python -m wavebench
 ```
 
-Interactive startup shows a **Code / Text / TTS** mode selector, a summary of active models, and a prompt input with readline-style history. Type `c` at the mode prompt to open the configuration menu.
+Interactive startup shows a **Code / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific readline-style history. Type `c` at the mode prompt to open the configuration menu.
 
 ### CLI Flags
 
@@ -155,7 +155,9 @@ These are created in the current working directory and are gitignored:
 | `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
 | `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, and TTS voice/format/speed |
 | `.benchmark_history.json` | Lifetime run history for analytics |
-| `.benchmark_query_history` | Readline-style prompt history |
+| `.benchmark_query_history.<mode>` | Mode-specific readline-style prompt history for `code`, `text`, `tts`, and `image` prompts |
+
+If a legacy `.benchmark_query_history` file exists, Code mode reads it until `.benchmark_query_history.code` is created on the first new Code prompt.
 
 Because state paths are based on `os.getcwd()`, running WaveBench from different directories creates separate project-local state. TTS mode automatically uses selected TTS-capable models, falling back to the bundled TTS defaults when none are selected.
 
