@@ -9,6 +9,7 @@ benchmarkResults/
 .benchmark_config.json
 .benchmark_models.json
 .benchmark_query_history
+.benchmark_query_history.*
 build/
 *.egg-info/
 .pi/

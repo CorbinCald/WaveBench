@@ -223,9 +223,13 @@ WaveBench stores local state in the current working directory:
 | `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping; TTS mode filters this to TTS-capable IDs and falls back to bundled TTS defaults if none are selected |
 | `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `tts_voice`, `tts_format`, `tts_speed` |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
-| `.benchmark_query_history` | prompt-entry history for the interactive editor |
+| `.benchmark_query_history.<mode>` | mode-specific prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`) |
 
-The path helpers in `storage.py` call `os.getcwd()` at use time. This keeps
+For backward compatibility, Code mode reads a legacy `.benchmark_query_history`
+file until `.benchmark_query_history.code` is created on the first new Code
+prompt.
+
+Persistent-state path helpers call `os.getcwd()` at use time. This keeps
 tests easy to isolate with `monkeypatch.chdir(tmp_path)` and gives each project
 directory its own WaveBench state, but it also means running from a different
 directory uses different settings/history.
