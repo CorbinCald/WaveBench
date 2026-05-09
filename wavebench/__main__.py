@@ -58,14 +58,23 @@ from wavebench.tui.styles import (
 QUERY_HISTORY_FILE = ".benchmark_query_history"
 
 
-def _query_history_path() -> str:
-    return os.path.join(os.getcwd(), QUERY_HISTORY_FILE)
+def _query_history_path(mode_name: str = "code") -> str:
+    return os.path.join(os.getcwd(), f"{QUERY_HISTORY_FILE}.{mode_name}")
 
 
-def _load_query_history() -> None:
+def _query_history_load_path(mode_name: str = "code") -> str:
+    path = _query_history_path(mode_name)
+    if mode_name == "code" and not os.path.exists(path):
+        legacy_path = os.path.join(os.getcwd(), QUERY_HISTORY_FILE)
+        if os.path.exists(legacy_path):
+            return legacy_path
+    return path
+
+
+def _load_query_history(mode_name: str = "code") -> None:
     if readline is None:
         return
-    path = _query_history_path()
+    path = _query_history_load_path(mode_name)
     try:
         readline.clear_history()
     except Exception:
@@ -81,12 +90,12 @@ def _load_query_history() -> None:
         pass
 
 
-def _save_query_history(query: str) -> None:
+def _save_query_history(query: str, mode_name: str = "code") -> None:
     if readline is None or not query:
         return
     try:
         readline.add_history(query)
-        readline.write_history_file(_query_history_path())
+        readline.write_history_file(_query_history_path(mode_name))
     except Exception:
         pass
 
@@ -405,7 +414,7 @@ def main() -> None:
 
             # ── Prompt input ──────────────────────────────────────────
             try:
-                _load_query_history()
+                _load_query_history(mode_name)
                 history_entries: list[str] = []
                 if readline:
                     for i in range(readline.get_current_history_length()):
@@ -421,7 +430,7 @@ def main() -> None:
                 if not user_prompt.strip():
                     _refresh_header()
                     continue
-                _save_query_history(user_prompt)
+                _save_query_history(user_prompt, mode_name)
             except _TabEscape:
                 sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J")
                 sys.stdout.flush()

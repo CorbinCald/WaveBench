@@ -44,8 +44,16 @@ def test_mode_tts_flag_skips_interactive_mode_selector(monkeypatch) -> None:
     monkeypatch.setattr(main_mod, "load_models", lambda: None)
     monkeypatch.setattr(main_mod, "load_config", _default_config)
     monkeypatch.setattr(main_mod, "apply_theme", lambda _theme: None)
-    monkeypatch.setattr(main_mod, "_load_query_history", lambda: None)
-    monkeypatch.setattr(main_mod, "_save_query_history", lambda _query: None)
+    monkeypatch.setattr(
+        main_mod,
+        "_load_query_history",
+        lambda mode_name: seen.__setitem__("load_history_mode", mode_name),
+    )
+    monkeypatch.setattr(
+        main_mod,
+        "_save_query_history",
+        lambda _query, mode_name: seen.__setitem__("save_history_mode", mode_name),
+    )
     monkeypatch.setattr(main_mod, "_read_key_timeout", fail_if_mode_selector_reads_key)
     monkeypatch.setattr(
         main_mod,
@@ -57,6 +65,8 @@ def test_mode_tts_flag_skips_interactive_mode_selector(monkeypatch) -> None:
     main_mod.main()
 
     assert seen == {
+        "load_history_mode": "tts",
+        "save_history_mode": "tts",
         "prompt": "Hello from WaveBench",
         "mode": "tts",
         "text": False,
