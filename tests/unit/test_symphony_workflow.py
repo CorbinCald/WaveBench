@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from symphony.config import resolve_config
+from symphony.config import load_dotenv, resolve_config
 from symphony.errors import TemplateError, WorkflowError
 from symphony.models import Issue
 from symphony.workflow import load_workflow, render_prompt
@@ -45,6 +45,10 @@ agent:
   max_concurrent_agents_by_state:
     Todo: 1
     Bad: 0
+pi:
+  ingest_linear_images: true
+  max_linear_images: 4
+  max_linear_image_bytes: 12345
 ---
 Hello {{ issue.identifier }} attempt={{ attempt }}
 """,
@@ -68,6 +72,9 @@ Hello {{ issue.identifier }} attempt={{ attempt }}
     assert config.tracker.auto_transition is True
     assert config.tracker.post_status_comments is True
     assert config.pi.command == "pi --mode rpc --no-session"
+    assert config.pi.ingest_linear_images is True
+    assert config.pi.max_linear_images == 4
+    assert config.pi.max_linear_image_bytes == 12345
     assert config.git.enabled is True
     assert config.git.repo == "https://example.invalid/repo.git"
     assert config.git.remote == "upstream"
@@ -77,6 +84,45 @@ Hello {{ issue.identifier }} attempt={{ attempt }}
     assert config.git.push_on_merging is True
     assert config.git.pr_on_merging is True
     assert config.agent.max_concurrent_agents_by_state == {"todo": 1}
+
+
+def test_resolve_config_loads_workflow_adjacent_dotenv(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+    workflow_path = tmp_path / "WORKFLOW.md"
+    workflow_path.write_text(
+        """---
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: demo-project
+---
+Prompt
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("LINEAR_API_KEY=secret-from-dotenv\n", encoding="utf-8")
+
+    config = resolve_config(load_workflow(workflow_path))
+
+    assert config.tracker.api_key == "secret-from-dotenv"
+
+
+def test_load_dotenv_does_not_override_existing_env_values(tmp_path: Path) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        """# local operator secrets
+LINEAR_API_KEY=secret-from-file
+export OTHER_KEY='other value'
+""",
+        encoding="utf-8",
+    )
+    env = {"LINEAR_API_KEY": "secret-from-env"}
+
+    loaded = load_dotenv(dotenv_path, env)
+
+    assert loaded == ["OTHER_KEY"]
+    assert env["LINEAR_API_KEY"] == "secret-from-env"
+    assert env["OTHER_KEY"] == "other value"
 
 
 def test_load_workflow_without_front_matter_uses_empty_config(tmp_path: Path) -> None:

@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from symphony.errors import AgentError, TemplateError, WorkspaceError
-from symphony.models import Issue, PiConfig, RunResult, ServiceConfig, WorkflowDefinition
+from symphony.models import (
+    Issue,
+    PiConfig,
+    PromptImage,
+    RunResult,
+    ServiceConfig,
+    WorkflowDefinition,
+)
 from symphony.workflow import render_prompt
 from symphony.workspace import WorkspaceManager
 
@@ -76,11 +83,16 @@ class PiRpcClient:
             },
         )
 
-    async def run_turn(self, prompt: str, workspace: Path, issue: Issue) -> RunResult:
+    async def run_turn(
+        self, prompt: str, workspace: Path, issue: Issue, images: list[PromptImage] | None = None
+    ) -> RunResult:
         workspace = workspace.resolve()
         self._assert_workspace(workspace)
         request_id = self._request_id()
-        await self._send({"id": request_id, "type": "prompt", "message": prompt})
+        message: dict[str, Any] = {"id": request_id, "type": "prompt", "message": prompt}
+        if images:
+            message["images"] = [_rpc_image_payload(image) for image in images]
+        await self._send(message)
         response = await self._read_response(request_id, "prompt", self.config.read_timeout_ms)
         if not response.get("success"):
             return RunResult(False, "response_error", str(response.get("error") or "prompt rejected"))
@@ -267,36 +279,238 @@ class AgentRunner:
     async def run_attempt(
         self, issue: Issue, attempt: int | None = None, on_event: EventCallback | None = None
     ) -> RunResult:
-        workspace = await self.workspace_manager.create_for_issue(issue)
+        workspace = None
         client: PiRpcClient | None = None
         try:
+            await _emit_agent_step(on_event, issue, "workspace_create", "start", attempt=attempt)
+            workspace = await self.workspace_manager.create_for_issue(issue)
+            await _emit_agent_step(
+                on_event,
+                issue,
+                "workspace_create",
+                "ok",
+                workspace=str(workspace.path),
+                created_now=workspace.created_now,
+            )
+
+            await _emit_agent_step(on_event, issue, "before_run", "start")
             await self.workspace_manager.before_run(workspace.path)
+            await _emit_agent_step(on_event, issue, "before_run", "ok")
+
+            await _emit_agent_step(on_event, issue, "pi_start", "start")
             client = PiRpcClient(self.config.pi, self.config.workspace_root, on_event)
             await client.start(workspace.path, issue)
+            await _emit_agent_step(on_event, issue, "pi_start", "ok", session_id=client.session_id)
+
             current_issue = issue
             for turn_number in range(1, self.config.agent.max_turns + 1):
                 prompt = _build_turn_prompt(
                     self.workflow.prompt_template, current_issue, attempt, turn_number
                 )
-                result = await client.run_turn(prompt, workspace.path, current_issue)
+                await _emit_agent_step(
+                    on_event,
+                    issue,
+                    "prompt_render",
+                    "ok",
+                    turn=turn_number,
+                    prompt_chars=len(prompt),
+                    comment_count=len(current_issue.comments),
+                )
+                images = await _fetch_prompt_images(
+                    self.tracker, current_issue, self.config.pi, turn_number, on_event
+                )
+                if images:
+                    prompt = _append_image_notice(prompt, images)
+                await _emit_agent_step(
+                    on_event,
+                    issue,
+                    "pi_turn",
+                    "start",
+                    turn=turn_number,
+                    prompt_chars=len(prompt),
+                    image_count=len(images),
+                )
+                try:
+                    result = await client.run_turn(
+                        prompt, workspace.path, current_issue, images=images
+                    )
+                except AgentError as exc:
+                    await _emit_agent_step(
+                        on_event,
+                        issue,
+                        "pi_turn",
+                        "failed",
+                        turn=turn_number,
+                        error=str(exc),
+                    )
+                    raise
+                await _emit_agent_step(
+                    on_event,
+                    issue,
+                    "pi_turn",
+                    "ok" if result.success else "failed",
+                    turn=turn_number,
+                    result_status=result.status,
+                    error=result.error,
+                )
                 if not result.success:
                     return result
                 if self.config.tracker.auto_transition or self.tracker is None:
                     return result
+                await _emit_agent_step(on_event, issue, "state_refresh", "start")
                 refreshed = await self.tracker.fetch_issue_states_by_ids([issue.id])
                 if refreshed:
                     current_issue = refreshed[0]
+                await _emit_agent_step(
+                    on_event,
+                    issue,
+                    "state_refresh",
+                    "ok",
+                    refreshed_count=len(refreshed),
+                    issue_state=current_issue.state,
+                )
                 if current_issue.state.lower() not in {
                     state.lower() for state in self.config.tracker.active_states
                 }:
+                    await _emit_agent_step(
+                        on_event,
+                        issue,
+                        "active_state_check",
+                        "stop",
+                        issue_state=current_issue.state,
+                    )
                     return result
+            await _emit_agent_step(
+                on_event, issue, "max_turns", "reached", max_turns=self.config.agent.max_turns
+            )
             return RunResult(True, "max_turns_reached")
         except (AgentError, WorkspaceError, TemplateError) as exc:
+            await _emit_agent_step(
+                on_event,
+                issue,
+                "agent_attempt",
+                "failed",
+                error=f"{getattr(exc, 'code', 'failed')}: {exc}",
+            )
             return RunResult(False, getattr(exc, "code", "failed"), str(exc))
         finally:
             if client is not None:
+                await _emit_agent_step(on_event, issue, "pi_stop", "start")
                 await client.stop()
-            await self.workspace_manager.after_run(workspace.path)
+                await _emit_agent_step(on_event, issue, "pi_stop", "ok")
+            if workspace is not None:
+                await _emit_agent_step(on_event, issue, "after_run", "start")
+                await self.workspace_manager.after_run(workspace.path)
+                await _emit_agent_step(on_event, issue, "after_run", "ok")
+
+
+async def _emit_agent_step(
+    on_event: EventCallback | None,
+    issue: Issue,
+    step: str,
+    status: str,
+    **details: Any,
+) -> None:
+    safe_details = {
+        key: _safe_step_detail(value) for key, value in details.items() if value is not None
+    }
+    _LOG.info(
+        "agent_step issue_id=%s issue_identifier=%s step=%s status=%s%s",
+        issue.id,
+        issue.identifier,
+        step,
+        status,
+        _format_step_details(safe_details),
+    )
+    if on_event is None:
+        return
+    payload: dict[str, Any] = {
+        "event": "agent_step",
+        "timestamp": _now_iso(),
+        "issue_id": issue.id,
+        "issue_identifier": issue.identifier,
+        "step": step,
+        "status": status,
+        **safe_details,
+    }
+    result = on_event("agent_step", payload)
+    if result is not None:
+        await result
+
+
+async def _fetch_prompt_images(
+    tracker: Any,
+    issue: Issue,
+    pi_config: PiConfig,
+    turn_number: int,
+    on_event: EventCallback | None = None,
+) -> list[PromptImage]:
+    if turn_number != 1:
+        return []
+    if not pi_config.ingest_linear_images:
+        await _emit_agent_step(on_event, issue, "linear_images", "skipped", reason="disabled")
+        return []
+    if tracker is None:
+        await _emit_agent_step(on_event, issue, "linear_images", "skipped", reason="no_tracker")
+        return []
+    fetcher = getattr(tracker, "fetch_issue_images", None)
+    if fetcher is None:
+        await _emit_agent_step(on_event, issue, "linear_images", "skipped", reason="no_fetcher")
+        return []
+    image_ref_count = len(issue.image_refs)
+    await _emit_agent_step(
+        on_event,
+        issue,
+        "linear_images",
+        "start",
+        image_ref_count=image_ref_count,
+        max_images=pi_config.max_linear_images,
+    )
+    try:
+        images = await fetcher(
+            issue,
+            max_images=pi_config.max_linear_images,
+            max_bytes=pi_config.max_linear_image_bytes,
+        )
+    except Exception as exc:  # best-effort context; text prompt should still run
+        _LOG.warning(
+            "linear_image_ingestion_failed issue_id=%s issue_identifier=%s error=%s",
+            issue.id,
+            issue.identifier,
+            exc,
+        )
+        await _emit_agent_step(
+            on_event,
+            issue,
+            "linear_images",
+            "failed",
+            image_ref_count=image_ref_count,
+            error=str(exc),
+        )
+        return []
+    await _emit_agent_step(
+        on_event,
+        issue,
+        "linear_images",
+        "ok",
+        image_ref_count=image_ref_count,
+        image_count=len(images),
+    )
+    return images
+
+
+def _append_image_notice(prompt: str, images: list[PromptImage]) -> str:
+    lines = [prompt.rstrip(), "", "Linear image attachments sent with this prompt:"]
+    for index, image in enumerate(images, start=1):
+        details = [image.source or "Linear issue", image.mime_type]
+        if image.alt:
+            details.append(f"alt={image.alt!r}")
+        lines.append(f"{index}. " + " | ".join(details))
+    return "\n".join(lines)
+
+
+def _rpc_image_payload(image: PromptImage) -> dict[str, str]:
+    return {"type": "image", "data": image.data, "mimeType": image.mime_type}
 
 
 def _build_turn_prompt(template: str, issue: Issue, attempt: int | None, turn_number: int) -> str:
@@ -367,6 +581,21 @@ def _int_or_zero(value: Any) -> int:
     if isinstance(value, int):
         return value
     return 0
+
+
+def _safe_step_detail(value: Any) -> str | int | bool:
+    if isinstance(value, bool | int):
+        return value
+    text = str(value).replace("\n", " ")
+    if len(text) > 300:
+        return f"{text[:297]}..."
+    return text
+
+
+def _format_step_details(details: dict[str, Any]) -> str:
+    if not details:
+        return ""
+    return " " + " ".join(f"{key}={value!r}" for key, value in details.items())
 
 
 def _summarize_event(message: dict[str, Any]) -> str:

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from symphony.agent import AgentRunner
-from symphony.config import resolve_config
+from symphony.config import load_dotenv, resolve_config
 from symphony.errors import SymphonyError
 from symphony.linear import LinearClient
 from symphony.orchestrator import Orchestrator
@@ -59,6 +59,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     workflow_path = select_workflow_path(args.workflow)
     if args.workflow and not Path(args.workflow).exists():
         raise SymphonyError("missing_workflow_file", f"explicit workflow path does not exist: {args.workflow}")
+    load_dotenv(workflow_path.parent / ".env")
     workflow = load_workflow(workflow_path)
     config = resolve_config(workflow)
     tracker = LinearClient(config.tracker)
