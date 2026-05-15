@@ -16,6 +16,7 @@ _LOG = logging.getLogger(__name__)
 _SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]")
 _BRANCH_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]+")
 _META_EXCLUDE = ".symphony-meta.json"
+_FETCH_RETRY_DELAYS_SECONDS = (1.0, 2.0)
 
 
 @dataclass(slots=True)
@@ -238,7 +239,31 @@ class WorkspaceManager:
             raise WorkspaceError("git_exclude_failed", f"could not update {exclude}: {exc}") from exc
 
     async def _fetch(self, path: Path) -> None:
-        await self._git(path, "fetch", self.git.remote)
+        last_result: _CommandResult | None = None
+        attempts = len(_FETCH_RETRY_DELAYS_SECONDS) + 1
+        for attempt in range(1, attempts + 1):
+            result = await self._git(path, "fetch", self.git.remote, check=False)
+            if result.returncode == 0:
+                return
+            last_result = result
+            if attempt < attempts:
+                delay_seconds = _FETCH_RETRY_DELAYS_SECONDS[attempt - 1]
+                _LOG.warning(
+                    "git_fetch_retrying cwd=%s remote=%s attempt=%s attempts=%s delay_seconds=%s error=%s",
+                    path,
+                    self.git.remote,
+                    attempt,
+                    attempts,
+                    delay_seconds,
+                    (result.stderr or result.stdout).strip(),
+                )
+                await asyncio.sleep(delay_seconds)
+        assert last_result is not None
+        raise WorkspaceError(
+            "git_fetch_failed",
+            f"command exited {last_result.returncode}: git fetch {self.git.remote}: "
+            f"{(last_result.stderr or last_result.stdout).strip()}",
+        )
 
     async def _current_branch(self, path: Path) -> str:
         result = await self._git(path, "branch", "--show-current")
@@ -265,6 +290,26 @@ class WorkspaceManager:
             check=False,
         )
         return result.returncode == 0
+
+    async def has_reviewable_changes_for_issue(self, issue: Issue) -> bool:
+        """Return whether an issue workspace has changes worth sending to review.
+
+        For git-backed workspaces, a reviewable change is either a dirty worktree
+        or commits ahead of the configured base branch. Non-git workspaces keep
+        the historical behavior because Symphony has no reliable diff source.
+        """
+
+        if not self.git.enabled:
+            return True
+        path = self.path_for(issue.identifier)
+        if not path.exists():
+            return False
+        if not await self._is_git_repo(path):
+            return False
+        if await self._worktree_dirty(path):
+            return True
+        _behind, ahead = await self._ahead_behind(path)
+        return ahead > 0
 
     async def _worktree_dirty(self, path: Path) -> bool:
         result = await self._git(path, "status", "--porcelain")

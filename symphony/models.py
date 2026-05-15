@@ -32,6 +32,26 @@ class IssueComment:
 
 
 @dataclass(slots=True)
+class IssueImageRef:
+    """Image URL discovered in Linear issue text or URL attachments."""
+
+    url: str
+    alt: str | None = None
+    source: str | None = None
+
+
+@dataclass(slots=True)
+class PromptImage:
+    """Base64 image payload ready for Pi RPC image attachment."""
+
+    data: str
+    mime_type: str
+    url: str | None = None
+    alt: str | None = None
+    source: str | None = None
+
+
+@dataclass(slots=True)
 class Issue:
     id: str
     identifier: str
@@ -46,6 +66,7 @@ class Issue:
     comments: list[IssueComment] = field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    image_refs: list[IssueImageRef] = field(default_factory=list)
 
     def to_template_data(self) -> dict[str, Any]:
         data = asdict(self)
@@ -103,6 +124,9 @@ class PiConfig:
     turn_timeout_ms: int = 3_600_000
     read_timeout_ms: int = 5_000
     stall_timeout_ms: int = 300_000
+    ingest_linear_images: bool = False
+    max_linear_images: int = 6
+    max_linear_image_bytes: int = 8_000_000
 
 
 @dataclass(slots=True)
@@ -185,6 +209,11 @@ class RunningEntry:
     last_reported_output_tokens: int = 0
     last_reported_total_tokens: int = 0
     turn_count: int = 0
+    tool_execution_count: int = 0
+    tool_names: list[str] = field(default_factory=list)
+    prompt_image_count: int = 0
+    first_turn_response_text: str = ""
+    provider_status: str = ""
 
 
 @dataclass(slots=True)
@@ -195,6 +224,7 @@ class OrchestratorState:
     claimed: set[str] = field(default_factory=set)
     retry_attempts: dict[str, RetryEntry] = field(default_factory=dict)
     completed: set[str] = field(default_factory=set)
+    review_blocked: set[str] = field(default_factory=set)
     agent_totals: dict[str, float] = field(
         default_factory=lambda: {
             "input_tokens": 0,

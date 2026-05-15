@@ -3,16 +3,47 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import html
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 
 from symphony.errors import TrackerError
-from symphony.models import BlockerRef, Issue, IssueComment, TrackerConfig
+from symphony.models import (
+    BlockerRef,
+    Issue,
+    IssueComment,
+    IssueImageRef,
+    PromptImage,
+    TrackerConfig,
+)
 
 _COMMENT_LIMIT = 12
+_LOG = logging.getLogger(__name__)
+
+_ALLOWED_IMAGE_MIME_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+_LINEAR_IMAGE_HOSTS = {"uploads.linear.app", "linearusercontent.com"}
+_MARKDOWN_IMAGE_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<url><[^>]+>|[^\s)]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)",
+    re.IGNORECASE,
+)
+_HTML_IMG_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+_HTML_ATTR_RE = re.compile(
+    r"(?P<name>src|alt)\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))",
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
+_DATA_IMAGE_RE = re.compile(
+    r"^data:(?P<mime>image/[A-Za-z0-9.+-]+);base64,(?P<data>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 _CANDIDATE_QUERY = """
 query SymphonyCandidateIssues($projectSlug: String!, $states: [String!], $after: String) {
@@ -45,6 +76,9 @@ query SymphonyCandidateIssues($projectSlug: String!, $states: [String!], $after:
           user { displayName name }
           botActor { name }
         }
+      }
+      attachments(first: 25) {
+        nodes { id title subtitle url }
       }
       inverseRelations { nodes { type issue { id identifier state { name } } } }
     }
@@ -79,6 +113,9 @@ query SymphonyIssuesByIds($ids: [ID!]!) {
           user { displayName name }
           botActor { name }
         }
+      }
+      attachments(first: 25) {
+        nodes { id title subtitle url }
       }
       inverseRelations { nodes { type issue { id identifier state { name } } } }
     }
@@ -213,6 +250,110 @@ class LinearClient:
         payload = await self.graphql(_ATTACHMENT_CREATE_MUTATION, {"input": attachment})
         return _mutation_success(payload, "attachmentCreate")
 
+    async def fetch_issue_images(
+        self, issue: Issue, max_images: int = 6, max_bytes: int = 8_000_000
+    ) -> list[PromptImage]:
+        """Download image URLs discovered in a Linear issue for Pi RPC."""
+        if not issue.image_refs or max_images <= 0 or max_bytes <= 0:
+            _LOG.info(
+                "linear_image_ingestion_skipped issue_id=%s issue_identifier=%s refs=%s max_images=%s max_bytes=%s",
+                issue.id,
+                issue.identifier,
+                len(issue.image_refs),
+                max_images,
+                max_bytes,
+            )
+            return []
+
+        _LOG.info(
+            "linear_image_ingestion_started issue_id=%s issue_identifier=%s refs=%s max_images=%s max_bytes=%s",
+            issue.id,
+            issue.identifier,
+            len(issue.image_refs),
+            max_images,
+            max_bytes,
+        )
+        images: list[PromptImage] = []
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            for image_ref in issue.image_refs:
+                if len(images) >= max_images:
+                    break
+                image = await self._download_issue_image(session, image_ref, max_bytes)
+                if image is not None:
+                    images.append(image)
+        _LOG.info(
+            "linear_image_ingestion_completed issue_id=%s issue_identifier=%s refs=%s images=%s",
+            issue.id,
+            issue.identifier,
+            len(issue.image_refs),
+            len(images),
+        )
+        return images
+
+    async def _download_issue_image(
+        self, session: aiohttp.ClientSession, image_ref: IssueImageRef, max_bytes: int
+    ) -> PromptImage | None:
+        url = image_ref.url.strip()
+        data_url = _prompt_image_from_data_url(url, image_ref, max_bytes)
+        if data_url is not None:
+            return data_url
+        if not _is_http_url(url):
+            return None
+
+        headers = _image_request_headers(url, self.config.api_key)
+        try:
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    _LOG.info(
+                        "linear_image_download_skipped status=%s source=%s url=%s",
+                        response.status,
+                        image_ref.source,
+                        _safe_url_for_log(url),
+                    )
+                    return None
+                content_type = response.headers.get("Content-Type")
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > max_bytes:
+                    _LOG.info(
+                        "linear_image_download_skipped reason=too_large content_length=%s source=%s url=%s",
+                        content_length,
+                        image_ref.source,
+                        _safe_url_for_log(url),
+                    )
+                    return None
+                data = await response.content.read(max_bytes + 1)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            _LOG.info(
+                "linear_image_download_failed source=%s url=%s error=%s",
+                image_ref.source,
+                _safe_url_for_log(url),
+                exc,
+            )
+            return None
+
+        if len(data) > max_bytes:
+            _LOG.info(
+                "linear_image_download_skipped reason=too_large source=%s url=%s",
+                image_ref.source,
+                _safe_url_for_log(url),
+            )
+            return None
+        mime_type = _normalize_image_mime(content_type, data)
+        if mime_type is None:
+            _LOG.info(
+                "linear_image_download_skipped reason=not_supported_image source=%s url=%s",
+                image_ref.source,
+                _safe_url_for_log(url),
+            )
+            return None
+        return PromptImage(
+            data=base64.b64encode(data).decode("ascii"),
+            mime_type=mime_type,
+            url=url,
+            alt=image_ref.alt,
+            source=image_ref.source,
+        )
+
     async def _workflow_state_id_for_issue(self, issue_id: str, state_name: str) -> str:
         team_id = await self._issue_team_id(issue_id)
         cache_key = (team_id, state_name.lower())
@@ -326,6 +467,213 @@ def _mutation_success(payload: dict[str, Any], key: str) -> bool:
     return bool(success)
 
 
+def _extract_issue_image_refs(
+    node: dict[str, Any], comments: list[IssueComment]
+) -> list[IssueImageRef]:
+    refs: list[IssueImageRef] = []
+    seen: set[str] = set()
+
+    description = node.get("description")
+    if isinstance(description, str):
+        _extract_text_image_refs(description, "description", refs, seen)
+
+    for comment in comments:
+        source = f"comment:{comment.id}" if comment.id else "comment"
+        _extract_text_image_refs(comment.body, source, refs, seen)
+
+    for attachment in ((node.get("attachments") or {}).get("nodes") or []):
+        if not isinstance(attachment, dict):
+            continue
+        url = attachment.get("url")
+        title = attachment.get("title") or attachment.get("subtitle")
+        attachment_id = str(attachment.get("id") or "")
+        source = f"attachment:{attachment_id}" if attachment_id else "attachment"
+        _add_image_ref(refs, seen, url, _optional_text(title), source, explicit_image=False)
+
+    return refs
+
+
+def _extract_text_image_refs(
+    text: str, source: str, refs: list[IssueImageRef], seen: set[str]
+) -> None:
+    for match in _MARKDOWN_IMAGE_RE.finditer(text):
+        _add_image_ref(
+            refs,
+            seen,
+            match.group("url"),
+            _optional_text(match.group("alt")),
+            source,
+            explicit_image=True,
+        )
+
+    for match in _HTML_IMG_RE.finditer(text):
+        attrs = _parse_img_attrs(match.group("attrs"))
+        _add_image_ref(
+            refs,
+            seen,
+            attrs.get("src"),
+            attrs.get("alt"),
+            source,
+            explicit_image=True,
+        )
+
+    for match in _URL_RE.finditer(text):
+        _add_image_ref(
+            refs,
+            seen,
+            match.group(0),
+            None,
+            source,
+            explicit_image=False,
+        )
+
+
+def _add_image_ref(
+    refs: list[IssueImageRef],
+    seen: set[str],
+    raw_url: Any,
+    alt: str | None,
+    source: str,
+    *,
+    explicit_image: bool,
+) -> None:
+    url = _clean_image_url(raw_url)
+    if url is None:
+        return
+    if not explicit_image and not _is_likely_image_url(url):
+        return
+    key = _dedupe_url_key(url)
+    if key in seen:
+        return
+    seen.add(key)
+    refs.append(IssueImageRef(url=url, alt=alt, source=source))
+
+
+def _parse_img_attrs(attrs: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for match in _HTML_ATTR_RE.finditer(attrs):
+        name = match.group("name").lower()
+        value = match.group("double") or match.group("single") or match.group("bare") or ""
+        text = _optional_text(html.unescape(value))
+        if text is not None:
+            parsed[name] = text
+    return parsed
+
+
+def _clean_image_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    url = html.unescape(value).strip().strip("<>").strip()
+    url = url.rstrip(".,;:!?")
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme.lower() == "data":
+        return url if _DATA_IMAGE_RE.match(url) else None
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    return url
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _dedupe_url_key(url: str) -> str:
+    if url.lower().startswith("data:"):
+        return url[:128]
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+    return parsed._replace(scheme=scheme, netloc=host).geturl()
+
+
+def _is_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_likely_image_url(url: str) -> bool:
+    if _DATA_IMAGE_RE.match(url):
+        return True
+    parsed = urlparse(url)
+    path = unquote(parsed.path).lower()
+    if any(path.endswith(extension) for extension in _IMAGE_EXTENSIONS):
+        return True
+    return _is_linear_image_host(parsed.netloc)
+
+
+def _is_linear_image_host(host: str) -> bool:
+    normalized = host.lower().split(":", 1)[0]
+    return normalized in _LINEAR_IMAGE_HOSTS or any(
+        normalized.endswith(f".{suffix}") for suffix in _LINEAR_IMAGE_HOSTS
+    )
+
+
+def _image_request_headers(url: str, api_key: str | None) -> dict[str, str]:
+    headers = {"User-Agent": "WaveBench-Symphony/1.0"}
+    if api_key and _is_linear_image_host(urlparse(url).netloc):
+        headers["Authorization"] = api_key
+    return headers
+
+
+def _safe_url_for_log(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return "<non-http-url>"
+    return parsed._replace(query="", fragment="").geturl()
+
+
+def _prompt_image_from_data_url(
+    url: str, image_ref: IssueImageRef, max_bytes: int
+) -> PromptImage | None:
+    match = _DATA_IMAGE_RE.match(url)
+    if match is None:
+        return None
+    mime_type = _normalize_image_mime(match.group("mime"), b"")
+    if mime_type is None:
+        return None
+    try:
+        data = base64.b64decode(match.group("data"), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(data) > max_bytes:
+        return None
+    return PromptImage(
+        data=base64.b64encode(data).decode("ascii"),
+        mime_type=mime_type,
+        url=url[:128],
+        alt=image_ref.alt,
+        source=image_ref.source,
+    )
+
+
+def _normalize_image_mime(content_type: str | None, data: bytes) -> str | None:
+    raw = (content_type or "").split(";", 1)[0].strip().lower()
+    if raw == "image/jpg":
+        raw = "image/jpeg"
+    sniffed = _sniff_image_mime(data)
+    mime_type = sniffed or raw
+    if mime_type in _ALLOWED_IMAGE_MIME_TYPES:
+        return mime_type
+    return None
+
+
+def _sniff_image_mime(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _normalize_issue(node: dict[str, Any]) -> Issue:
     state = ((node.get("state") or {}).get("name")) or ""
     labels = [
@@ -333,6 +681,7 @@ def _normalize_issue(node: dict[str, Any]) -> Issue:
         for label in ((node.get("labels") or {}).get("nodes") or [])
         if label.get("name")
     ]
+    comments = _normalize_comments(node)
     blockers: list[BlockerRef] = []
     for relation in ((node.get("inverseRelations") or {}).get("nodes") or []):
         if str(relation.get("type", "")).lower() != "blocks":
@@ -356,9 +705,10 @@ def _normalize_issue(node: dict[str, Any]) -> Issue:
         url=node.get("url"),
         labels=labels,
         blocked_by=blockers,
-        comments=_normalize_comments(node),
+        comments=comments,
         created_at=_parse_iso_datetime(node.get("createdAt")),
         updated_at=_parse_iso_datetime(node.get("updatedAt")),
+        image_refs=_extract_issue_image_refs(node, comments),
     )
 
 
