@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -24,6 +25,7 @@ from symphony.models import (
 )
 
 _LOG = logging.getLogger(__name__)
+_NO_REVIEWABLE_CHANGES_MARKER = "workspace has no dirty files or commits ahead of the base branch"
 
 
 class Orchestrator:
@@ -201,6 +203,13 @@ class Orchestrator:
             return False
         if issue.id in self.state.running or issue.id in self.state.claimed:
             return False
+        if issue.id in self.state.review_blocked:
+            if normalized == "todo":
+                self.state.review_blocked.discard(issue.id)
+            else:
+                return False
+        if normalized != "todo" and _latest_comment_is_no_reviewable_changes_notice(issue):
+            return False
         if self.available_slots() <= 0:
             return False
         if not self._state_slot_available(normalized):
@@ -310,8 +319,8 @@ class Orchestrator:
         except Exception as exc:
             result = RunResult(False, "failed", str(exc))
         if result.success:
-            self.state.completed.add(issue_id)
             if await self._mark_issue_ready_for_review(entry, result):
+                self.state.completed.add(issue_id)
                 self.state.claimed.discard(issue_id)
             else:
                 self.schedule_retry(issue_id, entry.identifier, 1, None, continuation=True)
@@ -355,8 +364,47 @@ class Orchestrator:
         review_state = self.config.tracker.review_state
         if not review_state:
             return False
+        try:
+            has_reviewable_changes = await self._workspace_has_reviewable_changes(entry.issue)
+        except Exception as exc:
+            _LOG.warning(
+                "review_gate_check_failed issue_id=%s issue_identifier=%s error=%s",
+                entry.issue.id,
+                entry.identifier,
+                exc,
+            )
+            await self._post_status_comment(
+                entry.issue,
+                (
+                    f"Symphony could not verify workspace changes for {entry.identifier}: {exc}. "
+                    "It will retry before moving the issue to review."
+                ),
+            )
+            return False
+        if not has_reviewable_changes:
+            self.state.review_blocked.add(entry.issue.id)
+            _LOG.info(
+                "review_gate_no_changes issue_id=%s issue_identifier=%s status=%s",
+                entry.issue.id,
+                entry.identifier,
+                result.status,
+            )
+            trace = _agent_trace_summary(entry)
+            await self._post_status_comment(
+                entry.issue,
+                (
+                    f"Symphony finished a run for {entry.identifier}, but the workspace has no "
+                    "dirty files or commits ahead of the base branch, so it was not moved to "
+                    f"{review_state}.\n\n"
+                    f"Workspace: `{self._workspace_path_for_comment(entry.identifier)}`\n\n"
+                    f"Run summary:\n{trace}\n\n"
+                    "Update the issue/workspace and move it back to Todo when it should be retried."
+                ),
+            )
+            return True
         moved = await self._update_issue_state(entry.issue, review_state, "ready_for_review")
         if moved:
+            self.state.review_blocked.discard(entry.issue.id)
             await self._post_status_comment(
                 replace(entry.issue, state=review_state),
                 (
@@ -366,6 +414,12 @@ class Orchestrator:
                 ),
             )
         return moved
+
+    async def _workspace_has_reviewable_changes(self, issue: Issue) -> bool:
+        checker = getattr(self.workspace_manager, "has_reviewable_changes_for_issue", None)
+        if checker is None:
+            return True
+        return bool(await checker(issue))
 
     async def _mark_pull_request_ready(self, issue: Issue, result: PullRequestResult) -> None:
         pr_line = f"\nPR: {result.pr_url}" if result.pr_url else ""
@@ -520,17 +574,38 @@ class Orchestrator:
             entry = self.state.running.get(issue_id)
             if entry is None:
                 return
-            entry.last_agent_event = name
             entry.last_agent_timestamp = datetime.now(UTC)
             message = payload.get("message") or payload.get("event")
-            if message is not None:
-                entry.last_agent_message = str(message)[:500]
+            if name == "agent_step":
+                _record_agent_step(entry, payload)
+            else:
+                entry.last_agent_event = name
+                if message is not None:
+                    entry.last_agent_message = str(message)[:500]
             if payload.get("session_id"):
                 entry.session_id = str(payload["session_id"])
             if payload.get("agent_pid"):
                 entry.agent_pid = int(payload["agent_pid"])
             if name == "turn_started":
                 entry.turn_count += 1
+            if name == "message_update":
+                _record_first_turn_response_text(entry, payload)
+                _record_provider_status(entry, payload)
+            if name in {"message_end", "turn_end", "agent_end", "auto_retry_start", "auto_retry_end"}:
+                _record_provider_status(entry, payload)
+            if name == "tool_execution_start":
+                entry.tool_execution_count += 1
+                tool_name = _tool_name_from_event(payload)
+                if tool_name and tool_name not in entry.tool_names:
+                    entry.tool_names.append(tool_name)
+            if _should_log_agent_event(name):
+                _LOG.info(
+                    "agent_event issue_id=%s issue_identifier=%s event=%s message=%r",
+                    issue_id,
+                    entry.identifier,
+                    name,
+                    entry.last_agent_message,
+                )
             usage = payload.get("usage")
             if isinstance(usage, dict):
                 self._record_usage_delta(entry, usage)
@@ -581,6 +656,9 @@ class Orchestrator:
                     "turn_count": entry.turn_count,
                     "last_event": entry.last_agent_event,
                     "last_message": entry.last_agent_message,
+                    "tool_execution_count": entry.tool_execution_count,
+                    "tool_names": list(entry.tool_names),
+                    "prompt_image_count": entry.prompt_image_count,
                     "started_at": entry.started_at.isoformat(),
                     "last_event_at": entry.last_agent_timestamp.isoformat()
                     if entry.last_agent_timestamp
@@ -627,3 +705,213 @@ def sort_for_dispatch(issues: list[Issue]) -> list[Issue]:
 
 def _state_set(states: list[str]) -> set[str]:
     return {state.lower() for state in states}
+
+
+def _latest_comment_is_no_reviewable_changes_notice(issue: Issue) -> bool:
+    if not issue.comments:
+        return False
+    body = issue.comments[0].body
+    return _NO_REVIEWABLE_CHANGES_MARKER in body and "not moved to" in body
+
+
+def _record_agent_step(entry: RunningEntry, payload: dict[str, Any]) -> None:
+    image_count = payload.get("image_count")
+    if isinstance(image_count, int):
+        entry.prompt_image_count = max(entry.prompt_image_count, image_count)
+
+
+def _agent_trace_summary(entry: RunningEntry) -> str:
+    tool_line = f"- Tool executions: {entry.tool_execution_count}{_tool_names_suffix(entry)}"
+    lines = [
+        f"- Pi turns completed: {entry.turn_count}",
+        f"- Images sent: {entry.prompt_image_count}",
+        tool_line,
+    ]
+    response_excerpt = _first_words(entry.first_turn_response_text, 100)
+    if response_excerpt:
+        lines.append(f"- First response excerpt: {response_excerpt}")
+    elif entry.provider_status:
+        lines.append(f"- Provider status: {entry.provider_status}")
+    else:
+        lines.append("- Provider status: unavailable from Pi RPC events.")
+    if entry.tool_execution_count == 0:
+        lines.append("- No tools ran, so the agent did not inspect or modify files.")
+    return "\n".join(lines)
+
+
+def _tool_names_suffix(entry: RunningEntry) -> str:
+    if not entry.tool_names:
+        return ""
+    names = ", ".join(entry.tool_names[:5])
+    if len(entry.tool_names) > 5:
+        names += ", ..."
+    return f" ({names})"
+
+
+def _record_first_turn_response_text(entry: RunningEntry, payload: dict[str, Any]) -> None:
+    if entry.turn_count != 1:
+        return
+    delta = _message_update_text_delta(payload)
+    if not delta:
+        return
+    entry.first_turn_response_text = (entry.first_turn_response_text + delta)[:8_000]
+
+
+def _message_update_text_delta(payload: dict[str, Any]) -> str | None:
+    raw_payload = payload.get("payload")
+    if not isinstance(raw_payload, dict):
+        return None
+    update = raw_payload.get("assistantMessageEvent")
+    if not isinstance(update, dict):
+        return None
+    if update.get("type") != "text_delta":
+        return None
+    value = update.get("delta") or update.get("text") or update.get("content")
+    if value is None:
+        return None
+    return str(value)
+
+
+def _first_words(text: str, limit: int) -> str:
+    words = text.split()
+    if not words or limit <= 0:
+        return ""
+    excerpt = " ".join(words[:limit])
+    if len(words) > limit:
+        excerpt += " ..."
+    return excerpt
+
+
+def _record_provider_status(entry: RunningEntry, payload: dict[str, Any]) -> None:
+    status = _provider_status_from_event(payload)
+    if not status:
+        return
+    if not entry.provider_status or _provider_status_is_error(status):
+        entry.provider_status = status
+
+
+def _provider_status_from_event(payload: dict[str, Any]) -> str | None:
+    raw_payload = payload.get("payload")
+    if not isinstance(raw_payload, dict):
+        return None
+
+    event_type = raw_payload.get("type")
+    if event_type == "message_update":
+        update = raw_payload.get("assistantMessageEvent")
+        if not isinstance(update, dict):
+            return None
+        message = update.get("message") or update.get("error") or update.get("partial")
+        if isinstance(message, dict):
+            return _format_provider_status(message, fallback_reason=update.get("reason"))
+        return None
+
+    if event_type in {"message_end", "turn_end"}:
+        message = raw_payload.get("message")
+        if isinstance(message, dict):
+            return _format_provider_status(message)
+        return None
+
+    if event_type == "agent_end":
+        messages = raw_payload.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    status = _format_provider_status(message)
+                    if status:
+                        return status
+        return None
+
+    if event_type == "auto_retry_start":
+        return _format_provider_error_status(raw_payload.get("errorMessage"), prefix="retrying")
+    if event_type == "auto_retry_end" and raw_payload.get("success") is False:
+        return _format_provider_error_status(raw_payload.get("finalError"), prefix="retry_failed")
+    return None
+
+
+def _format_provider_status(message: dict[str, Any], fallback_reason: Any = None) -> str | None:
+    if message.get("role") not in {None, "assistant"}:
+        return None
+    parts: list[str] = []
+    provider = _optional_status_text(message.get("provider") or message.get("api"))
+    model = _optional_status_text(message.get("responseModel") or message.get("model"))
+    reason = _optional_status_text(message.get("stopReason") or fallback_reason)
+    error = _optional_status_text(message.get("errorMessage"))
+    status_code = _status_code_from_message(message, error)
+    if provider:
+        parts.append(f"provider={provider}")
+    if model:
+        parts.append(f"model={model}")
+    if reason:
+        parts.append(f"stopReason={reason}")
+    if status_code:
+        parts.append(f"status={status_code}")
+    if error:
+        parts.append(f"message={_truncate_status_text(error)}")
+    return ", ".join(parts) if parts else None
+
+
+def _format_provider_error_status(value: Any, prefix: str) -> str | None:
+    error = _optional_status_text(value)
+    if not error:
+        return None
+    status_code = _status_code_from_text(error)
+    parts = [prefix]
+    if status_code:
+        parts.append(f"status={status_code}")
+    parts.append(f"message={_truncate_status_text(error)}")
+    return ", ".join(parts)
+
+
+def _status_code_from_message(message: dict[str, Any], error: str | None) -> str | None:
+    for key in ("statusCode", "status", "code"):
+        value = message.get(key)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:40]
+    return _status_code_from_text(error or "")
+
+
+def _status_code_from_text(text: str) -> str | None:
+    match = re.search(r"(?<!\d)([45]\d{2})(?!\d)", text)
+    return match.group(1) if match else None
+
+
+def _optional_status_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).replace("\n", " ").strip()
+    return text or None
+
+
+def _truncate_status_text(text: str, limit: int = 220) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def _provider_status_is_error(status: str) -> bool:
+    lowered = status.lower()
+    return "stopreason=error" in lowered or "retry" in lowered or "status=4" in lowered or "status=5" in lowered
+
+
+def _tool_name_from_event(payload: dict[str, Any]) -> str | None:
+    raw_payload = payload.get("payload")
+    if isinstance(raw_payload, dict):
+        tool_name = raw_payload.get("toolName") or raw_payload.get("tool_name")
+        if tool_name:
+            return str(tool_name)[:80]
+    return None
+
+
+def _should_log_agent_event(name: str) -> bool:
+    return name in {
+        "agent_start",
+        "agent_end",
+        "turn_started",
+        "tool_execution_start",
+        "tool_execution_end",
+        "extension_ui_request",
+        "auto_retry_start",
+        "auto_retry_end",
+    }

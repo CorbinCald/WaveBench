@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+
 import pytest
 
 from symphony.linear import LinearClient, _normalize_issue, linear_graphql_tool
-from symphony.models import TrackerConfig
+from symphony.models import Issue, IssueImageRef, TrackerConfig
 
 
 def test_normalize_issue_labels_priority_and_blockers() -> None:
@@ -12,7 +15,7 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
             "id": "abc",
             "identifier": "WB-1",
             "title": "Title",
-            "description": "Body",
+            "description": "Body ![mockup](https://uploads.linear.app/mockup.png)",
             "priority": "2",
             "state": {"name": "Todo"},
             "labels": {"nodes": [{"name": "Bug"}, {"name": "CLI"}]},
@@ -27,11 +30,20 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
                     },
                     {
                         "id": "comment-new",
-                        "body": "Latest note",
+                        "body": "Latest note <img alt=\"modal\" src=\"https://example.com/modal.webp\">",
                         "url": "https://linear.app/comment-new",
                         "createdAt": "2026-05-02T12:00:00.000Z",
                         "botActor": {"name": "Symphony"},
                     },
+                ]
+            },
+            "attachments": {
+                "nodes": [
+                    {
+                        "id": "attachment-1",
+                        "title": "after.png",
+                        "url": "https://example.com/after.png",
+                    }
                 ]
             },
             "inverseRelations": {
@@ -48,9 +60,17 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
     assert issue.labels == ["bug", "cli"]
     assert issue.priority == 2
     assert issue.blocked_by[0].identifier == "WB-0"
-    assert [comment.body for comment in issue.comments] == ["Latest note", "Older note"]
+    assert [comment.body for comment in issue.comments] == [
+        'Latest note <img alt="modal" src="https://example.com/modal.webp">',
+        "Older note",
+    ]
     assert issue.comments[0].author == "Symphony"
     assert issue.comments[1].author == "Alice"
+    assert [(ref.source, ref.alt, ref.url) for ref in issue.image_refs] == [
+        ("description", "mockup", "https://uploads.linear.app/mockup.png"),
+        ("comment:comment-new", "modal", "https://example.com/modal.webp"),
+        ("attachment:attachment-1", "after.png", "https://example.com/after.png"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -60,6 +80,50 @@ async def test_fetch_issues_by_empty_states_returns_without_api_call() -> None:
     )
 
     assert await client.fetch_issues_by_states([]) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_issue_images_downloads_supported_images() -> None:
+    png = b"\x89PNG\r\n\x1a\n" + b"image"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(png)))
+            self.end_headers()
+            self.wfile.write(png)
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/shot.png"
+        client = LinearClient(
+            TrackerConfig("linear", "https://example.invalid", "secret", "demo", [], [])
+        )
+        issue = Issue(
+            id="1",
+            identifier="WB-1",
+            title="Screenshot",
+            state="Todo",
+            image_refs=[IssueImageRef(url=url, alt="shot", source="description")],
+        )
+
+        images = await client.fetch_issue_images(issue)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert len(images) == 1
+    assert images[0].data == "iVBORw0KGgppbWFnZQ=="
+    assert images[0].mime_type == "image/png"
+    assert images[0].alt == "shot"
+    assert images[0].source == "description"
 
 
 @pytest.mark.asyncio

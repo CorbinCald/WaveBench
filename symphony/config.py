@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,64 @@ _DEFAULT_TERMINAL_STATES = ["Closed", "Cancelled", "Canceled", "Duplicate", "Don
 _DEFAULT_WORKING_STATE = "In Progress"
 _DEFAULT_REVIEW_STATE = "Human Review"
 _DEFAULT_MERGING_STATE = "Merging"
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ENV_REF_RE = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def load_dotenv(path: str | Path, env: MutableMapping[str, str] | None = None) -> list[str]:
+    """Load simple ``KEY=value`` assignments from *path* into *env*.
+
+    Existing non-empty environment values win, so an explicitly exported key
+    is never replaced by the local ``.env`` file. The return value contains
+    only the names that were loaded; values are intentionally not exposed.
+    """
+    target = os.environ if env is None else env
+    dotenv_path = Path(path)
+    if not dotenv_path.exists():
+        return []
+
+    loaded: list[str] = []
+    try:
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    for line in lines:
+        parsed = _parse_dotenv_line(line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        if target.get(key):
+            continue
+        target[key] = value
+        loaded.append(key)
+    return loaded
+
+
+def _env_with_workflow_dotenv(workflow_dir: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    load_dotenv(workflow_dir / ".env", env)
+    return env
+
+
+def _parse_dotenv_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    try:
+        parts = shlex.split(stripped, comments=True, posix=True)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    if parts[0] == "export":
+        parts = parts[1:]
+    if not parts or "=" not in parts[0]:
+        return None
+    key, value = parts[0].split("=", 1)
+    if not _ENV_NAME_RE.fullmatch(key):
+        return None
+    return key, value
 
 
 def resolve_config(
@@ -34,7 +92,7 @@ def resolve_config(
 ) -> ServiceConfig:
     """Apply defaults, env indirection, path normalization, and typed validation."""
 
-    env = os.environ if env is None else env
+    env = _env_with_workflow_dotenv(workflow.path.parent) if env is None else env
     raw = workflow.config
     tracker_raw = _map(raw.get("tracker"), "tracker")
     polling_raw = _map(raw.get("polling"), "polling")
@@ -97,6 +155,15 @@ def resolve_config(
         ),
         read_timeout_ms=_positive_int(pi_raw.get("read_timeout_ms"), 5_000, "pi.read_timeout_ms"),
         stall_timeout_ms=_int_value(pi_raw.get("stall_timeout_ms"), 300_000, "pi.stall_timeout_ms"),
+        ingest_linear_images=_bool_value(
+            pi_raw.get("ingest_linear_images"), False, "pi.ingest_linear_images"
+        ),
+        max_linear_images=_positive_int(
+            pi_raw.get("max_linear_images"), 6, "pi.max_linear_images"
+        ),
+        max_linear_image_bytes=_positive_int(
+            pi_raw.get("max_linear_image_bytes"), 8_000_000, "pi.max_linear_image_bytes"
+        ),
     )
     pr_on_merging = _bool_value(git_raw.get("pr_on_merging"), False, "git.pr_on_merging")
     git = GitConfig(
@@ -138,7 +205,10 @@ def validate_dispatch_config(config: ServiceConfig) -> None:
             "unsupported_tracker_kind", "tracker.kind is required and must currently be 'linear'"
         )
     if not config.tracker.api_key:
-        raise ConfigError("missing_tracker_api_key", "tracker.api_key or LINEAR_API_KEY is required")
+        raise ConfigError(
+            "missing_tracker_api_key",
+            "tracker.api_key, exported LINEAR_API_KEY, or workflow-adjacent .env LINEAR_API_KEY is required",
+        )
     if not config.tracker.project_slug:
         raise ConfigError(
             "missing_tracker_project_slug", "tracker.project_slug is required for Linear"

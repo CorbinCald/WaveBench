@@ -15,7 +15,7 @@ The Symphony package lives under `symphony/` and exposes a `symphony` console sc
 - `WORKFLOW.md` loading with optional YAML front matter.
 - Typed config defaults and `$VAR` indirection for tracker credentials and workspace paths.
 - Strict Liquid-like prompt rendering for `{{ issue.* }}`, `{{ attempt }}`, `{% if %}`, and `{% for %}`.
-- Linear GraphQL reader/writer for candidate issues, latest issue comments, state refresh, state transitions, comments, description updates, URL attachments, and the optional raw `linear_graphql` helper.
+- Linear GraphQL reader/writer for candidate issues, latest issue comments, image URLs in issue text/attachments, state refresh, state transitions, comments, description updates, URL attachments, and the optional raw `linear_graphql` helper.
 - Per-issue workspace creation under `workspace.root`, sanitized directory names, root containment checks, native per-issue git branches, clean-worktree rebasing, and lifecycle hooks.
 - A polling orchestrator with bounded global/per-state concurrency, blocker checks, reconciliation, stall detection, and exponential retry scheduling.
 - A Pi RPC JSONL client that launches `pi --mode rpc --no-session`, sends rendered prompts, consumes Pi events until `agent_end`, and auto-cancels extension UI dialogs so unattended runs do not stall indefinitely.
@@ -64,11 +64,19 @@ Before production use, harden the host environment: run under a dedicated OS use
 
    Press `Ctrl+C` to stop it after confirming it launches.
 
-4. Create a Linear personal API key and export it:
+4. Create a Linear personal API key and make it available to Symphony. You can either export it in your shell:
 
    ```bash
    export LINEAR_API_KEY=...
    ```
+
+   Or put it in a gitignored `.env` file next to `WORKFLOW.md`:
+
+   ```env
+   LINEAR_API_KEY=...
+   ```
+
+   The Symphony CLI auto-loads the workflow-adjacent `.env` before resolving `WORKFLOW.md` and before launching Pi workers. Already-exported environment variables take precedence over `.env` values.
 
 5. For PR automation, install/authenticate the GitHub CLI in the host environment used by Symphony:
 
@@ -85,7 +93,13 @@ Before production use, harden the host environment: run under a dedicated OS use
    symphony ./WORKFLOW.md
    ```
 
-   `symphony --once ./WORKFLOW.md` is also a dispatching tick, not a dry run; use it only when you intentionally want Symphony to pick up eligible Linear issues.
+   If the console script is not on your `PATH`, use the Python module form from the repo root:
+
+   ```bash
+   python3 -m symphony ./WORKFLOW.md
+   ```
+
+   `python3 -m symphony --once ./WORKFLOW.md` is also a dispatching tick, not a dry run; use it only when you intentionally want Symphony to pick up eligible Linear issues.
 
 The default workflow stores issue workspaces under `.symphony/workspaces/`, which is gitignored.
 
@@ -124,7 +138,12 @@ pi:
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
+  ingest_linear_images: true
+  max_linear_images: 6
+  max_linear_image_bytes: 8000000
 ```
+
+When `pi.ingest_linear_images` is enabled, Symphony discovers screenshots/images referenced by Linear issue descriptions, comments, and URL attachments; downloads supported PNG/JPEG/GIF/WebP images up to `pi.max_linear_image_bytes`; and sends up to `pi.max_linear_images` as Pi RPC image attachments on the first turn. Keep this enabled only with a Pi model/provider that supports image input.
 
 Add Pi CLI flags directly to `pi.command` when needed, for example:
 
@@ -135,9 +154,17 @@ pi:
 
 Because Symphony starts Pi inside the per-issue workspace, Pi's project-local discovery (`AGENTS.md`, `.pi/extensions/`, `.pi/skills/`, `.agents/skills/`, `.pi/prompts/`) applies to each workspace copy.
 
-## Linear comments in prompts
+## Linear comments and images in prompts
 
 Symphony fetches up to 12 latest Linear comments for each issue and appends them to the Pi prompt after the rendered workflow text. Comments are included verbatim, newest first, with minimal `--- comment ... ---` / `--- end comment ---` delimiters. They are not summarized.
+
+With `pi.ingest_linear_images: true`, Markdown images (`![alt](url)`), HTML `<img>` tags, likely image URLs, and Linear URL attachments are fetched best-effort and sent to Pi as native image attachments. Download failures or unsupported/non-image responses are skipped so the text prompt can still run.
+
+## Agent observability
+
+Symphony emits concise `agent_step` INFO logs for each worker attempt: workspace creation, hooks, Pi startup/shutdown, prompt rendering, Linear image ingestion, Pi turns, state refreshes, and cleanup. Pi RPC milestones such as `agent_start`, `turn_started`, `tool_execution_start`, `tool_execution_end`, and `agent_end` are also logged with the Linear issue identifier.
+
+When a successful run leaves a git-backed workspace with no dirty files and no commits ahead of the base branch, Symphony leaves the issue active and posts a Linear comment with a short run summary: Pi turns completed, images sent, tool execution count, the first 100 words of the first response when available, or the provider stop/error status exposed by Pi RPC when no response text was emitted. It also adds a clear note when no tools ran. This makes no-op runs inspectable without exposing prompt text, image data, or secrets.
 
 ## Linear state machine
 
@@ -159,7 +186,7 @@ Behavior:
 
 - `Todo`: ready for Symphony pickup.
 - `In Progress`: active work. Symphony moves picked-up `Todo` issues here.
-- `Human Review`: ready for human review. Symphony moves successful runs here and does not redispatch them.
+- `Human Review`: ready for human review. Before Symphony moves a successful run here, git-backed workspaces must have reviewable changes: either a dirty worktree or commits ahead of the configured base branch. If no changes are found, Symphony comments and leaves the issue active instead of preemptively requesting review; move the issue back to `Todo` when it should be retried.
 - `Merging`: ready for PR automation. Symphony does not dispatch a worker; it prepares the issue branch, pushes it, creates/finds a PR, comments with the PR URL, and leaves the issue in `Merging`.
 - terminal states (`Done`, `Closed`, `Cancelled`, `Canceled`, `Duplicate`): workspaces may be cleaned up.
 
@@ -182,4 +209,4 @@ Run the deterministic tests:
 pytest tests/unit/test_symphony_*.py
 ```
 
-Real Linear/Pi execution requires valid `LINEAR_API_KEY`, a real Linear project slug, network access, an authenticated/configured Pi installation, and authenticated `gh` for PR automation.
+Real Linear/Pi execution requires a valid `LINEAR_API_KEY` exported in the shell or present in the workflow-adjacent `.env`, a real Linear project slug, network access, an authenticated/configured Pi installation, and authenticated `gh` for PR automation.

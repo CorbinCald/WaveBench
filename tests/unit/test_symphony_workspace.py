@@ -8,7 +8,12 @@ import pytest
 
 from symphony.errors import WorkspaceError
 from symphony.models import GitConfig, HooksConfig, Issue
-from symphony.workspace import WorkspaceManager, issue_branch_name, sanitize_identifier
+from symphony.workspace import (
+    WorkspaceManager,
+    _CommandResult,
+    issue_branch_name,
+    sanitize_identifier,
+)
 
 
 @pytest.mark.asyncio
@@ -81,6 +86,60 @@ async def test_git_workspace_clones_and_switches_to_issue_branch(tmp_path: Path)
 
     assert _git(workspace.path, "branch", "--show-current").stdout.strip() == "symphony/wb-1-add-tts-mode"
     assert (workspace.path / "README.md").read_text(encoding="utf-8") == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_has_reviewable_changes_detects_dirty_git_workspace(tmp_path: Path) -> None:
+    remote = _create_remote_repo(tmp_path)
+    manager = WorkspaceManager(
+        tmp_path / "root",
+        git=GitConfig(enabled=True, repo=str(remote), timeout_ms=10_000),
+    )
+    issue = Issue("1", "WB-1", "Add TTS mode", "Todo")
+    workspace = await manager.create_for_issue(issue)
+
+    assert await manager.has_reviewable_changes_for_issue(issue) is False
+
+    (workspace.path / "feature.txt").write_text("feature\n", encoding="utf-8")
+
+    assert await manager.has_reviewable_changes_for_issue(issue) is True
+
+    _git(workspace.path, "config", "user.name", "Tester")
+    _git(workspace.path, "config", "user.email", "tester@example.com")
+    _git(workspace.path, "add", "feature.txt")
+    _git(workspace.path, "commit", "-m", "Add feature")
+
+    assert await manager.has_reviewable_changes_for_issue(issue) is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_retries_transient_git_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = WorkspaceManager(
+        tmp_path / "root",
+        git=GitConfig(enabled=True, repo="https://example.invalid/repo.git"),
+    )
+    path = manager.path_for("WB-1")
+    path.mkdir(parents=True)
+    calls = 0
+
+    async def fake_git(path_arg: Path, *args: str, check: bool = True) -> _CommandResult:
+        nonlocal calls
+        assert path_arg == path
+        assert args == ("fetch", "origin")
+        assert check is False
+        calls += 1
+        if calls == 1:
+            return _CommandResult(128, "", "fatal: transient TLS failure")
+        return _CommandResult(0, "", "")
+
+    monkeypatch.setattr("symphony.workspace._FETCH_RETRY_DELAYS_SECONDS", (0.0,))
+    monkeypatch.setattr(manager, "_git", fake_git)
+
+    await manager._fetch(path)
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio
