@@ -1,0 +1,43 @@
+name: Sync Linear project
+
+on:
+  issues:
+    types: [opened, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      issue_url:
+        description: GitHub issue URL to assign to the Wavebench Linear project
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  assign-wavebench-project:
+    name: Assign synced Linear issue to Wavebench project
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      LINEAR_TEAM_KEY: COR
+      LINEAR_PROJECT_ID: d728667c-00ae-40a8-9f8b-122525275109
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Assign Linear project
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          EVENT_ISSUE_URL: ${{ github.event.issue.html_url }}
+          INPUT_ISSUE_URL: ${{ inputs.issue_url }}
+        run: |
+          issue_url="${EVENT_ISSUE_URL:-$INPUT_ISSUE_URL}"
+          python .github/scripts/sync_linear_issue_project.py \
+            --issue-url "$issue_url" \
+            --team-key "$LINEAR_TEAM_KEY" \
+            --project-id "$LINEAR_PROJECT_ID"
