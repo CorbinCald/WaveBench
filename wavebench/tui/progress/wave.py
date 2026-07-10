@@ -8,8 +8,10 @@ Three kinds of animated braille waves are produced here:
     throughput. Falls back to ``_render_pre_wave_bar`` for empty space.
   - ``_render_pre_wave_bar`` — short reasoning-state wave (1–3 dots high)
     shown before the first completion token arrives.
-  - ``render_idle_wave`` — full-width ocean wave used on the idle menu
+  - ``render_idle_wave`` — layered full-width ocean used on the idle menu
     background; *intensity* (0.0–1.0) controls amplitude, speed, and color.
+    A filled foreground and two parallax contours provide depth without
+    overlapping differently colored braille fills.
 
 No state, no I/O — just functions that map (tick, width, height, intensity)
 to strings. The module is consumed by ``tracker`` (for live rendering) and
@@ -166,22 +168,28 @@ def _render_pre_wave_bar(width: int, tick: int) -> str:
     return "".join(parts)
 
 
-def render_idle_wave(
-    tick: int, width: int, height: int, intensity: float = 0.0, wave_phase: float | None = None
-) -> list[str]:
-    """Render one frame of an animated ocean wave.
+def _shape_wave(value: float, stokes: float, crest_exp: float, limiter: float) -> float:
+    """Sharpen positive crests while leaving troughs broad and rounded."""
+    value += stokes * value * value
+    if value > 0:
+        value = value**crest_exp
+        return value / (1.0 + limiter * value)
+    return -(abs(value) ** 1.3)
 
-    Returns *height* ANSI-colored strings, each *width* visible characters
-    wide.  *intensity* (0.0--1.0) controls wave energy: 0.0 gives a calm,
-    low swell; 1.0 gives tall, fast, sharply cresting waves.  All wave
-    physics -- amplitude, phase speed, harmonic content, Stokes nonlinearity,
-    and gradient color -- interpolate smoothly between those extremes.
-    """
-    if _NO_COLOR or height <= 0 or width <= 0:
-        return [" " * width] * max(height, 0)
+
+def _idle_wave_surfaces(
+    tick: int,
+    width: int,
+    height: int,
+    intensity: float,
+    wave_phase: float | None,
+) -> tuple[list[float], list[float], list[float]]:
+    """Build wave surfaces on a grid of braille dot columns and rows."""
+    if width <= 0 or height <= 0:
+        return [], [], []
 
     intensity = max(0.0, min(1.0, intensity))
-    total_sp = height * 8
+    total_sp = height * 4
 
     amp_scale = 0.14 + 0.24 * intensity
     amp_breath = 0.06 + 0.12 * intensity
@@ -190,84 +198,213 @@ def render_idle_wave(
     center_norm = 0.75 - 0.20 * intensity
     center_sway = 0.12 + 0.22 * intensity
     center = total_sp * center_norm + amp * center_sway * math.sin(tick * 0.024)
+    depth_gap = total_sp * (0.085 + 0.015 * intensity)
 
-    spd = 0.35 + 0.75 * intensity
     if wave_phase is None:
-        wave_phase = tick * spd
-
-    h1_amp = 0.62
-    h2_amp = 0.08 + 0.14 * intensity
-    h3_amp = 0.02 + 0.08 * intensity
-    h4_amp = 0.01 + 0.03 * intensity
+        wave_phase = tick * (0.35 + 0.75 * intensity)
 
     stokes = 0.06 + 0.18 * intensity
     crest_exp = 1.3 + 0.5 * intensity
     limiter = 0.35 - 0.15 * intensity
 
-    ct = max(0.0, min(1.0, intensity + 0.03 * math.sin(tick * 0.03)))
-    _low, _mid, _high = _styles.IDLE_WAVE_COLORS
-    if ct < 0.5:
-        f = ct * 2.0
-        cr = _low[0] + (_mid[0] - _low[0]) * f
-        cg = _low[1] + (_mid[1] - _low[1]) * f
-        cb = _low[2] + (_mid[2] - _low[2]) * f
-    else:
-        f = (ct - 0.5) * 2.0
-        cr = _mid[0] + (_high[0] - _mid[0]) * f
-        cg = _mid[1] + (_high[1] - _mid[1]) * f
-        cb = _mid[2] + (_high[2] - _mid[2]) * f
-    wave_color = f"\033[38;2;{int(cr)};{int(cg)};{int(cb)}m"
-
-    surfaces: list[float] = []
+    far: list[float] = []
+    middle: list[float] = []
+    foreground: list[float] = []
     for col in range(width):
         nx = col / max(width - 1, 1)
-        h = (
-            h1_amp * math.sin(nx * 14.0 - wave_phase * 0.107)
-            + h2_amp * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
-            + h3_amp * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
-            + h4_amp * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9)
+
+        far_height = (
+            0.72 * math.sin(nx * 18.0 - wave_phase * 0.045 + 0.8)
+            + 0.12 * math.sin(nx * 31.0 - wave_phase * 0.064 + 2.4)
+            + 0.03 * math.sin(nx * 52.0 - wave_phase * 0.083 + 0.3)
         )
-        h += stokes * h * h
-        if h > 0:
-            h = h**crest_exp
-            h /= 1.0 + limiter * h
-        else:
-            h = -(abs(h) ** 1.3)
-        surfaces.append(center - h * amp)
+        far_height = _shape_wave(
+            far_height,
+            stokes * 0.30,
+            1.10 + 0.15 * intensity,
+            limiter + 0.16,
+        )
+        far.append(center - depth_gap * 2.0 - far_height * amp * 0.36)
+
+        middle_height = (
+            0.67 * math.sin(nx * 15.8 - wave_phase * 0.074 + 0.3)
+            + (0.08 + 0.08 * intensity)
+            * math.sin(nx * 28.0 - wave_phase * 0.103 + 2.0)
+            + (0.02 + 0.04 * intensity)
+            * math.sin(nx * 47.0 - wave_phase * 0.132 + 3.4)
+        )
+        middle_height = _shape_wave(
+            middle_height,
+            stokes * 0.62,
+            1.18 + 0.28 * intensity,
+            limiter + 0.08,
+        )
+        middle.append(center - depth_gap - middle_height * amp * 0.65)
+
+        foreground_height = (
+            0.62 * math.sin(nx * 14.0 - wave_phase * 0.107)
+            + (0.08 + 0.14 * intensity)
+            * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
+            + (0.02 + 0.08 * intensity)
+            * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
+            + (0.01 + 0.03 * intensity)
+            * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9)
+        )
+        foreground_height = _shape_wave(
+            foreground_height,
+            stokes,
+            crest_exp,
+            limiter,
+        )
+        foreground.append(center - foreground_height * amp)
+
+    return far, middle, foreground
+
+
+def _blend_color(
+    start: tuple[int, int, int], end: tuple[int, int, int], amount: float
+) -> tuple[int, int, int]:
+    amount = max(0.0, min(1.0, amount))
+    return tuple(round(a + (b - a) * amount) for a, b in zip(start, end, strict=True))
+
+
+def _scale_color(color: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, round(channel * amount))) for channel in color)
+
+
+_BRAILLE_DOT_BITS = (
+    (0x01, 0x08),
+    (0x02, 0x10),
+    (0x04, 0x20),
+    (0x40, 0x80),
+)
+_BRAILLE_FILL_MASKS = (
+    (0x47, 0x46, 0x44, 0x40, 0x00),
+    (0xB8, 0xB0, 0xA0, 0x80, 0x00),
+)
+
+
+def _surface_fill_mask(surface: list[float], row: int, col: int) -> int:
+    """Return the foreground-water mask for one 2×4 braille cell."""
+    cell_top = row * 4
+    mask = 0
+    for subcol in range(2):
+        first_wet_dot = math.ceil(surface[col * 2 + subcol] - 0.5) - cell_top
+        first_wet_dot = max(0, min(4, first_wet_dot))
+        mask |= _BRAILLE_FILL_MASKS[subcol][first_wet_dot]
+    return mask
+
+
+def _surface_contour_mask(
+    surface: list[float],
+    row: int,
+    col: int,
+    occluding_surface: list[float] | None = None,
+) -> int:
+    """Return a two-dot-wide contour, clipped behind a nearer surface."""
+    mask = 0
+    for subcol in range(2):
+        index = col * 2 + subcol
+        if occluding_surface is not None and surface[index] >= occluding_surface[index]:
+            continue
+        dot_y = math.floor(surface[index])
+        if dot_y >= 0 and dot_y // 4 == row:
+            mask |= _BRAILLE_DOT_BITS[dot_y % 4][subcol]
+    return mask
+
+
+def _color_code(color: tuple[int, int, int]) -> str:
+    return f"\033[38;2;{color[0]};{color[1]};{color[2]}m"
+
+
+def render_idle_wave(
+    tick: int, width: int, height: int, intensity: float = 0.0, wave_phase: float | None = None
+) -> list[str]:
+    """Render a filled foreground wave with two parallax depth contours.
+
+    Returns *height* ANSI-colored strings, each *width* visible characters
+    wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
+    Rear surfaces are contours rather than overlapping fills because a terminal
+    cell cannot assign separate colors to different dots in one braille glyph.
+    """
+    if _NO_COLOR or height <= 0 or width <= 0:
+        return [" " * width] * max(height, 0)
+
+    intensity = max(0.0, min(1.0, intensity))
+    far_surface, middle_surface, foreground_surface = _idle_wave_surfaces(
+        tick, width * 2, height, intensity, wave_phase
+    )
+    far_occluding_surface = [
+        min(middle_y, foreground_y)
+        for middle_y, foreground_y in zip(
+            middle_surface,
+            foreground_surface,
+            strict=True,
+        )
+    ]
+
+    color_t = max(0.0, min(1.0, intensity + 0.03 * math.sin(tick * 0.03)))
+    low, middle, high = _styles.IDLE_WAVE_COLORS
+    if color_t < 0.5:
+        active_color = _blend_color(low, middle, color_t * 2.0)
+    else:
+        active_color = _blend_color(middle, high, (color_t - 0.5) * 2.0)
+
+    far_color = _scale_color(_blend_color(low, active_color, 0.22), 0.52 + 0.08 * intensity)
+    middle_color = _scale_color(
+        _blend_color(low, active_color, 0.62), 0.72 + 0.08 * intensity
+    )
+    far_contour_code = _color_code(
+        _scale_color(_blend_color(far_color, middle_color, 0.25), 1.05)
+    )
+    middle_contour_code = _color_code(_blend_color(middle_color, active_color, 0.28))
 
     rows: list[str] = []
     for row in range(height):
-        cell_top = row * 8
-        cell_bot = cell_top + 8
+        row_depth = row / max(height - 1, 1)
+        foreground_body_code = _color_code(
+            _scale_color(active_color, 1.0 - 0.42 * row_depth)
+        )
         parts: list[str] = []
-        in_color = False
+        current_color: str | None = None
 
         for col in range(width):
-            s = surfaces[col]
-
-            if s <= cell_top:
-                level = 8
-            elif s >= cell_bot:
-                level = 0
+            foreground_mask = _surface_fill_mask(foreground_surface, row, col)
+            if foreground_mask:
+                mask = foreground_mask
+                color = foreground_body_code
             else:
-                level = max(1, min(7, round(cell_bot - s)))
+                middle_mask = _surface_contour_mask(
+                    middle_surface,
+                    row,
+                    col,
+                    occluding_surface=foreground_surface,
+                )
+                if middle_mask:
+                    mask = middle_mask
+                    color = middle_contour_code
+                else:
+                    mask = _surface_contour_mask(
+                        far_surface,
+                        row,
+                        col,
+                        occluding_surface=far_occluding_surface,
+                    )
+                    color = far_contour_code
 
-            if level == 0:
-                if in_color:
+            if not mask:
+                if current_color is not None:
                     parts.append(S.RST)
-                    in_color = False
+                    current_color = None
                 parts.append(" ")
                 continue
 
-            pool = _WAVE_CHARS[level]
-            ch = pool[(col + tick) % len(pool)]
+            if color != current_color:
+                parts.append(color)
+                current_color = color
+            parts.append(chr(0x2800 + mask))
 
-            if not in_color:
-                parts.append(wave_color)
-                in_color = True
-            parts.append(ch)
-
-        if in_color:
+        if current_color is not None:
             parts.append(S.RST)
         rows.append("".join(parts))
 
