@@ -30,7 +30,7 @@ def test_normalize_issue_labels_priority_and_blockers() -> None:
                     },
                     {
                         "id": "comment-new",
-                        "body": "Latest note <img alt=\"modal\" src=\"https://example.com/modal.webp\">",
+                        "body": 'Latest note <img alt="modal" src="https://example.com/modal.webp">',
                         "url": "https://linear.app/comment-new",
                         "createdAt": "2026-05-02T12:00:00.000Z",
                         "botActor": {"name": "Symphony"},
@@ -132,7 +132,9 @@ async def test_linear_graphql_tool_rejects_multiple_operations() -> None:
         TrackerConfig("linear", "https://example.invalid", "secret", "demo", [], [])
     )
 
-    result = await linear_graphql_tool(client, "query A { viewer { id } } query B { viewer { id } }")
+    result = await linear_graphql_tool(
+        client, "query A { viewer { id } } query B { viewer { id } }"
+    )
 
     assert result["success"] is False
     assert "exactly one" in result["error"]
@@ -140,7 +142,9 @@ async def test_linear_graphql_tool_rejects_multiple_operations() -> None:
 
 class WritebackClient(LinearClient):
     def __init__(self) -> None:
-        super().__init__(TrackerConfig("linear", "https://example.invalid", "secret", "demo", [], []))
+        super().__init__(
+            TrackerConfig("linear", "https://example.invalid", "secret", "demo", [], [])
+        )
         self.calls: list[dict] = []
 
     async def graphql(self, query: str, variables: dict | None = None) -> dict:
@@ -187,7 +191,9 @@ async def test_linear_writeback_helpers_create_comment_description_and_attachmen
 
     assert await client.create_comment("issue-1", "Ready for review") is True
     assert await client.update_issue_description("issue-1", "New description") is True
-    assert await client.create_attachment("issue-1", "Video", "https://example.com/video.webm") is True
+    assert (
+        await client.create_attachment("issue-1", "Video", "https://example.com/video.webm") is True
+    )
 
     assert client.calls[0]["variables"] == {
         "input": {"issueId": "issue-1", "body": "Ready for review"}

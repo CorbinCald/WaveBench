@@ -80,7 +80,8 @@ class WorkspaceManager:
         created_now = False
         if path.exists() and not path.is_dir():
             raise WorkspaceError(
-                "workspace_path_not_directory", f"workspace path exists and is not a directory: {path}"
+                "workspace_path_not_directory",
+                f"workspace path exists and is not a directory: {path}",
             )
         if not path.exists():
             path.mkdir(parents=True)
@@ -154,7 +155,9 @@ class WorkspaceManager:
 
     async def _prepare_git_workspace(self, path: Path, issue: Issue, created_now: bool) -> None:
         if not self.git.repo:
-            raise WorkspaceError("missing_git_repo", "git.repo is required when git.enabled is true")
+            raise WorkspaceError(
+                "missing_git_repo", "git.repo is required when git.enabled is true"
+            )
         if not await self._is_git_repo(path):
             if not _path_empty(path):
                 raise WorkspaceError(
@@ -236,7 +239,9 @@ class WorkspaceManager:
                         fh.write("\n")
                     fh.write(f"{_META_EXCLUDE}\n")
         except OSError as exc:
-            raise WorkspaceError("git_exclude_failed", f"could not update {exclude}: {exc}") from exc
+            raise WorkspaceError(
+                "git_exclude_failed", f"could not update {exclude}: {exc}"
+            ) from exc
 
     async def _fetch(self, path: Path) -> None:
         last_result: _CommandResult | None = None
@@ -353,10 +358,14 @@ class WorkspaceManager:
         )
 
     async def _ahead_behind(self, path: Path) -> tuple[int, int]:
-        result = await self._git(path, "rev-list", "--left-right", "--count", f"{self._base_ref()}...HEAD")
+        result = await self._git(
+            path, "rev-list", "--left-right", "--count", f"{self._base_ref()}...HEAD"
+        )
         parts = result.stdout.strip().split()
         if len(parts) != 2:
-            raise WorkspaceError("git_rev_list_failed", f"unexpected rev-list output: {result.stdout!r}")
+            raise WorkspaceError(
+                "git_rev_list_failed", f"unexpected rev-list output: {result.stdout!r}"
+            )
         return int(parts[0]), int(parts[1])
 
     async def _create_or_find_pr(self, path: Path, issue: Issue, branch: str) -> tuple[str, bool]:
@@ -398,7 +407,9 @@ class WorkspaceManager:
         )
         url = _extract_url(created.stdout.strip())
         if not url:
-            raise WorkspaceError("gh_pr_create_failed", f"could not parse PR URL: {created.stdout!r}")
+            raise WorkspaceError(
+                "gh_pr_create_failed", f"could not parse PR URL: {created.stdout!r}"
+            )
         return url, True
 
     async def _git(self, path: Path, *args: str, check: bool = True) -> _CommandResult:
@@ -518,7 +529,11 @@ def _sanitize_branch_name(raw: str, fallback: str) -> str:
     if branch.endswith(".lock"):
         branch = branch[: -len(".lock")].rstrip(".-/")
     if not branch or branch == "@":
-        return _sanitize_branch_name(fallback, "symphony/issue") if raw != fallback else "symphony/issue"
+        return (
+            _sanitize_branch_name(fallback, "symphony/issue")
+            if raw != fallback
+            else "symphony/issue"
+        )
     return branch
 
 

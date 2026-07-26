@@ -55,9 +55,7 @@ def test_load_query_history_uses_selected_mode_and_legacy_code_fallback(
     monkeypatch.setattr(main_mod, "readline", fake)
 
     (tmp_state_dir / ".benchmark_query_history").write_text("legacy code\n", encoding="utf-8")
-    (tmp_state_dir / ".benchmark_query_history.image").write_text(
-        "draw a wave\n", encoding="utf-8"
-    )
+    (tmp_state_dir / ".benchmark_query_history.image").write_text("draw a wave\n", encoding="utf-8")
 
     main_mod._load_query_history("image")
     assert fake.items == ["draw a wave"]
@@ -87,9 +85,7 @@ def test_save_query_history_writes_only_selected_mode_file(
     fake = FakeReadline()
     monkeypatch.setattr(main_mod, "readline", fake)
 
-    (tmp_state_dir / ".benchmark_query_history.image").write_text(
-        "old image\n", encoding="utf-8"
-    )
+    (tmp_state_dir / ".benchmark_query_history.image").write_text("old image\n", encoding="utf-8")
     main_mod._load_query_history("image")
     main_mod._save_query_history("new image", "image")
 
