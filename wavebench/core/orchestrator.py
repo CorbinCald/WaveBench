@@ -473,6 +473,10 @@ async def main_async(
                 _total_run_cost += model_cost
                 _has_any_cost = True
             cost_s = f"  {S.HYEL}{format_cost(model_cost)}{S.RST}" if model_cost else ""
+            # A length-truncated response still saves and still counts as a
+            # success — the marker is the only thing separating it from a
+            # complete answer in this box.
+            trunc_s = f"  {S.YEL}⚠ truncated{S.RST}" if info.get("truncated") else ""
             if st == "success":
                 sym = _ok
                 usage_d = info.get("usage", {})
@@ -489,7 +493,7 @@ async def main_async(
                     usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
                 else:
                     usage_part = ""
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}"
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
             elif st == "cancelled":
                 sym = _skip
                 detail = f"{S.DIM}cancelled{S.RST}"
@@ -502,7 +506,7 @@ async def main_async(
                 overflow = _vlen(content) + 2 + len(t) - inner_w
                 max_fname = max(8, len(fname) - overflow)
                 fname = _truncate(fname, max_fname)
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}"
+                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
                 content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             gap = max(inner_w - _vlen(content) - len(t), 2)
             print(_box_row(f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))

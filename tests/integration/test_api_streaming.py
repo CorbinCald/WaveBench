@@ -70,9 +70,11 @@ def _make_streaming_app(
 def _reset_ctx_cache() -> None:
     """Clear the module-level model-context cache so tests don't share state."""
     api_mod._MODEL_CONTEXT_CACHE.clear()
+    api_mod._MODEL_MAX_COMPLETION_CACHE.clear()
     api_mod._MODEL_CONTEXTS_ATTEMPTED = False
     yield
     api_mod._MODEL_CONTEXT_CACHE.clear()
+    api_mod._MODEL_MAX_COMPLETION_CACHE.clear()
     api_mod._MODEL_CONTEXTS_ATTEMPTED = False
 
 
@@ -776,6 +778,222 @@ def test_date_suffixed_gpt_5_keeps_pre_56_ceiling() -> None:
         "high",
         "xhigh",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Output-token budgeting and truncation detection
+#
+# A benchmark run of an isometric RTS came back as two "successes" that both
+# stopped mid-statement: the 32k ceiling cut them off, and because nothing
+# looked at ``finish_reason`` the partial files were saved and scored as
+# complete.  These pin both halves of the fix — a ceiling high enough for a
+# real single-file program, and a signal when a model still hits it.
+# ---------------------------------------------------------------------------
+
+
+def test_output_ceiling_matches_frontier_model_limits() -> None:
+    # Claude Opus 5 and GPT-5.6 Sol both advertise max_completion_tokens=128000.
+    assert api_mod.MAX_OUTPUT_TOKENS_DEFAULT == 128_000
+    # The step-down used when a model rejects that ceiling.
+    assert api_mod.MAX_OUTPUT_TOKENS_FALLBACK == 32_000
+
+
+def test_reasoning_budget_does_not_scale_past_provider_cap() -> None:
+    # The reasoning.max_tokens form targets Gemini/Qwen-style thinking
+    # budgets, which top out near 32k — 80% of a 128k ceiling would be
+    # rejected outright.
+    def _budgets(attempts: list[dict]) -> list[int]:
+        return [
+            a["reasoning"]["max_tokens"] for a in attempts if "max_tokens" in a.get("reasoning", {})
+        ]
+
+    budgets = _budgets(api_mod._reasoning_attempts("google/gemini-3-pro", "high", 128_000))
+    assert budgets, "expected a reasoning.max_tokens attempt"
+    assert max(budgets) <= 32_768
+    # Unchanged for the old ceiling: 0.8 * 32_000 was already under the cap.
+    assert _budgets(api_mod._reasoning_attempts("google/gemini-3-pro", "high", 32_000)) == [25_600]
+
+
+async def test_resolve_max_tokens_clamps_to_provider_output_limit(
+    _reset_ctx_cache: None,
+) -> None:
+    # A 1M context window is not a 1M output budget.
+    api_mod._MODEL_CONTEXT_CACHE["big/ctx-small-out"] = 1_000_000
+    api_mod._MODEL_MAX_COMPLETION_CACHE["big/ctx-small-out"] = 8_192
+    async with aiohttp.ClientSession() as session:
+        resolved = await api_mod._resolve_max_tokens(
+            session, "test-key", "big/ctx-small-out", "hi", fallback=200_000
+        )
+    assert resolved == 8_192
+
+
+async def test_resolve_max_tokens_uses_full_ceiling_when_provider_allows(
+    _reset_ctx_cache: None,
+) -> None:
+    api_mod._MODEL_CONTEXT_CACHE["big/roomy"] = 1_000_000
+    api_mod._MODEL_MAX_COMPLETION_CACHE["big/roomy"] = 128_000
+    async with aiohttp.ClientSession() as session:
+        resolved = await api_mod._resolve_max_tokens(
+            session, "test-key", "big/roomy", "hi", fallback=200_000
+        )
+    assert resolved == 128_000
+
+
+async def test_model_metadata_populates_output_limit_cache(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def models(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "data": [
+                    {
+                        "id": "vendor/capped",
+                        "context_length": 1_000_000,
+                        "top_provider": {"max_completion_tokens": 64_000},
+                    },
+                    # Roughly an eighth of the catalog advertises nothing here.
+                    {"id": "vendor/unknown", "context_length": 200_000},
+                    {
+                        "id": "vendor/null-provider",
+                        "context_length": 200_000,
+                        "top_provider": None,
+                    },
+                ]
+            }
+        )
+
+    app = web.Application()
+    app.router.add_get("/models", models)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            await api_mod._load_model_context_lengths(session, "test-key")
+
+    assert api_mod._MODEL_MAX_COMPLETION_CACHE["vendor/capped"] == 64_000
+    assert "vendor/unknown" not in api_mod._MODEL_MAX_COMPLETION_CACHE
+    assert "vendor/null-provider" not in api_mod._MODEL_MAX_COMPLETION_CACHE
+    # Context lengths still land regardless of the output-limit field.
+    assert api_mod._MODEL_CONTEXT_CACHE["vendor/unknown"] == 200_000
+
+
+def test_usage_with_finish_carries_finish_reason() -> None:
+    body = {
+        "usage": {"total_tokens": 10},
+        "choices": [{"finish_reason": "length", "message": {"content": "partial"}}],
+    }
+    usage = api_mod._usage_with_finish(body)
+    assert usage["finish_reason"] == "length"
+    assert usage["total_tokens"] == 10
+
+
+def test_usage_with_finish_omits_missing_reason() -> None:
+    assert "finish_reason" not in api_mod._usage_with_finish({"usage": {"total_tokens": 1}})
+    assert api_mod._usage_with_finish({}) == {}
+    # A null finish_reason mid-stream must not be recorded as a real one.
+    assert "finish_reason" not in api_mod._usage_with_finish({"choices": [{"finish_reason": None}]})
+
+
+def test_usage_with_finish_does_not_mutate_response_body() -> None:
+    body = {"usage": {"total_tokens": 5}, "choices": [{"finish_reason": "stop"}]}
+    api_mod._usage_with_finish(body)
+    assert "finish_reason" not in body["usage"]
+
+
+async def test_streaming_surfaces_length_finish_reason(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This is what a truncated benchmark result looks like on the wire: real
+    # content, no error, and finish_reason "length" on the final chunk.
+    chunks = [
+        {"choices": [{"delta": {"content": "def main("}, "finish_reason": None}]},
+        {
+            "choices": [{"delta": {"content": "self"}, "finish_reason": "length"}],
+            "usage": {"total_tokens": 128_000},
+        },
+    ]
+    app = _make_streaming_app(chunks)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            content, usage = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert content == "def main(self"
+    assert usage["finish_reason"] == "length"
+
+
+async def test_streaming_reports_stop_for_complete_responses(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunks = [{"choices": [{"delta": {"content": "done"}, "finish_reason": "stop"}]}]
+    app = _make_streaming_app(chunks)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            _, usage = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert usage["finish_reason"] == "stop"
+
+
+async def test_streaming_steps_down_when_provider_rejects_the_ceiling(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A model that advertises no max_completion_tokens gets the optimistic
+    # 128k request.  If it 400s in a wording we can't parse, one step down to
+    # the old ceiling has to rescue the result rather than failing the model.
+    seen: list[int] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        body = await request.json()
+        seen.append(body["max_tokens"])
+        if body["max_tokens"] > api_mod.MAX_OUTPUT_TOKENS_FALLBACK:
+            return web.Response(status=400, text="max_tokens is too large for this model")
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(await _sse_body([{"choices": [{"delta": {"content": "ok"}}]}]))
+        await resp.write_eof()
+        return resp
+
+    async def models(request: web.Request) -> web.Response:
+        # No top_provider block — the 13% of the catalog we can't pre-clamp.
+        return web.json_response({"data": [{"id": "test/model", "context_length": 1_000_000}]})
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    app.router.add_get("/models", models)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            content, _ = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert content == "ok"
+    assert seen[0] == api_mod.MAX_OUTPUT_TOKENS_DEFAULT
+    assert seen[-1] == api_mod.MAX_OUTPUT_TOKENS_FALLBACK
 
 
 # ---------------------------------------------------------------------------

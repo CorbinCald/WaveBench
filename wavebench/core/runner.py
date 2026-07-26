@@ -380,10 +380,18 @@ async def run_model(
             _open_file_in_tab(filepath, interp=venv_python)
 
         elapsed = time.monotonic() - start
+        # finish_reason "length" means the model ran out of output budget
+        # mid-token, so the file on disk stops partway through.  It parses
+        # and saves like any other result, which is exactly why it needs
+        # calling out — otherwise it only shows up when the file won't run.
+        truncated = (usage or {}).get("finish_reason") == "length"
         if not registered:
+            warn = (
+                f"  {S.YEL}⚠ truncated — hit the output token cap{S.RST}" if truncated else ""
+            )
             print(
                 f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
-                f"saved {_arrow} {S.GRN}{filename}{S.RST}  "
+                f"saved {_arrow} {S.GRN}{filename}{S.RST}{warn}  "
                 f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
             )
         result: dict[str, Any] = {
@@ -392,6 +400,7 @@ async def run_model(
             "file": filename,
             "usage": usage,
             "retries": retry_events,
+            "truncated": truncated,
         }
         if mode.name == "code":
             result["venv_python"] = venv_python

@@ -402,6 +402,9 @@ class ProgressTracker:
             status_part = "/".join(str(s) for s in statuses)
             label = f"{len(retries)} retry" if len(retries) == 1 else f"{len(retries)} retries"
             retry_s = f"  {S.YEL}({label} on {status_part}){S.RST}"
+        # A truncated result saves and parses like a complete one; without a
+        # marker here the only symptom is a file that won't run.
+        trunc_s = f"  {S.YEL}⚠ truncated{S.RST}" if info.get("truncated") else ""
         if st == "success":
             sym = _ok
             usage = info.get("usage", {})
@@ -418,7 +421,7 @@ class ProgressTracker:
                 usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
             else:
                 usage_part = ""
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
         elif st == "cancelled":
             sym = _skip
             detail = f"{S.DIM}cancelled{S.RST}{retry_s}"
@@ -433,7 +436,7 @@ class ProgressTracker:
             overflow = _vlen(content) + 2 + len(t) - inner_w
             max_fname = max(8, len(fname) - overflow)
             fname = _truncate(fname, max_fname)
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}"
+            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
             content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
         gap = max(inner_w - _vlen(content) - len(t), 2)
         return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
