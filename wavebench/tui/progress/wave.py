@@ -13,6 +13,12 @@ Three kinds of animated braille waves are produced here:
     A filled foreground and two parallax contours provide depth without
     overlapping differently colored braille fills.
 
+Every wave here is hue-locked: a single theme color varied in lightness only.
+Wave height is carried by the braille glyph, depth and progress by brightness,
+so a wave never changes hue mid-gradient. Two things break that if reintroduced
+— adding equal amounts to R/G/B (washes toward white/grey) and keying color off
+the quantised height *level* (bands adjacent cells instead of blending them).
+
 No state, no I/O — just functions that map (tick, width, height, intensity)
 to strings. The module is consumed by ``tracker`` (for live rendering) and
 directly by ``__main__`` (for the idle-menu background).
@@ -25,12 +31,16 @@ import math
 from wavebench.tui import styles as _styles
 from wavebench.tui.styles import (
     _NO_COLOR,
-    PULSE_GRADIENT,
     TITLE_WAVE_GRADIENT,
     S,
 )
 
 BAR_WIDTH = 20
+
+# Darkest shade a bar wave is allowed to fade to, as a position along the
+# theme's lightness ramp. Braille glyphs only light ~1/3 of a cell, so a bar
+# that fades all the way to the ramp's floor reads as unlit rather than dim.
+BAR_SHADE_FLOOR = 0.18
 
 _WAVE_CHARS: list = [
     ["⠀"],  # 0: empty
@@ -43,6 +53,39 @@ _WAVE_CHARS: list = [
     ["⣷", "⣾"],  # 7: bottom 3 rows + half of top
     ["⣿"],  # 8: full block
 ]
+
+
+def _blend_color(
+    start: tuple[int, int, int], end: tuple[int, int, int], amount: float
+) -> tuple[int, int, int]:
+    amount = max(0.0, min(1.0, amount))
+    return tuple(round(a + (b - a) * amount) for a, b in zip(start, end, strict=True))
+
+
+def _scale_color(color: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, round(channel * amount))) for channel in color)
+
+
+def _color_code(color: tuple[int, int, int]) -> str:
+    return _styles.color_code(color)
+
+
+def _bar_shade(index: int, crest: int, span: int, tick: int) -> str:
+    """Colour one character of a bar wave from the theme's lightness ramp.
+
+    Brightness peaks at *crest* — the wave's leading edge — and falls off with
+    distance over *span* characters, so the generated section and the trailing
+    pre-wave form a single continuous gradient rather than two palettes meeting
+    at a seam. Both ramp endpoints share the theme hue, so only lightness moves.
+    """
+    # Reach spans the whole bar so the ramp never flattens out into a run of
+    # identical cells — every cell sits at its own point on the gradient.
+    reach = max(span, 4.0)
+    nearness = max(0.0, 1.0 - abs(index - crest) / reach)
+    shade = BAR_SHADE_FLOOR + (1.0 - BAR_SHADE_FLOOR) * nearness
+    shade *= 0.94 + 0.06 * math.sin(tick * 0.06 - index * 0.22)
+    dim, bright = _styles.WAVE_SHADES
+    return _color_code(_blend_color(dim, bright, shade))
 
 
 def _title_wave(tick: int, width: int = 5) -> str:
@@ -74,6 +117,10 @@ def _render_pulse_bar(
     following a sine wave that scrolls right.  *phase* is accumulated
     externally (driven by token rate) so scroll speed tracks throughput.
     Amplitude scales with token progress so the wave grows as output fills.
+
+    Colour is a single-hue lightness ramp peaking at the leading edge and
+    continuing unbroken into the trailing pre-wave, so the whole bar reads as
+    one gradient. Wave *height* is carried by the glyph alone, never by hue.
     """
     ratio = min(chars / max(scale, 1), 1.0)
     filled = round(ratio * bar_width)
@@ -83,7 +130,8 @@ def _render_pulse_bar(
     bandwidth = 0.70
     amplitude = (0.35 + 0.65 * ratio) * (0.92 + 0.08 * math.sin(t * 1.7 + 2.0))
     parts: list[str] = []
-    prev_level = -1
+    crest = filled - 1
+    prev_color: str | None = None
 
     for i in range(filled):
         w = math.sin(i * bandwidth - phase)
@@ -100,68 +148,61 @@ def _render_pulse_bar(
         pool = _WAVE_CHARS[level]
         ch = pool[(i + tick) % len(pool)]
 
-        if level != prev_level:
-            if prev_level >= 0:
-                parts.append(S.RST)
-            parts.append(PULSE_GRADIENT[level])
-            prev_level = level
+        if not _NO_COLOR:
+            color = _bar_shade(i, crest, bar_width, tick)
+            if color != prev_color:
+                parts.append(color)
+                prev_color = color
         parts.append(ch)
 
-    if filled:
+    if filled and not _NO_COLOR:
         parts.append(S.RST)
 
     if empty > 0:
-        parts.append(_render_pre_wave_bar(empty, tick))
+        parts.append(
+            _render_pre_wave_bar(empty, tick, crest=-1, span=bar_width, offset=filled)
+        )
 
     return "".join(parts)
 
 
-def _render_pre_wave_bar(width: int, tick: int) -> str:
+def _render_pre_wave_bar(
+    width: int, tick: int, crest: int = 0, span: int | None = None, offset: int = 0
+) -> str:
     """Mini braille wave shown during pre-generation 'reasoning' state.
 
-    Same wave style as the main progress bar but constrained to 1-3 dots
-    high, with a per-character gradient from bright green (matching the
-    leading edge of the main bar) to grey-blue, pulsing over time.
+    Same wave style as the main progress bar but constrained to 1-3 dots high.
+    Colour comes from the shared single-hue ramp in :func:`_bar_shade`, so a
+    standalone reasoning bar (*crest* 0) fades brightest-to-dimmest left to
+    right, while the trailing section of a progress bar continues that bar's
+    gradient — *offset* shifts it into the parent bar's coordinate space and
+    *crest* points back at the leading edge just behind it.
     """
     parts: list[str] = []
-    t = tick * 0.06
     phase = tick * 0.10
-
-    _pw = _styles.PRE_WAVE_COLORS
-    _s0, _s1 = _pw["start_base"], _pw["start_amp"]
-    _t0, _t1 = _pw["target_base"], _pw["target_amp"]
+    span = width if span is None else span
+    prev_color: str | None = None
 
     for i in range(width):
-        pos = i / max(width - 1, 1)
+        index = offset + i
 
-        w = math.sin(i * 0.6 - phase)
-        w2 = math.sin(i * 1.05 - phase * 0.65 + 1.3) * 0.28
+        w = math.sin(index * 0.6 - phase)
+        w2 = math.sin(index * 1.05 - phase * 0.65 + 1.3) * 0.28
         val = max(0.0, min(1.0, (w + w2) * 0.5 + 0.5))
         level = max(1, min(3, round(val * 3)))
 
         pool = _WAVE_CHARS[level]
-        ch = pool[(i + tick) % len(pool)]
+        ch = pool[(index + tick) % len(pool)]
 
         if _NO_COLOR:
             parts.append(ch)
             continue
 
-        p1 = math.sin(t + i * 0.35) * 0.5 + 0.5
-        p2 = math.sin(t * 0.6 + i * 0.2 + 2.0) * 0.3 + 0.5
-        p = p1 * 0.65 + p2 * 0.35
-
-        sr = _s0[0] + p * _s1[0]
-        sg = _s0[1] + p * _s1[1]
-        sb = _s0[2] + p * _s1[2]
-        tr = _t0[0] + p * _t1[0]
-        tg = _t0[1] + p * _t1[1]
-        tb = _t0[2] + p * _t1[2]
-
-        r = max(0, min(255, int(sr + (tr - sr) * pos)))
-        g = max(0, min(255, int(sg + (tg - sg) * pos)))
-        b = max(0, min(255, int(sb + (tb - sb) * pos)))
-
-        parts.append(f"\033[38;2;{r};{g};{b}m{ch}")
+        color = _bar_shade(index, offset + crest, span, tick)
+        if color != prev_color:
+            parts.append(color)
+            prev_color = color
+        parts.append(ch)
 
     if not _NO_COLOR:
         parts.append(S.RST)
@@ -261,17 +302,6 @@ def _idle_wave_surfaces(
     return far, middle, foreground
 
 
-def _blend_color(
-    start: tuple[int, int, int], end: tuple[int, int, int], amount: float
-) -> tuple[int, int, int]:
-    amount = max(0.0, min(1.0, amount))
-    return tuple(round(a + (b - a) * amount) for a, b in zip(start, end, strict=True))
-
-
-def _scale_color(color: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
-    return tuple(max(0, min(255, round(channel * amount))) for channel in color)
-
-
 _BRAILLE_DOT_BITS = (
     (0x01, 0x08),
     (0x02, 0x10),
@@ -313,8 +343,16 @@ def _surface_contour_mask(
     return mask
 
 
-def _color_code(color: tuple[int, int, int]) -> str:
-    return f"\033[38;2;{color[0]};{color[1]};{color[2]}m"
+# Depth ramp for the three ocean layers, as a fraction of the active colour.
+# Every layer is the same colour scaled down, so depth reads as lightness only.
+# Both rear layers stay below 1.0 at every row, keeping a background contour
+# from ever out-shining the foreground body it is meant to sit behind.
+_FAR_DEPTH = 0.42
+_MIDDLE_DEPTH = 0.66
+# Top-to-bottom darkening of the water. Braille lights only ~1/3 of a cell, so
+# a steeper falloff than this crushes the body to near-black and the wave stops
+# reading as one colour with bright crests floating on it.
+_DEPTH_FALLOFF = 0.28
 
 
 def render_idle_wave(
@@ -350,20 +388,24 @@ def render_idle_wave(
     else:
         active_color = _blend_color(middle, high, (color_t - 0.5) * 2.0)
 
-    far_color = _scale_color(_blend_color(low, active_color, 0.22), 0.52 + 0.08 * intensity)
-    middle_color = _scale_color(
-        _blend_color(low, active_color, 0.62), 0.72 + 0.08 * intensity
-    )
-    far_contour_code = _color_code(
-        _scale_color(_blend_color(far_color, middle_color, 0.25), 1.05)
-    )
-    middle_contour_code = _color_code(_blend_color(middle_color, active_color, 0.28))
+    # Distant water lifts slightly as the ocean gains energy, but never past
+    # the layer in front of it.
+    far_depth = _FAR_DEPTH + 0.06 * intensity
+    middle_depth = _MIDDLE_DEPTH + 0.04 * intensity
 
     rows: list[str] = []
     for row in range(height):
         row_depth = row / max(height - 1, 1)
-        foreground_body_code = _color_code(
-            _scale_color(active_color, 1.0 - 0.42 * row_depth)
+        row_shade = 1.0 - _DEPTH_FALLOFF * row_depth
+        # One color per layer for the whole row. Depth varies down the rows, not
+        # across them, so a row is a single run of each layer's color — which is
+        # what keeps the frame down to a handful of escape sequences.
+        foreground_body_code = _color_code(_scale_color(active_color, row_shade))
+        middle_contour_code = _color_code(
+            _scale_color(active_color, row_shade * middle_depth)
+        )
+        far_contour_code = _color_code(
+            _scale_color(active_color, row_shade * far_depth)
         )
         parts: list[str] = []
         current_color: str | None = None
