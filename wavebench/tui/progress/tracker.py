@@ -31,6 +31,7 @@ from wavebench.tui.progress.wave import (
     _render_pre_wave_bar,
     _render_pulse_bar,
     _title_wave,
+    _wave_phase_step,
     render_idle_wave,
 )
 from wavebench.tui.styles import (
@@ -348,6 +349,34 @@ class ProgressTracker:
         if pct > 0 and filled == 0:
             filled = 1
         return self._phase_boxes(filled)
+
+    def _wave_progress_units(self, progress: float) -> float:
+        """Convert a raw progress counter to the tracker's displayed unit."""
+        if self._progress_unit in {"bytes", "images"}:
+            return progress
+        return progress / 4.0
+
+    def _wave_volume_factor(self, gross_progress: float) -> float:
+        """Normalize generated volume against this run's expected output.
+
+        A fixed global token threshold kept small benchmarks near their idle
+        height for almost the entire run. Per-run scaling gives one model and
+        twelve models the same gradual 0→1 energy arc.
+        """
+        if self._progress_unit == "bytes":
+            expected = max(self._total, 1) * 64 * 1024
+        elif self._progress_unit == "images":
+            expected = max(self._total, 1)
+        elif self._model_names:
+            expected = sum(
+                max(self._avg_tokens.get(name, self.DEFAULT_AVG_TOKENS), 1)
+                for name in self._model_names
+            )
+        else:
+            expected = max(self._total, 1) * self.DEFAULT_AVG_TOKENS
+
+        generated = self._wave_progress_units(gross_progress)
+        return min(1.0, math.sqrt(max(0.0, generated) / expected))
 
     @staticmethod
     def _flush_frame(frame: str) -> None:
@@ -718,17 +747,25 @@ class ProgressTracker:
                         self._wave_last_chars = gross_chars
                     elif dt >= 0.4:
                         delta = gross_chars - self._wave_last_chars
-                        instant = (delta / 4.0) / dt
+                        instant = self._wave_progress_units(delta) / dt
                         self._wave_agg_rate = 0.12 * instant + 0.88 * self._wave_agg_rate
                         self._wave_last_chars = gross_chars
                         self._wave_rate_time = now
-                    gross_tokens = gross_chars / 4.0
-                    rate_target = min(1.0, math.sqrt(max(0.0, self._wave_agg_rate) / 1500.0))
-                    volume_factor = min(1.0, math.sqrt(gross_tokens / 20000.0))
+                    if self._progress_unit == "bytes":
+                        rate_scale = 50_000.0
+                    elif self._progress_unit == "images":
+                        rate_scale = 1.0
+                    else:
+                        rate_scale = 1500.0
+                    rate_target = min(
+                        1.0,
+                        math.sqrt(max(0.0, self._wave_agg_rate) / rate_scale),
+                    )
+                    volume_factor = self._wave_volume_factor(gross_chars)
                     target = min(1.0, max(rate_target, volume_factor) * 0.6 + volume_factor * 0.4)
                     self._wave_intensity += (target - self._wave_intensity) * 0.04
 
-                    wave_spd = (0.35 + 0.75 * self._wave_intensity) * (1.0 + 0.5 * volume_factor)
+                    wave_spd = _wave_phase_step(self._wave_intensity) * (1.0 + 0.15 * volume_factor)
                     self._wave_phase += wave_spd
 
                     remaining = max(0, term.lines - lines)
