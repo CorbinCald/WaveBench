@@ -8,6 +8,7 @@ Supports the interactive mode-select screen at startup (Code / Text / TTS / Imag
 
 import argparse
 import asyncio
+import atexit
 import os
 import shutil
 import sys
@@ -42,6 +43,7 @@ from wavebench.tui.line_editor import _read_line, _TabEscape
 from wavebench.tui.menus import run_config_menu
 from wavebench.tui.progress import render_idle_wave
 from wavebench.tui.styles import (
+    CURSOR_SHOW,
     S,
     _banner,
     _box_bot,
@@ -53,6 +55,7 @@ from wavebench.tui.styles import (
     _tw,
     _work,
     apply_theme,
+    overlay_frame,
 )
 
 QUERY_HISTORY_FILE = ".benchmark_query_history"
@@ -293,13 +296,26 @@ def main() -> None:
             _ww = term.columns - 2
             if _wh >= 3 and _ww >= 10:
                 _wf = render_idle_wave(_wave_tick, _ww, _wh)
-                _buf = ["\x1b7"]
-                for _i, _rs in enumerate(_wf):
-                    _buf.append(f"\x1b[{_wt + _i};2H{_rs}")
-                _buf.append("\x1b8")
-                sys.stdout.write("".join(_buf))
+                _buf = [f"\x1b[{_wt + _i};2H{_rs}" for _i, _rs in enumerate(_wf)]
+                # The frame is far bigger than one PTY write, so the terminal
+                # would otherwise repaint mid-stream and stamp its block cursor
+                # onto a random wave cell.  See ``overlay_frame``.
+                sys.stdout.write(overlay_frame("".join(_buf)))
                 sys.stdout.flush()
             _wave_tick += 1
+
+        def _restore_cursor() -> None:
+            """Undo a wave frame's cursor hide if we die between hide and show.
+
+            The pair is emitted in a single write, so only an exception or a
+            signal landing inside that write can split them — rare, but it
+            would leave the user's shell with no cursor after we exit.
+            """
+            if sys.stdout.isatty():
+                sys.stdout.write(CURSOR_SHOW)
+                sys.stdout.flush()
+
+        atexit.register(_restore_cursor)
 
         _refresh_header()
 
