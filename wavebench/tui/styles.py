@@ -10,12 +10,158 @@ color constants that the rest of the TUI imports directly. The live
 theme preview in the config menu swaps colors and reverts on cancel.
 """
 
+import functools
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 _NO_COLOR = not sys.stdout.isatty() or os.environ.get("NO_COLOR") is not None
+
+
+def _detect_truecolor() -> bool:
+    """Whether 24-bit color actually reaches the screen.
+
+    ``COLORTERM`` is inherited by child processes, so inside a multiplexer it
+    describes the terminal tmux is drawing *to*, not what tmux forwards: unless
+    RGB passthrough is configured, tmux re-quantises every 24-bit sequence down
+    to its 256-color palette. Trusting the variable there makes the app emit
+    gradients the screen cannot show, so ask tmux what it really forwards.
+    """
+    override = os.environ.get("WAVEBENCH_COLOR_DEPTH", "").strip().lower()
+    if override:
+        return override in ("truecolor", "24bit")
+
+    if os.environ.get("TMUX"):
+        try:
+            features = subprocess.run(
+                ["tmux", "display-message", "-p", "#{client_termfeatures}"],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return "RGB" in features.strip().split(",")
+
+    if os.environ.get("TERM", "").startswith("screen"):
+        return False
+    return os.environ.get("COLORTERM", "").strip().lower() in ("truecolor", "24bit")
+
+
+TRUECOLOR: bool = _detect_truecolor()
+
+# Channel levels of the xterm-256 color cube, and the luminance weight of each
+# channel. The weights double as a perceptual yardstick for hue comparison: an
+# error in blue, which the eye barely resolves, costs a fraction of one in green.
+_CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+_LUMA_WEIGHTS = (0.2126, 0.7152, 0.0722)
+_RAMP_SAMPLES = 16
+
+
+def _luma(color: tuple[int, int, int]) -> float:
+    return sum(weight * value for weight, value in zip(_LUMA_WEIGHTS, color))
+
+
+def _hue_of(color: tuple[int, int, int]) -> tuple[float, ...]:
+    peak = max(color)
+    return (0.0, 0.0, 0.0) if peak == 0 else tuple(value / peak for value in color)
+
+
+def _hue_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    return sum(
+        weight * abs(x - y)
+        for weight, x, y in zip(_LUMA_WEIGHTS, _hue_of(a), _hue_of(b))
+    )
+
+
+_CUBE_TOPS = tuple(
+    (r, g, b)
+    for r in _CUBE_LEVELS
+    for g in _CUBE_LEVELS
+    for b in _CUBE_LEVELS
+    if max(r, g, b) == 255 and not r == g == b
+)
+
+
+@functools.lru_cache(maxsize=64)
+def hue_ramp(color: tuple[int, int, int]) -> tuple[tuple[int, int, int], ...]:
+    """Dark-to-bright 256-palette ramp holding *color*'s hue.
+
+    The color cube's lowest non-zero level is 0x5f, so it has no dark saturated
+    entries at all — while the 24-entry greyscale ramp sits densely right beside
+    them. A terminal picking the nearest palette color therefore renders dim
+    theme colors as *grey*, and one step of lightness can flip a cell from
+    colored to colorless. So the ramp is built rather than searched: scale the
+    channel *indices* of the best-matching bright entry, then keep only the
+    steps whose channel ratios fade monotonically toward the dominant channel as
+    they darken. That second rule is what stops the ramp doubling back on itself
+    — plain index scaling walks lime through pure green, *yellow*, then back to
+    yellow-green — and it drops achromatic steps for free, since reaching the
+    grey diagonal means a secondary ratio rose to 1.0.
+
+    It is deliberately strict, and it is why a ramp is often only three steps
+    long. Relaxing it does not buy a smoother gradient: below 0x5f the cube has
+    no medium-saturation entries at all, so the only darker neighbours are fully
+    saturated ones. Pear, for instance, can reach (0, 95, 0) or (95, 135, 95) —
+    ratios (0, 1, 0) against (0.7, 1, 0.7). Admitting both would put a visible
+    color change partway down the water, which is the artifact this whole
+    module exists to avoid. Black is excluded too: with nothing to dither
+    against it would swallow whole rows of the deepest water.
+    """
+    brightest = min(_CUBE_TOPS, key=lambda entry: _hue_distance(entry, color))
+    indices = [_CUBE_LEVELS.index(value) for value in brightest]
+
+    steps: list[tuple[int, int, int]] = []
+    for sample in range(_RAMP_SAMPLES):
+        scale = sample / (_RAMP_SAMPLES - 1)
+        entry = tuple(_CUBE_LEVELS[round(index * scale)] for index in indices)
+        if max(entry) and entry not in steps:
+            steps.append(entry)
+
+    kept: list[tuple[int, int, int]] = []
+    ceiling = (1.0, 1.0, 1.0)
+    for entry in reversed(steps):  # brightest first
+        ratios = _hue_of(entry)
+        if any(ratio > limit + 1e-9 for ratio, limit in zip(ratios, ceiling)):
+            continue
+        kept.append(entry)
+        ceiling = ratios
+    return tuple(reversed(kept))
+
+
+def _palette_escape(entry: tuple[int, int, int]) -> str:
+    r, g, b = (_CUBE_LEVELS.index(value) for value in entry)
+    return f"\033[38;5;{16 + 36 * r + 6 * g + b}m"
+
+
+@functools.lru_cache(maxsize=4096)
+def palette_code(color: tuple[int, int, int]) -> str:
+    """Nearest on-hue 256-palette escape — never grey, never black.
+
+    Three to five steps is all the cube affords a saturated hue, so the depth
+    gradient lands as bands rather than a fade. Dithering between the steps
+    would smooth it, but only by alternating color every few cells — and in a
+    terminal a run of one color is nearly free while an alternating one costs an
+    escape sequence per cell. Measured on a 300-column ocean that was 3030
+    escapes a frame against 158, enough for the render to outrun the terminal
+    and starve the key-reading loop it shares a thread with. Bands that hold
+    still beat a fade you cannot type through.
+    """
+    target = _luma(color)
+    return _palette_escape(min(hue_ramp(color), key=lambda s: abs(_luma(s) - target)))
+
+
+def color_code(color: tuple[int, int, int]) -> str:
+    """Escape for *color*, matched to what the terminal can actually render.
+
+    Does not consult ``NO_COLOR`` — callers gate on that themselves.
+    """
+    if TRUECOLOR:
+        return f"\033[38;2;{color[0]};{color[1]};{color[2]}m"
+    return palette_code(color)
 
 
 class S:
@@ -76,7 +222,7 @@ PULSE_DIM: str = "" if _NO_COLOR else "\033[38;2;0;51;14m"
 
 
 def _rgb(r: int, g: int, b: int) -> str:
-    return "" if _NO_COLOR else f"\033[38;2;{r};{g};{b}m"
+    return "" if _NO_COLOR else color_code((r, g, b))
 
 
 THEMES: dict[str, dict] = {
@@ -112,12 +258,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (0, 51, 14),
         "idle_wave": ((0, 71, 20), (0, 163, 46), (0, 255, 72)),
-        "pre_wave": {
-            "start_base": (0, 230, 65),
-            "start_amp": (15, 15, 15),
-            "target_base": (25, 102, 47),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;0;204;58m",
         "accent_hi": "\033[38;2;0;250;71m",
         "border": (30, 62, 39),
@@ -154,12 +294,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (38, 0, 51),
         "idle_wave": ((54, 0, 71), (122, 0, 163), (191, 0, 255)),
-        "pre_wave": {
-            "start_base": (172, 0, 230),
-            "start_amp": (15, 15, 15),
-            "target_base": (83, 25, 102),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;153;0;204m",
         "accent_hi": "\033[38;2;187;0;250m",
         "border": (54, 30, 62),
@@ -196,12 +330,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (51, 47, 0),
         "idle_wave": ((71, 65, 0), (163, 150, 0), (255, 234, 0)),
-        "pre_wave": {
-            "start_base": (230, 210, 0),
-            "start_amp": (15, 15, 15),
-            "target_base": (102, 96, 25),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;204;187;0m",
         "accent_hi": "\033[38;2;250;229;0m",
         "border": (62, 59, 30),
@@ -238,12 +366,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (0, 25, 51),
         "idle_wave": ((0, 36, 71), (0, 82, 163), (0, 127, 255)),
-        "pre_wave": {
-            "start_base": (0, 115, 230),
-            "start_amp": (15, 15, 15),
-            "target_base": (25, 64, 102),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;0;102;204m",
         "accent_hi": "\033[38;2;0;125;250m",
         "border": (30, 46, 62),
@@ -280,12 +402,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (29, 5, 46),
         "idle_wave": ((40, 7, 64), (92, 16, 147), (144, 25, 230)),
-        "pre_wave": {
-            "start_base": (130, 23, 207),
-            "start_amp": (15, 15, 15),
-            "target_base": (69, 33, 94),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;116;20;184m",
         "accent_hi": "\033[38;2;142;25;225m",
         "border": (48, 33, 59),
@@ -322,12 +438,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (17, 34, 19),
         "idle_wave": ((23, 48, 27), (53, 110, 61), (83, 172, 95)),
-        "pre_wave": {
-            "start_base": (75, 155, 85),
-            "start_amp": (15, 15, 15),
-            "target_base": (50, 77, 54),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;66;138;76m",
         "accent_hi": "\033[38;2;81;169;93m",
         "border": (39, 53, 41),
@@ -364,12 +474,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (3, 28, 48),
         "idle_wave": ((4, 39, 67), (10, 89, 153), (15, 139, 240)),
-        "pre_wave": {
-            "start_base": (14, 125, 216),
-            "start_amp": (15, 15, 15),
-            "target_base": (31, 67, 97),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;12;111;192m",
         "accent_hi": "\033[38;2;15;136;235m",
         "border": (32, 47, 60),
@@ -406,12 +510,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (49, 12, 2),
         "idle_wave": ((69, 17, 3), (157, 39, 7), (245, 61, 10)),
-        "pre_wave": {
-            "start_base": (220, 55, 9),
-            "start_amp": (15, 15, 15),
-            "target_base": (99, 44, 29),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;196;49;8m",
         "accent_hi": "\033[38;2;240;60;10m",
         "border": (61, 38, 31),
@@ -448,12 +546,6 @@ THEMES: dict[str, dict] = {
         ],
         "pulse_dim": (26, 51, 0),
         "idle_wave": ((36, 71, 0), (82, 163, 0), (128, 255, 0)),
-        "pre_wave": {
-            "start_base": (115, 230, 0),
-            "start_amp": (15, 15, 15),
-            "target_base": (64, 102, 25),
-            "target_amp": (12, 12, 12),
-        },
         "accent": "\033[38;2;102;204;0m",
         "accent_hi": "\033[38;2;125;250;0m",
         "border": (46, 62, 30),
@@ -463,7 +555,12 @@ THEMES: dict[str, dict] = {
 THEME_NAMES: list[str] = list(THEMES.keys())
 
 IDLE_WAVE_COLORS: tuple = THEMES["default"]["idle_wave"]
-PRE_WAVE_COLORS: dict = dict(THEMES["default"]["pre_wave"])
+
+# (dimmest, brightest) endpoints of the bar-wave lightness ramp. Both are taken
+# from the theme's own ``pulse`` gradient, so every shade blended between them
+# stays on the theme hue instead of drifting toward grey.
+WAVE_SHADES: tuple = (THEMES["default"]["pulse"][0], THEMES["default"]["pulse"][-1])
+
 ACCENT: str = "" if _NO_COLOR else "\033[38;2;0;204;58m"
 ACCENT_HI: str = "" if _NO_COLOR else "\033[38;2;0;250;71m"
 BORDER: str = "" if _NO_COLOR else "\033[38;2;30;62;39m"
@@ -472,7 +569,7 @@ BORDER: str = "" if _NO_COLOR else "\033[38;2;30;62;39m"
 def apply_theme(name: str) -> None:
     """Apply a named color theme, updating all module-level gradient variables."""
     global PHASE_GRADIENT, PULSE_GRADIENT, TITLE_WAVE_GRADIENT, PULSE_DIM
-    global IDLE_WAVE_COLORS, PRE_WAVE_COLORS, ACCENT, ACCENT_HI, BORDER
+    global IDLE_WAVE_COLORS, WAVE_SHADES, ACCENT, ACCENT_HI, BORDER
 
     theme = THEMES.get(name, THEMES["default"])
 
@@ -481,7 +578,7 @@ def apply_theme(name: str) -> None:
     TITLE_WAVE_GRADIENT[:] = ["" if c is None else _rgb(*c) for c in theme["title_wave"]]
     PULSE_DIM = _rgb(*theme["pulse_dim"])
     IDLE_WAVE_COLORS = theme["idle_wave"]
-    PRE_WAVE_COLORS = dict(theme["pre_wave"])
+    WAVE_SHADES = (theme["pulse"][0], theme["pulse"][-1])
     ACCENT = "" if _NO_COLOR else theme["accent"]
     ACCENT_HI = "" if _NO_COLOR else theme["accent_hi"]
     BORDER = _rgb(*theme["border"])
