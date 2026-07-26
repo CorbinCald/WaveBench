@@ -95,7 +95,9 @@ def _read_line(
     old = termios.tcgetattr(fd)
     _idle_timeout = idle_timeout if on_idle else None
     try:
-        tty.setraw(fd)
+        # TCSANOW, not the default TCSAFLUSH: someone who picks a mode and
+        # keeps typing must not have those first prompt characters discarded.
+        tty.setraw(fd, when=termios.TCSANOW)
         sys.stdout.write("\033[?2004h")  # enable bracketed paste
         sys.stdout.flush()
         while True:
