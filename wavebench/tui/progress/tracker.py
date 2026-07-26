@@ -428,7 +428,13 @@ class ProgressTracker:
             fname = ""
         else:
             sym = _fail
-            detail = f"{S.RED}failed{S.RST}{cost_s}{retry_s}"
+            err = str(info.get("error") or "")
+            err_s = (
+                f"  {S.DIM}{_truncate(err, max(12, inner_w - self._pad - 30))}{S.RST}"
+                if err
+                else ""
+            )
+            detail = f"{S.RED}failed{S.RST}{err_s}{cost_s}{retry_s}"
             fname = ""
         rank_s = f"{S.DIM}{rank:>2}.{S.RST}"
         content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"

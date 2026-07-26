@@ -198,6 +198,7 @@ async def run_model(
             "file": None,
             "usage": {},
             "retries": retry_events,
+            "error": "timeout",
         }
         return
     except aiohttp.ClientError as exc:
@@ -214,6 +215,7 @@ async def run_model(
             "file": None,
             "usage": {},
             "retries": retry_events,
+            "error": f"API error: {str(exc) or exc.__class__.__name__}",
         }
         return
     except Exception as exc:
@@ -231,6 +233,7 @@ async def run_model(
             "file": None,
             "usage": {},
             "retries": retry_events,
+            "error": exc_str,
         }
         return
     finally:
@@ -252,6 +255,7 @@ async def run_model(
             "file": None,
             "usage": {},
             "retries": retry_events,
+            "error": "no response",
         }
         return
 
@@ -278,6 +282,7 @@ async def run_model(
                     "file": None,
                     "usage": usage,
                     "retries": retry_events,
+                    "error": "no valid base64 image data URLs",
                 }
                 return
 
@@ -328,10 +333,11 @@ async def run_model(
 
         if not parsed.parse_ok:
             elapsed = time.monotonic() - start
+            parse_reason = parsed.parse_error or "parse failed"
             if not registered:
                 print(
                     f"  {_fail} {model_name:<{pad}}  "
-                    f"{S.RED}parse failed{S.RST}  "
+                    f"{S.RED}parse failed{S.RST} {S.DIM}({parse_reason}){S.RST}  "
                     f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
                 )
             results[model_name] = {
@@ -340,6 +346,7 @@ async def run_model(
                 "file": None,
                 "usage": usage,
                 "retries": retry_events,
+                "error": parse_reason,
             }
             return
 
@@ -384,11 +391,13 @@ async def run_model(
         # mid-token, so the file on disk stops partway through.  It parses
         # and saves like any other result, which is exactly why it needs
         # calling out — otherwise it only shows up when the file won't run.
-        truncated = (usage or {}).get("finish_reason") == "length"
+        # "incomplete" is the streaming layer's marker for a connection that
+        # dropped before the [DONE] sentinel — same symptom, different cause.
+        finish = (usage or {}).get("finish_reason")
+        truncated = finish in ("length", "incomplete")
         if not registered:
-            warn = (
-                f"  {S.YEL}⚠ truncated — hit the output token cap{S.RST}" if truncated else ""
-            )
+            why = "hit the output token cap" if finish == "length" else "stream ended early"
+            warn = f"  {S.YEL}⚠ truncated — {why}{S.RST}" if truncated else ""
             print(
                 f"  {_ok} {S.BOLD}{model_name:<{pad}}{S.RST}  "
                 f"saved {_arrow} {S.GRN}{filename}{S.RST}{warn}  "
@@ -405,6 +414,41 @@ async def run_model(
         if mode.name == "code":
             result["venv_python"] = venv_python
         results[model_name] = result
+    except asyncio.CancelledError:
+        elapsed = time.monotonic() - start
+        if not registered:
+            print(
+                f"  {_skip} {model_name:<{pad}}  "
+                f"{S.DIM}cancelled  [{format_duration(elapsed)}]{S.RST}"
+            )
+        results[model_name] = {
+            "status": "cancelled",
+            "time_s": elapsed,
+            "file": None,
+            "usage": usage,
+            "retries": retry_events,
+        }
+    except Exception as exc:
+        # Without this handler, an exception after the API call (the shared
+        # output-dir task failing, a file write erroring) escaped the task,
+        # was swallowed by gather(return_exceptions=True), and the model
+        # simply vanished from the results box — neither pass nor fail.
+        elapsed = time.monotonic() - start
+        exc_str = str(exc) or exc.__class__.__name__
+        if not registered:
+            print(
+                f"  {_fail} {model_name:<{pad}}  "
+                f"{S.RED}{exc_str}{S.RST}  "
+                f"{S.DIM}[{format_duration(elapsed)}]{S.RST}"
+            )
+        results[model_name] = {
+            "status": "failed",
+            "time_s": elapsed,
+            "file": None,
+            "usage": usage,
+            "retries": retry_events,
+            "error": exc_str,
+        }
     finally:
         if registered:
             tracker.finish_parsing(model_name)

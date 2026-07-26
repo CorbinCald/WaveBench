@@ -306,6 +306,94 @@ def test_image_mode_parse_fails_without_valid_data_url() -> None:
     assert out.parse_error == "no valid base64 image data URLs"
 
 
+def _b64_url(mime: str, data: bytes) -> str:
+    return f"data:{mime};base64," + base64.b64encode(data).decode()
+
+
+def test_image_mode_rejects_truncated_containers() -> None:
+    # b64decode happily decodes any 4-char-aligned prefix of a longer
+    # payload, so a stream cut mid-image still yields bytes with valid
+    # magic; the container trailer is the only cheap completeness signal.
+    raw = {
+        "images": [
+            {"image_url": {"url": _b64_url("image/png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)}},
+            {"image_url": {"url": _b64_url("image/jpeg", b"\xff\xd8\xff\xe0" + b"\x00" * 16)}},
+            {"image_url": {"url": _b64_url("image/gif", b"GIF89a" + b"\x00" * 16)}},
+            {"image_url": {"url": _b64_url("image/webp", b"RIFF\x40\x00\x00\x00WEBPVP8 ")}},
+        ]
+    }
+    assert extract_image_outputs(raw) == []
+
+
+def test_image_mode_accepts_complete_containers() -> None:
+    webp_body = b"WEBPVP8 " + b"\x00" * 8
+    raw = {
+        "images": [
+            {
+                "image_url": {
+                    "url": _b64_url("image/png", b"\x89PNG\r\n\x1a\n\x00\x00IEND\xae\x42\x60\x82")
+                }
+            },
+            {"image_url": {"url": _b64_url("image/jpeg", b"\xff\xd8\xff\xe0\x00\x00\xff\xd9")}},
+            {"image_url": {"url": _b64_url("image/gif", b"GIF89a\x00\x00;")}},
+            {
+                "image_url": {
+                    "url": _b64_url(
+                        "image/webp",
+                        b"RIFF" + len(webp_body).to_bytes(4, "little") + webp_body,
+                    )
+                }
+            },
+        ]
+    }
+    images = extract_image_outputs(raw)
+    assert [image.mime_type for image in images] == [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    ]
+
+
+def test_image_mode_parse_fails_on_truncated_container() -> None:
+    url = _b64_url("image/png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    out = IMAGE_MODE.parse_response({"images": [{"image_url": {"url": url}}]})  # type: ignore[arg-type]
+    assert out.parse_ok is False
+    assert out.parse_error == "no valid base64 image data URLs"
+
+
+def test_image_mode_deduplicates_identical_images_across_fields() -> None:
+    # Providers often surface the same image under message.images AND echo
+    # the data URL in content; the walk must return it once, not twice.
+    url = "data:image/png;base64,aGVsbG8="
+    raw = {
+        "images": [{"image_url": {"url": url}}],
+        "content": f"Here you go: {url}",
+    }
+    images = extract_image_outputs(raw)
+    assert len(images) == 1
+    assert images[0].data == b"hello"
+
+
+def test_image_mode_decodes_hard_wrapped_base64() -> None:
+    # Some providers hard-wrap base64 with indented continuation lines.
+    encoded = base64.b64encode(b"hello world, hello world").decode()
+    wrapped = f"{encoded[:8]}\n    {encoded[8:16]}\n    {encoded[16:]}"
+    raw = {"content": f"data:image/png;base64,{wrapped}"}
+    images = extract_image_outputs(raw)
+    assert len(images) == 1
+    assert images[0].data == b"hello world, hello world"
+
+
+def test_image_mode_recovers_data_url_followed_by_prose() -> None:
+    # The whitespace-tolerant payload class swallows trailing words; the
+    # decoder must fall back to the first run rather than lose the image.
+    raw = {"content": "data:image/png;base64,aGVsbG8= Enjoy the wave"}
+    images = extract_image_outputs(raw)
+    assert len(images) == 1
+    assert images[0].data == b"hello"
+
+
 def test_image_gallery_includes_summary_actions_and_prompt_formatting(tmp_path) -> None:
     path = write_image_gallery(
         str(tmp_path),
