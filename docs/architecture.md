@@ -239,7 +239,7 @@ directory uses different settings/history.
 | Tier | Location | Purpose |
 |---|---|---|
 | Unit | `tests/unit/` | Pure functions, mode behavior, storage round-trips, public imports |
-| Integration | `tests/integration/` | Mocked OpenRouter/SSE behavior through real API-client code paths |
+| Integration | `tests/integration/` | Mocked OpenRouter/SSE behavior through real API-client code paths. One exception: `test_directory_naming_live.py` makes a real OpenRouter call; it is marked `slow`, deselected by default, and runs only via `pytest -m slow` |
 | Characterization | `tests/characterization/` | Contract tests around refactor-sensitive seams such as core, menus, and progress |
 
 Fixtures in `tests/conftest.py`:
