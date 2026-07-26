@@ -274,13 +274,20 @@ class Orchestrator:
         )
 
     def schedule_retry(
-        self, issue_id: str, identifier: str, attempt: int, error: str | None, continuation: bool = False
+        self,
+        issue_id: str,
+        identifier: str,
+        attempt: int,
+        error: str | None,
+        continuation: bool = False,
     ) -> None:
         previous = self.state.retry_attempts.pop(issue_id, None)
         if previous and previous.timer_task:
             previous.timer_task.cancel()
-        delay_ms = 1000 if continuation else min(
-            10_000 * (2 ** max(attempt - 1, 0)), self.config.agent.max_retry_backoff_ms
+        delay_ms = (
+            1000
+            if continuation
+            else min(10_000 * (2 ** max(attempt - 1, 0)), self.config.agent.max_retry_backoff_ms)
         )
         due_at_ms = time.monotonic() * 1000 + delay_ms
         timer_task = asyncio.create_task(self._retry_after(issue_id, delay_ms / 1000))
@@ -333,7 +340,9 @@ class Orchestrator:
                 ),
             )
             next_attempt = (entry.retry_attempt or 0) + 1
-            self.schedule_retry(issue_id, entry.identifier, next_attempt, result.error or result.status)
+            self.schedule_retry(
+                issue_id, entry.identifier, next_attempt, result.error or result.status
+            )
 
     async def _mark_issue_started(self, issue: Issue, attempt: int | None) -> Issue:
         if not self.config.tracker.auto_transition:
@@ -523,7 +532,9 @@ class Orchestrator:
         try:
             candidates = await self.tracker.fetch_candidate_issues()
         except Exception as exc:
-            self.schedule_retry(issue_id, retry.identifier, retry.attempt + 1, f"retry poll failed: {exc}")
+            self.schedule_retry(
+                issue_id, retry.identifier, retry.attempt + 1, f"retry poll failed: {exc}"
+            )
             return
         issue = next((candidate for candidate in candidates if candidate.id == issue_id), None)
         if issue is None:
@@ -591,7 +602,13 @@ class Orchestrator:
             if name == "message_update":
                 _record_first_turn_response_text(entry, payload)
                 _record_provider_status(entry, payload)
-            if name in {"message_end", "turn_end", "agent_end", "auto_retry_start", "auto_retry_end"}:
+            if name in {
+                "message_end",
+                "turn_end",
+                "agent_end",
+                "auto_retry_start",
+                "auto_retry_end",
+            }:
                 _record_provider_status(entry, payload)
             if name == "tool_execution_start":
                 entry.tool_execution_count += 1
@@ -635,7 +652,9 @@ class Orchestrator:
             normalized_state, self.config.agent.max_concurrent_agents
         )
         running_for_state = sum(
-            1 for entry in self.state.running.values() if entry.issue.state.lower() == normalized_state
+            1
+            for entry in self.state.running.values()
+            if entry.issue.state.lower() == normalized_state
         )
         return running_for_state < limit
 
@@ -682,7 +701,8 @@ class Orchestrator:
         ]
         totals = dict(self.state.agent_totals)
         totals["seconds_running"] += sum(
-            max((now - entry.started_at).total_seconds(), 0) for entry in self.state.running.values()
+            max((now - entry.started_at).total_seconds(), 0)
+            for entry in self.state.running.values()
         )
         return {
             "generated_at": now.isoformat(),
@@ -892,7 +912,12 @@ def _truncate_status_text(text: str, limit: int = 220) -> str:
 
 def _provider_status_is_error(status: str) -> bool:
     lowered = status.lower()
-    return "stopreason=error" in lowered or "retry" in lowered or "status=4" in lowered or "status=5" in lowered
+    return (
+        "stopreason=error" in lowered
+        or "retry" in lowered
+        or "status=4" in lowered
+        or "status=5" in lowered
+    )
 
 
 def _tool_name_from_event(payload: dict[str, Any]) -> str | None:

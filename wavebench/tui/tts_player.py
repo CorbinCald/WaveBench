@@ -214,7 +214,9 @@ def _decode_sndfile(filepath: str) -> _DecodedPcm | None:
             frames_read = lib.sf_readf_short(handle, buffer, chunk_frames)
             if frames_read <= 0:
                 break
-            chunks.append(ctypes.string_at(buffer, frames_read * info.channels * _RAW_PCM_SAMPLE_WIDTH))
+            chunks.append(
+                ctypes.string_at(buffer, frames_read * info.channels * _RAW_PCM_SAMPLE_WIDTH)
+            )
     except Exception:
         return None
     finally:
@@ -621,7 +623,9 @@ def browse_tts_outputs(output_dir: str, results: dict[str, Any]) -> None:
             buf.append(_box_row(row, w) + "\033[K\n")
         if len(items) > max_rows:
             end = start + len(visible_items)
-            buf.append(_box_row(f"{S.DIM}showing {start + 1}-{end} of {len(items)}{S.RST}", w) + "\033[K\n")
+            buf.append(
+                _box_row(f"{S.DIM}showing {start + 1}-{end} of {len(items)}{S.RST}", w) + "\033[K\n"
+            )
         else:
             buf.append(_box_row("", w) + "\033[K\n")
         buf.append(_box_row(status, w) + "\033[K\n")

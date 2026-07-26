@@ -103,7 +103,11 @@ def test_browse_tts_outputs_scrolls_when_outputs_exceed_screen(
 
     monkeypatch.setattr(tts_player.sys, "stdin", fake_stdin)
     monkeypatch.setattr(tts_player.sys, "stdout", fake_stdout)
-    monkeypatch.setattr(tts_player.shutil, "get_terminal_size", lambda fallback: tts_player.os.terminal_size((80, 8)))
+    monkeypatch.setattr(
+        tts_player.shutil,
+        "get_terminal_size",
+        lambda fallback: tts_player.os.terminal_size((80, 8)),
+    )
     monkeypatch.setattr(tts_player, "_read_key_or_resize", lambda: next(keys))
     monkeypatch.setattr(
         tts_player, "_start_audio", lambda path: (started.append(path) or True, fake_proc)
@@ -135,7 +139,9 @@ def test_start_audio_uses_native_pulse_for_gemini_pcm(tmp_path, monkeypatch) -> 
             _error,
         ):
             spec = sample_spec._obj
-            events.append(("new", (name, direction, stream_name, spec.format, spec.rate, spec.channels)))
+            events.append(
+                ("new", (name, direction, stream_name, spec.format, spec.rate, spec.channels))
+            )
             return "pulse-handle"
 
         @staticmethod
@@ -203,7 +209,9 @@ def test_start_audio_uses_native_pulse_for_decoded_mp3(tmp_path, monkeypatch) ->
             _error,
         ):
             spec = sample_spec._obj
-            events.append(("new", (name, direction, stream_name, spec.format, spec.rate, spec.channels)))
+            events.append(
+                ("new", (name, direction, stream_name, spec.format, spec.rate, spec.channels))
+            )
             return "pulse-handle"
 
         @staticmethod
@@ -294,7 +302,9 @@ def test_decode_encoded_audio_falls_back_to_sndfile_without_mpg123(monkeypatch) 
     assert calls == [("sndfile", "openai.mp3")]
 
 
-def test_start_audio_uses_native_miniaudio_fallback_for_encoded_audio(tmp_path, monkeypatch) -> None:
+def test_start_audio_uses_native_miniaudio_fallback_for_encoded_audio(
+    tmp_path, monkeypatch
+) -> None:
     mp3 = tmp_path / "openai.mp3"
     mp3.write_bytes(b"ID3audio")
     events = []

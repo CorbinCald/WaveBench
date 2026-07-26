@@ -204,7 +204,8 @@ class LinearClient:
             after = page_info.get("endCursor")
             if not after:
                 raise TrackerError(
-                    "linear_missing_end_cursor", "Linear pageInfo.hasNextPage was true without endCursor"
+                    "linear_missing_end_cursor",
+                    "Linear pageInfo.hasNextPage was true without endCursor",
                 )
         return issues
 
@@ -385,7 +386,9 @@ class LinearClient:
         try:
             team_id = payload["data"]["issue"]["team"]["id"]
         except (KeyError, TypeError) as exc:
-            raise TrackerError("linear_unknown_payload", "Linear payload missing issue.team.id") from exc
+            raise TrackerError(
+                "linear_unknown_payload", "Linear payload missing issue.team.id"
+            ) from exc
         if not team_id:
             raise TrackerError("linear_unknown_payload", "Linear issue team id was empty")
         return str(team_id)
@@ -399,9 +402,10 @@ class LinearClient:
             "Content-Type": "application/json",
         }
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session, session.post(
-                self.config.endpoint, json=body, headers=headers
-            ) as response:
+            async with (
+                aiohttp.ClientSession(timeout=self.timeout) as session,
+                session.post(self.config.endpoint, json=body, headers=headers) as response,
+            ):
                 text = await response.text()
                 if response.status != 200:
                     raise TrackerError(
@@ -410,7 +414,9 @@ class LinearClient:
                 try:
                     payload = await response.json()
                 except Exception as exc:
-                    raise TrackerError("linear_unknown_payload", "Linear returned invalid JSON") from exc
+                    raise TrackerError(
+                        "linear_unknown_payload", "Linear returned invalid JSON"
+                    ) from exc
         except asyncio.TimeoutError as exc:
             raise TrackerError("linear_api_request", "Linear request timed out") from exc
         except aiohttp.ClientError as exc:
@@ -453,7 +459,9 @@ def _extract_issues_page(payload: dict[str, Any]) -> dict[str, Any]:
         page = payload["data"]["issues"]
         nodes = page["nodes"]
     except (KeyError, TypeError) as exc:
-        raise TrackerError("linear_unknown_payload", "Linear payload missing data.issues.nodes") from exc
+        raise TrackerError(
+            "linear_unknown_payload", "Linear payload missing data.issues.nodes"
+        ) from exc
     if not isinstance(nodes, list):
         raise TrackerError("linear_unknown_payload", "Linear data.issues.nodes was not a list")
     return page
@@ -463,7 +471,9 @@ def _mutation_success(payload: dict[str, Any], key: str) -> bool:
     try:
         success = payload["data"][key]["success"]
     except (KeyError, TypeError) as exc:
-        raise TrackerError("linear_unknown_payload", f"Linear payload missing {key}.success") from exc
+        raise TrackerError(
+            "linear_unknown_payload", f"Linear payload missing {key}.success"
+        ) from exc
     return bool(success)
 
 
@@ -481,7 +491,7 @@ def _extract_issue_image_refs(
         source = f"comment:{comment.id}" if comment.id else "comment"
         _extract_text_image_refs(comment.body, source, refs, seen)
 
-    for attachment in ((node.get("attachments") or {}).get("nodes") or []):
+    for attachment in (node.get("attachments") or {}).get("nodes") or []:
         if not isinstance(attachment, dict):
             continue
         url = attachment.get("url")
@@ -683,7 +693,7 @@ def _normalize_issue(node: dict[str, Any]) -> Issue:
     ]
     comments = _normalize_comments(node)
     blockers: list[BlockerRef] = []
-    for relation in ((node.get("inverseRelations") or {}).get("nodes") or []):
+    for relation in (node.get("inverseRelations") or {}).get("nodes") or []:
         if str(relation.get("type", "")).lower() != "blocks":
             continue
         blocker = relation.get("issue") or {}
@@ -714,17 +724,12 @@ def _normalize_issue(node: dict[str, Any]) -> Issue:
 
 def _normalize_comments(node: dict[str, Any]) -> list[IssueComment]:
     comments: list[IssueComment] = []
-    for raw_comment in ((node.get("comments") or {}).get("nodes") or []):
+    for raw_comment in (node.get("comments") or {}).get("nodes") or []:
         if not isinstance(raw_comment, dict):
             continue
         user = raw_comment.get("user") or {}
         bot_actor = raw_comment.get("botActor") or {}
-        author = (
-            user.get("displayName")
-            or user.get("name")
-            or bot_actor.get("name")
-            or None
-        )
+        author = user.get("displayName") or user.get("name") or bot_actor.get("name") or None
         comments.append(
             IssueComment(
                 id=str(raw_comment.get("id") or ""),

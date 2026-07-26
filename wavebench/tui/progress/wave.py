@@ -159,9 +159,7 @@ def _render_pulse_bar(
         parts.append(S.RST)
 
     if empty > 0:
-        parts.append(
-            _render_pre_wave_bar(empty, tick, crest=-1, span=bar_width, offset=filled)
-        )
+        parts.append(_render_pre_wave_bar(empty, tick, crest=-1, span=bar_width, offset=filled))
 
     return "".join(parts)
 
@@ -269,10 +267,8 @@ def _idle_wave_surfaces(
 
         middle_height = (
             0.67 * math.sin(nx * 15.8 - wave_phase * 0.074 + 0.3)
-            + (0.08 + 0.08 * intensity)
-            * math.sin(nx * 28.0 - wave_phase * 0.103 + 2.0)
-            + (0.02 + 0.04 * intensity)
-            * math.sin(nx * 47.0 - wave_phase * 0.132 + 3.4)
+            + (0.08 + 0.08 * intensity) * math.sin(nx * 28.0 - wave_phase * 0.103 + 2.0)
+            + (0.02 + 0.04 * intensity) * math.sin(nx * 47.0 - wave_phase * 0.132 + 3.4)
         )
         middle_height = _shape_wave(
             middle_height,
@@ -284,12 +280,9 @@ def _idle_wave_surfaces(
 
         foreground_height = (
             0.62 * math.sin(nx * 14.0 - wave_phase * 0.107)
-            + (0.08 + 0.14 * intensity)
-            * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
-            + (0.02 + 0.08 * intensity)
-            * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
-            + (0.01 + 0.03 * intensity)
-            * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9)
+            + (0.08 + 0.14 * intensity) * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
+            + (0.02 + 0.08 * intensity) * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
+            + (0.01 + 0.03 * intensity) * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9)
         )
         foreground_height = _shape_wave(
             foreground_height,
@@ -401,12 +394,8 @@ def render_idle_wave(
         # across them, so a row is a single run of each layer's color — which is
         # what keeps the frame down to a handful of escape sequences.
         foreground_body_code = _color_code(_scale_color(active_color, row_shade))
-        middle_contour_code = _color_code(
-            _scale_color(active_color, row_shade * middle_depth)
-        )
-        far_contour_code = _color_code(
-            _scale_color(active_color, row_shade * far_depth)
-        )
+        middle_contour_code = _color_code(_scale_color(active_color, row_shade * middle_depth))
+        far_contour_code = _color_code(_scale_color(active_color, row_shade * far_depth))
         parts: list[str] = []
         current_color: str | None = None
 

@@ -26,7 +26,7 @@ from symphony.workspace import WorkspaceManager
 async def test_pi_rpc_client_runs_prompt_and_cancels_ui_dialog(tmp_path: Path) -> None:
     fake_pi = tmp_path / "fake_pi.py"
     fake_pi.write_text(
-        r'''
+        r"""
 import json
 import sys
 
@@ -73,7 +73,7 @@ for line in sys.stdin:
     elif message.get("type") == "abort":
         send({"type": "response", "command": "abort", "success": True})
         break
-''',
+""",
         encoding="utf-8",
     )
     root = tmp_path / "root"
@@ -116,7 +116,7 @@ for line in sys.stdin:
 async def test_pi_rpc_client_sends_prompt_images(tmp_path: Path) -> None:
     fake_pi = tmp_path / "fake_pi_images.py"
     fake_pi.write_text(
-        r'''
+        r"""
 import json
 import sys
 
@@ -149,7 +149,7 @@ for line in sys.stdin:
     elif message.get("type") == "abort":
         send({"type": "response", "command": "abort", "success": True})
         break
-''',
+""",
         encoding="utf-8",
     )
     root = tmp_path / "root"
@@ -178,7 +178,7 @@ for line in sys.stdin:
 async def test_agent_runner_emits_grounded_step_events(tmp_path: Path) -> None:
     fake_pi = tmp_path / "fake_pi_steps.py"
     fake_pi.write_text(
-        r'''
+        r"""
 import json
 import sys
 
@@ -210,7 +210,7 @@ for line in sys.stdin:
     elif message.get("type") == "abort":
         send({"type": "response", "command": "abort", "success": True})
         break
-''',
+""",
         encoding="utf-8",
     )
     root = tmp_path / "root"
@@ -241,7 +241,9 @@ for line in sys.stdin:
     issue = Issue(id="1", identifier="WB-1", title="Test", state="Todo")
     events: list[tuple[str, dict]] = []
 
-    result = await runner.run_attempt(issue, on_event=lambda name, payload: events.append((name, payload)))
+    result = await runner.run_attempt(
+        issue, on_event=lambda name, payload: events.append((name, payload))
+    )
 
     assert result.success is True
     steps = [payload for name, payload in events if name == "agent_step"]
@@ -287,6 +289,9 @@ def test_build_turn_prompt_appends_latest_linear_comments() -> None:
 
     assert "Issue WB-1" in prompt
     assert "Linear comments (latest first, max 12):" in prompt
-    assert "--- comment 1 | 2026-05-03T12:00:00+00:00 | Corbin | https://linear.app/comment-1 ---" in prompt
+    assert (
+        "--- comment 1 | 2026-05-03T12:00:00+00:00 | Corbin | https://linear.app/comment-1 ---"
+        in prompt
+    )
     assert "TTS fails for multiple providers." in prompt
     assert prompt.rstrip().endswith("--- end comment ---")

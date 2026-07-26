@@ -124,14 +124,18 @@ def _parse_yaml_subset(text: str) -> Any:
     if not any(line.strip() and not line.lstrip().startswith("#") for line in lines):
         return {}
     try:
-        value, index = _parse_yaml_block(lines, _next_content(lines, 0), _line_indent(lines[_next_content(lines, 0)]))
+        value, index = _parse_yaml_block(
+            lines, _next_content(lines, 0), _line_indent(lines[_next_content(lines, 0)])
+        )
     except WorkflowError:
         raise
     except Exception as exc:  # defensive: present parser bugs as workflow parse errors
         raise WorkflowError("workflow_parse_error", str(exc)) from exc
     trailing = _next_content(lines, index)
     if trailing < len(lines):
-        raise WorkflowError("workflow_parse_error", f"unexpected trailing YAML at line {trailing + 1}")
+        raise WorkflowError(
+            "workflow_parse_error", f"unexpected trailing YAML at line {trailing + 1}"
+        )
     return value
 
 
@@ -155,7 +159,9 @@ def _parse_yaml_map(lines: list[str], index: int, indent: int) -> tuple[dict[str
         if current_indent < indent:
             break
         if current_indent > indent:
-            raise WorkflowError("workflow_parse_error", f"unexpected indentation at line {index + 1}")
+            raise WorkflowError(
+                "workflow_parse_error", f"unexpected indentation at line {index + 1}"
+            )
         stripped = line.strip()
         if stripped.startswith("- "):
             break
@@ -185,7 +191,9 @@ def _parse_yaml_list(lines: list[str], index: int, indent: int) -> tuple[list[An
         if current_indent < indent:
             break
         if current_indent > indent:
-            raise WorkflowError("workflow_parse_error", f"unexpected list indentation at line {index + 1}")
+            raise WorkflowError(
+                "workflow_parse_error", f"unexpected list indentation at line {index + 1}"
+            )
         stripped = line.strip()
         if not stripped.startswith("- "):
             break
@@ -277,7 +285,9 @@ def _parse_scalar(value: str) -> Any:
             try:
                 return ast.literal_eval(value)
             except (SyntaxError, ValueError) as exc:
-                raise WorkflowError("workflow_parse_error", f"invalid inline object: {value}") from exc
+                raise WorkflowError(
+                    "workflow_parse_error", f"invalid inline object: {value}"
+                ) from exc
     return value
 
 
@@ -289,7 +299,12 @@ def _strip_inline_comment(value: str) -> str:
             in_single = not in_single
         elif char == '"' and not in_single:
             in_double = not in_double
-        elif char == "#" and not in_single and not in_double and (index == 0 or value[index - 1].isspace()):
+        elif (
+            char == "#"
+            and not in_single
+            and not in_double
+            and (index == 0 or value[index - 1].isspace())
+        ):
             return value[:index].rstrip()
     return value
 
@@ -363,9 +378,7 @@ def _render_tokens(
     return "".join(output)
 
 
-def _find_if_bounds(
-    tokens: list[tuple[str, str]], start: int, end: int
-) -> tuple[int | None, int]:
+def _find_if_bounds(tokens: list[tuple[str, str]], start: int, end: int) -> tuple[int | None, int]:
     depth = 0
     else_index: int | None = None
     for index in range(start + 1, end):

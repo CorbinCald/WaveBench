@@ -309,9 +309,7 @@ async def test_image_generation_posts_non_streaming_chat_request(
                     {
                         "message": {
                             "role": "assistant",
-                            "images": [
-                                {"image_url": {"url": "data:image/png;base64,aGVsbG8="}}
-                            ],
+                            "images": [{"image_url": {"url": "data:image/png;base64,aGVsbG8="}}],
                         }
                     }
                 ],

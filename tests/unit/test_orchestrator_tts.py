@@ -106,4 +106,6 @@ async def test_main_async_tts_filters_selected_models_to_tts(
     )
 
     assert seen == [("tts", "voiceModel", "openai/gpt-4o-mini-tts-2025-12-15", None, "off")]
-    assert (tmp_state_dir / "benchmarkResults" / "tts_outputs" / "voiceModel.pcm").read_bytes() == b"audio"
+    assert (
+        tmp_state_dir / "benchmarkResults" / "tts_outputs" / "voiceModel.pcm"
+    ).read_bytes() == b"audio"

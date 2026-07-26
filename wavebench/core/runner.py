@@ -291,9 +291,7 @@ async def run_model(
             total_bytes = 0
             for idx, image in enumerate(images, 1):
                 suffix = "" if idx == 1 else f"_{idx}"
-                filename = get_unique_filename(
-                    output_dir, f"{model_name}{suffix}", image.extension
-                )
+                filename = get_unique_filename(output_dir, f"{model_name}{suffix}", image.extension)
                 filepath = os.path.join(output_dir, filename)
                 with open(filepath, "wb") as fh:
                     fh.write(image.data)

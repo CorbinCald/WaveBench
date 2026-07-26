@@ -95,7 +95,9 @@ class PiRpcClient:
         await self._send(message)
         response = await self._read_response(request_id, "prompt", self.config.read_timeout_ms)
         if not response.get("success"):
-            return RunResult(False, "response_error", str(response.get("error") or "prompt rejected"))
+            return RunResult(
+                False, "response_error", str(response.get("error") or "prompt rejected")
+            )
         return await self._read_agent_completion(issue)
 
     async def stop(self) -> None:
@@ -247,7 +249,9 @@ class PiRpcClient:
             line = await process.stderr.readline()
             if not line:
                 return
-            _LOG.debug("pi_stderr pid=%s message=%r", process.pid, line.decode(errors="replace")[:500])
+            _LOG.debug(
+                "pi_stderr pid=%s message=%r", process.pid, line.decode(errors="replace")[:500]
+            )
 
     def _request_id(self) -> int:
         value = self._next_id
@@ -258,7 +262,9 @@ class PiRpcClient:
         try:
             workspace.relative_to(self.workspace_root)
         except ValueError as exc:
-            raise AgentError("invalid_workspace_cwd", f"cwd escapes workspace root: {workspace}") from exc
+            raise AgentError(
+                "invalid_workspace_cwd", f"cwd escapes workspace root: {workspace}"
+            ) from exc
 
 
 class AgentRunner:

@@ -285,7 +285,10 @@ def test_tts_response_format_for_model_preserves_explicit_format() -> None:
 
 def test_tts_voice_for_model_preserves_explicit_voice() -> None:
     assert tts_voice_for_model("google/gemini-3.1-flash-tts-preview", "Puck") == "Puck"
-    assert tts_voice_for_model("mistralai/voxtral-mini-tts-2603", "gb_oliver_neutral") == "gb_oliver_neutral"
+    assert (
+        tts_voice_for_model("mistralai/voxtral-mini-tts-2603", "gb_oliver_neutral")
+        == "gb_oliver_neutral"
+    )
     assert tts_voice_for_model("openai/gpt-4o-mini-tts-2025-12-15", "nova") == "nova"
 
 

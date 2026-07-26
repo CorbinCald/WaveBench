@@ -267,18 +267,18 @@ def write_image_gallery(
             filename_label = html.escape(filename, quote=False)
             suffix_label = html.escape(suffix, quote=False)
             cards.append(
-                "<figure class=\"card\">"
-                f"<button class=\"preview\" type=\"button\" data-gallery-index=\"{gallery_index}\" "
-                f"aria-label=\"Open preview for {model_alt}{html.escape(suffix, quote=True)}\">"
-                f"<img src=\"{rel}\" alt=\"{model_alt}{html.escape(suffix, quote=True)}\" "
-                "loading=\"lazy\" decoding=\"async\">"
+                '<figure class="card">'
+                f'<button class="preview" type="button" data-gallery-index="{gallery_index}" '
+                f'aria-label="Open preview for {model_alt}{html.escape(suffix, quote=True)}">'
+                f'<img src="{rel}" alt="{model_alt}{html.escape(suffix, quote=True)}" '
+                'loading="lazy" decoding="async">'
                 "</button>"
                 "<figcaption>"
                 f"<strong>{model_label}{suffix_label}</strong>"
-                f"<span class=\"filename\">{filename_label}</span>"
-                "<span class=\"actions\">"
-                f"<a href=\"{rel}\" target=\"_blank\" rel=\"noopener\">Open full size</a>"
-                f"<a href=\"{rel}\" download>Download</a>"
+                f'<span class="filename">{filename_label}</span>'
+                '<span class="actions">'
+                f'<a href="{rel}" target="_blank" rel="noopener">Open full size</a>'
+                f'<a href="{rel}" download>Download</a>'
                 "</span>"
                 "</figcaption>"
                 "</figure>"
