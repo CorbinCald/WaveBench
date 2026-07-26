@@ -38,7 +38,7 @@ from wavebench.storage import (
     save_models,
 )
 from wavebench.tui.analytics import display_analytics
-from wavebench.tui.input import _read_key_timeout
+from wavebench.tui.input import _read_key_timeout, hold_raw
 from wavebench.tui.line_editor import _read_line, _TabEscape
 from wavebench.tui.menus import run_config_menu
 from wavebench.tui.progress import render_idle_wave
@@ -332,12 +332,24 @@ def main() -> None:
 
                 mode_done = False
                 while not mode_done:
-                    key = _read_key_timeout(0.07)
+                    # Hold raw mode across the whole poll loop.  Flipping it
+                    # per call — the old behaviour — discarded keys typed
+                    # between polls (``tty.setraw`` defaults to TCSAFLUSH),
+                    # stalled each poll on the draining wave frame (TCSADRAIN)
+                    # and let kernel ECHO paint stray characters mid-frame.
+                    # Keys are *acted on* after release so normal cooked-mode
+                    # output rules ("\n" implies "\r") apply below.
+                    with hold_raw():
+                        while True:
+                            key = _read_key_timeout(0.07)
+                            if key is None:
+                                _wave_idle()
+                            elif key in ("tab", "escape", "ctrl-c", "c", "1", "2", "3", "4"):
+                                break
+                            # Any other key is not a menu choice: keep the
+                            # wave rolling instead of flashing it clear.
 
-                    if key is None:
-                        _wave_idle()
-                        continue
-
+                    # Erase the wave and park the cursor back at the prompt.
                     sys.stdout.write(f"\x1b[{_PROMPT_ROW + 1};1H\x1b[J\x1b8")
                     sys.stdout.flush()
 
