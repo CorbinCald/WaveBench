@@ -62,7 +62,7 @@ _RAMP_SAMPLES = 16
 
 
 def _luma(color: tuple[int, int, int]) -> float:
-    return sum(weight * value for weight, value in zip(_LUMA_WEIGHTS, color))
+    return sum(weight * value for weight, value in zip(_LUMA_WEIGHTS, color, strict=True))
 
 
 def _hue_of(color: tuple[int, int, int]) -> tuple[float, ...]:
@@ -73,7 +73,7 @@ def _hue_of(color: tuple[int, int, int]) -> tuple[float, ...]:
 def _hue_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return sum(
         weight * abs(x - y)
-        for weight, x, y in zip(_LUMA_WEIGHTS, _hue_of(a), _hue_of(b))
+        for weight, x, y in zip(_LUMA_WEIGHTS, _hue_of(a), _hue_of(b), strict=True)
     )
 
 
@@ -125,7 +125,7 @@ def hue_ramp(color: tuple[int, int, int]) -> tuple[tuple[int, int, int], ...]:
     ceiling = (1.0, 1.0, 1.0)
     for entry in reversed(steps):  # brightest first
         ratios = _hue_of(entry)
-        if any(ratio > limit + 1e-9 for ratio, limit in zip(ratios, ceiling)):
+        if any(ratio > limit + 1e-9 for ratio, limit in zip(ratios, ceiling, strict=True)):
             continue
         kept.append(entry)
         ceiling = ratios
