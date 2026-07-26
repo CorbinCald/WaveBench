@@ -6,8 +6,11 @@ benchmarkResults/
 .symphony/
 .DS_Store
 .benchmark_history.json
+.benchmark_history.json.*
 .benchmark_config.json
+.benchmark_config.json.*
 .benchmark_models.json
+.benchmark_models.json.*
 .benchmark_query_history
 .benchmark_query_history.*
 build/
