@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from itertools import pairwise
 from statistics import fmean, median
 from types import SimpleNamespace
 
@@ -333,7 +334,7 @@ def test_pulse_bar_has_no_color_seam_where_the_fill_ends(colored) -> None:
         assert len(colors) == bar_width
 
         brightness = [sum(color) for color in colors]
-        steps = [abs(b - a) for a, b in zip(brightness, brightness[1:])]
+        steps = [abs(b - a) for a, b in pairwise(brightness)]
         seam = steps[round(chars / 1000 * bar_width) - 1]
 
         assert seam <= 2 * median(steps), f"{chars=} seam={seam} steps={steps}"
