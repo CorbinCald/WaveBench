@@ -156,6 +156,66 @@ def test_idle_wave_layers_move_with_parallax() -> None:
     assert motion[0] < motion[1] < motion[2]
 
 
+def test_idle_wave_starts_low_and_builds_height_and_motion_gradually() -> None:
+    """Resting water stays low but visibly moves, then gains energy evenly."""
+    width, height = 180, 18
+    intensities = (0.0, 0.25, 0.5, 0.75, 1.0)
+    spans: list[float] = []
+    top_rows: list[float] = []
+    motions: list[float] = []
+
+    for intensity in intensities:
+        sampled_spans: list[float] = []
+        sampled_tops: list[float] = []
+        sampled_motion: list[float] = []
+        phase_step = wave_mod._wave_phase_step(intensity)
+
+        for tick in (0, 30, 60, 90):
+            for phase in (0.0, 24.0, 48.0):
+                layers = wave_mod._idle_wave_surfaces(
+                    tick,
+                    width,
+                    height,
+                    intensity,
+                    wave_phase=phase,
+                )
+                foreground = layers[-1]
+                sampled_spans.append((max(foreground) - min(foreground)) / 4.0)
+                sampled_tops.append(min(min(surface) for surface in layers) / 4.0)
+
+                next_layers = wave_mod._idle_wave_surfaces(
+                    tick + 1,
+                    width,
+                    height,
+                    intensity,
+                    wave_phase=phase + phase_step,
+                )
+                sampled_motion.append(
+                    fmean(
+                        abs(after - before)
+                        for old, new in zip(layers, next_layers, strict=True)
+                        for before, after in zip(old, new, strict=True)
+                    )
+                )
+
+        spans.append(fmean(sampled_spans))
+        top_rows.append(fmean(sampled_tops))
+        motions.append(fmean(sampled_motion))
+
+    span_steps = [after - before for before, after in pairwise(spans)]
+    motion_steps = [after - before for before, after in pairwise(motions)]
+
+    assert spans == sorted(spans)
+    assert motions == sorted(motions)
+    assert top_rows == sorted(top_rows, reverse=True)
+    assert spans[0] < height * 0.10
+    assert spans[-1] > spans[0] * 4.0
+    assert motions[0] > 0.07
+    assert motions[-1] > motions[0] * 8.0
+    assert max(span_steps) < min(span_steps) * 1.25
+    assert max(motion_steps) < sum(motion_steps) * 0.40
+
+
 @pytest.mark.parametrize(("width", "height"), [(78, 14), (118, 20), (78, 40)])
 def test_idle_wave_surfaces_keep_a_gentle_slope(width: int, height: int) -> None:
     """Even an energetic swell should roll rather than form a steep wall.
@@ -200,6 +260,21 @@ def test_progress_wave_has_no_sheer_edge() -> None:
                     )
                 )
                 assert max(abs(after - before) for before, after in pairwise(levels)) <= 3
+
+
+def test_tracker_wave_volume_scales_to_each_run() -> None:
+    from wavebench.tui.progress import ProgressTracker
+
+    tracker = ProgressTracker(
+        total=2,
+        results={},
+        model_names=["small", "large"],
+        avg_tokens={"small": 500, "large": 1500},
+    )
+
+    assert tracker._wave_volume_factor(0) == 0.0
+    assert tracker._wave_volume_factor(2_000) == pytest.approx(0.5)
+    assert tracker._wave_volume_factor(8_000) == 1.0
 
 
 def test_surface_fill_mask_samples_both_braille_columns() -> None:

@@ -229,6 +229,22 @@ def _shape_wave(value: float, stokes: float, crest_exp: float, limiter: float) -
     return -(abs(value) ** 1.12)
 
 
+_IDLE_PHASE_STEP = 0.80
+_ACTIVE_PHASE_STEP = 1.70
+
+
+def _wave_phase_step(intensity: float) -> float:
+    """Return the per-frame travel speed for the full-screen ocean.
+
+    The resting wave should still read as moving water, while generated output
+    steadily adds momentum. Keeping this interpolation beside the surface math
+    ensures the idle menu and the in-progress screen share the same motion
+    range.
+    """
+    intensity = max(0.0, min(1.0, intensity))
+    return _IDLE_PHASE_STEP + (_ACTIVE_PHASE_STEP - _IDLE_PHASE_STEP) * intensity
+
+
 def _idle_wave_surfaces(
     tick: int,
     width: int,
@@ -246,21 +262,24 @@ def _idle_wave_surfaces(
     # Braille cells are sampled at 2-by-4 dots. On an unusually tall/narrow
     # terminal, damp the amplitude so the same curve cannot become a wall.
     aspect_damping = min(1.0, width / max(total_sp * 2.2, 1.0))
-    amp_scale = 0.12 + 0.15 * intensity
-    amp_breath = 0.04 + 0.07 * intensity
+    # Start with a low, quick swell, then spend most of the available vertical
+    # range on generated energy. The linear ramp is deliberately easy to read
+    # while ProgressTracker smooths the intensity from frame to frame.
+    amp_scale = 0.075 + 0.210 * intensity
+    amp_breath = 0.025 + 0.085 * intensity
     amp = total_sp * amp_scale * aspect_damping * (1.0 + amp_breath * math.sin(tick * 0.019 + 1.0))
 
-    center_norm = 0.74 - 0.15 * intensity
-    center_sway = 0.08 + 0.10 * intensity
+    center_norm = 0.80 - 0.22 * intensity
+    center_sway = 0.045 + 0.130 * intensity
     center = total_sp * center_norm + amp * center_sway * math.sin(tick * 0.024)
-    depth_gap = total_sp * (0.085 + 0.010 * intensity)
+    depth_gap = total_sp * (0.055 + 0.025 * intensity)
 
     if wave_phase is None:
-        wave_phase = tick * (0.35 + 0.75 * intensity)
+        wave_phase = tick * _wave_phase_step(intensity)
 
-    stokes = 0.025 + 0.065 * intensity
-    crest_exp = 1.06 + 0.12 * intensity
-    limiter = 0.28 + 0.04 * (1.0 - intensity)
+    stokes = 0.018 + 0.080 * intensity
+    crest_exp = 1.03 + 0.15 * intensity
+    limiter = 0.32 - 0.035 * intensity
 
     far: list[float] = []
     middle: list[float] = []
@@ -270,34 +289,34 @@ def _idle_wave_surfaces(
 
         far_height = (
             0.72 * math.sin(nx * 12.2 - wave_phase * 0.038 + 0.8)
-            + 0.08 * math.sin(nx * 22.0 - wave_phase * 0.052 + 2.4)
-            + 0.015 * math.sin(nx * 34.0 - wave_phase * 0.068 + 0.3)
+            + (0.065 + 0.025 * intensity) * math.sin(nx * 22.0 - wave_phase * 0.052 + 2.4)
+            + (0.010 + 0.020 * intensity) * math.sin(nx * 34.0 - wave_phase * 0.068 + 0.3)
         )
         far_height = _shape_wave(
             far_height,
             stokes * 0.20,
-            1.02 + 0.04 * intensity,
+            1.015 + 0.050 * intensity,
             limiter + 0.16,
         )
         far.append(center - depth_gap * 2.0 - far_height * amp * 0.34)
 
         middle_height = (
             0.68 * math.sin(nx * 11.2 - wave_phase * 0.061 + 0.3)
-            + (0.055 + 0.035 * intensity) * math.sin(nx * 20.4 - wave_phase * 0.084 + 2.0)
-            + (0.012 + 0.018 * intensity) * math.sin(nx * 32.0 - wave_phase * 0.108 + 3.4)
+            + (0.045 + 0.070 * intensity) * math.sin(nx * 20.4 - wave_phase * 0.084 + 2.0)
+            + (0.010 + 0.035 * intensity) * math.sin(nx * 32.0 - wave_phase * 0.108 + 3.4)
         )
         middle_height = _shape_wave(
             middle_height,
             stokes * 0.50,
-            1.04 + 0.07 * intensity,
+            1.025 + 0.090 * intensity,
             limiter + 0.08,
         )
         middle.append(center - depth_gap - middle_height * amp * 0.62)
 
         foreground_height = (
             0.64 * math.sin(nx * 10.2 - wave_phase * 0.086)
-            + (0.06 + 0.055 * intensity) * math.sin(nx * 18.8 - wave_phase * 0.116 + 1.7)
-            + (0.015 + 0.030 * intensity) * math.sin(nx * 29.0 - wave_phase * 0.148 + 3.1)
+            + (0.050 + 0.080 * intensity) * math.sin(nx * 18.8 - wave_phase * 0.116 + 1.7)
+            + (0.012 + 0.040 * intensity) * math.sin(nx * 29.0 - wave_phase * 0.148 + 3.1)
         )
         foreground_height = _shape_wave(
             foreground_height,
