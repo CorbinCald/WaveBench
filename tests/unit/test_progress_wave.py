@@ -49,17 +49,13 @@ def colored(monkeypatch):
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
 
 
-_ANY_COLOR_OR_RESET = re.compile(
-    r"\033\[(?:38;2;(\d+);(\d+);(\d+)|38;5;(\d+)|0)m"
-)
+_ANY_COLOR_OR_RESET = re.compile(r"\033\[(?:38;2;(\d+);(\d+);(\d+)|38;5;(\d+)|0)m")
 
 
 def _rendered_colors(rendered: str) -> list[tuple[int, int, int]]:
     """Every color in a rendered wave, whichever escape form carries it."""
     return [
-        _PALETTE[int(match.group(4))]
-        if match.group(4)
-        else tuple(map(int, match.group(1, 2, 3)))
+        _PALETTE[int(match.group(4))] if match.group(4) else tuple(map(int, match.group(1, 2, 3)))
         for match in _ANY_COLOR.finditer(rendered)
     ]
 
@@ -94,9 +90,7 @@ def _cell_colors(rendered: str) -> list[tuple[int, int, int]]:
     pos = 0
     for match in _COLOR_OR_RESET.finditer(rendered):
         colors.extend(current for _ in rendered[pos : match.start()])
-        current = (
-            (0, 0, 0) if match.group(1) is None else tuple(map(int, match.groups()))
-        )
+        current = (0, 0, 0) if match.group(1) is None else tuple(map(int, match.groups()))
         pos = match.end()
     colors.extend(current for _ in rendered[pos:])
     return colors
@@ -111,9 +105,7 @@ def _hue(color: tuple[int, int, int]) -> tuple[float, ...]:
 def _hue_drift(colors: list[tuple[int, int, int]]) -> float:
     """Widest per-channel spread across a set of colors. 0.0 is one exact hue."""
     hues = [_hue(color) for color in colors if sum(color) > 25]
-    return max(
-        max(hue[i] for hue in hues) - min(hue[i] for hue in hues) for i in range(3)
-    )
+    return max(max(hue[i] for hue in hues) - min(hue[i] for hue in hues) for i in range(3))
 
 
 def test_idle_wave_layers_are_ordered_back_to_front() -> None:
@@ -355,9 +347,7 @@ def test_pulse_bar_brightness_peaks_at_the_leading_edge(colored) -> None:
 def test_bar_color_tracks_position_not_wave_height(colored) -> None:
     """Height belongs to the glyph. Keying color off the quantised height level
     banded neighbouring cells instead of blending them."""
-    colors = _cell_colors(
-        wave_mod._render_pulse_bar(1000, 1000, 30, phase=2.0, bar_width=28)
-    )
+    colors = _cell_colors(wave_mod._render_pulse_bar(1000, 1000, 30, phase=2.0, bar_width=28))
     brightness = [sum(color) for color in colors]
 
     # A full bar ramps monotonically up to its leading edge, whatever shape the
@@ -377,9 +367,7 @@ def test_rear_contours_never_outshine_the_foreground_body(colored) -> None:
         _far, middle, foreground = wave_mod._idle_wave_surfaces(
             tick, width * 2, height, intensity, phase
         )
-        rows = wave_mod.render_idle_wave(
-            tick, width, height, intensity, wave_phase=phase
-        )
+        rows = wave_mod.render_idle_wave(tick, width, height, intensity, wave_phase=phase)
 
         bodies: list[int] = []
         contours: list[int] = []
@@ -394,8 +382,7 @@ def test_rear_contours_never_outshine_the_foreground_body(colored) -> None:
             if not shades:
                 continue
             submerged = any(
-                wave_mod._surface_fill_mask(foreground, index, col)
-                for col in range(width)
+                wave_mod._surface_fill_mask(foreground, index, col) for col in range(width)
             )
             if submerged:
                 bodies.append(sum(shades[-1]))
@@ -468,8 +455,11 @@ def test_reduced_color_rows_never_go_dark(colored, palette) -> None:
         for intensity in (0.0, 0.5, 1.0):
             for index, row in enumerate(
                 wave_mod.render_idle_wave(
-                    tick=40, width=150, height=22,
-                    intensity=intensity, wave_phase=26.0,
+                    tick=40,
+                    width=150,
+                    height=22,
+                    intensity=intensity,
+                    wave_phase=26.0,
                 )
             ):
                 lit = _lit_cell_colors(row)
@@ -508,9 +498,7 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
 
 
 def test_truecolor_terminals_still_get_the_full_gradient(colored) -> None:
-    rows = wave_mod.render_idle_wave(
-        tick=40, width=120, height=20, intensity=0.75, wave_phase=26.0
-    )
+    rows = wave_mod.render_idle_wave(tick=40, width=120, height=20, intensity=0.75, wave_phase=26.0)
     colors = {color for row in rows for color in _rendered_colors(row)}
 
     assert not any("38;5;" in row for row in rows)

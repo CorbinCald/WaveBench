@@ -123,7 +123,10 @@ class ProviderStatusRunner(BlockingRunner):
                     },
                 },
             )
-            on_event("agent_end", {"event": "agent_end", "payload": {"type": "agent_end", "messages": [message]}})
+            on_event(
+                "agent_end",
+                {"event": "agent_end", "payload": {"type": "agent_end", "messages": [message]}},
+            )
         return RunResult(True, "succeeded")
 
 
@@ -360,7 +363,9 @@ async def test_no_change_summary_includes_provider_status_when_response_text_mis
         await asyncio.sleep(0)
 
     assert "First response excerpt:" not in tracker.comments[1][1]
-    assert "Provider status: provider=openai, model=gpt-5.5, stopReason=stop" in tracker.comments[1][1]
+    assert (
+        "Provider status: provider=openai, model=gpt-5.5, stopReason=stop" in tracker.comments[1][1]
+    )
 
 
 def test_in_progress_issue_with_no_change_comment_is_not_dispatched_after_restart(
@@ -396,7 +401,9 @@ def test_in_progress_issue_with_no_change_comment_is_not_dispatched_after_restar
 
 
 @pytest.mark.asyncio
-async def test_merging_state_creates_pull_request_without_dispatching_worker(tmp_path: Path) -> None:
+async def test_merging_state_creates_pull_request_without_dispatching_worker(
+    tmp_path: Path,
+) -> None:
     config = make_config(tmp_path, max_concurrent=2, post_status_comments=True)
     config.git = GitConfig(
         enabled=True,

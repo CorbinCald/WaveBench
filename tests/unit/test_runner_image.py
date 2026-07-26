@@ -88,7 +88,9 @@ async def test_run_model_writes_multiple_generated_images_with_detected_extensio
 
 
 async def test_run_model_fails_image_without_valid_data_url(tmp_path, monkeypatch) -> None:
-    async def fake_call_image_generation(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], dict]:
+    async def fake_call_image_generation(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[str, Any], dict]:
         return {"role": "assistant", "content": "plain text only"}, {}
 
     monkeypatch.setattr(runner_mod, "call_image_generation", fake_call_image_generation)

@@ -583,11 +583,7 @@ def interactive_config_menu(
         if _is_model_tab():
             category = _model_tab_category(active_tab)
             tab_total = sum(1 for it in model_items if it.get("category") == category)
-            sel = sum(
-                1
-                for it in model_items
-                if it["selected"] and it.get("category") == category
-            )
+            sel = sum(1 for it in model_items if it["selected"] and it.get("category") == category)
             pcount = _model_page_count()
             status = (
                 f"{S.BOLD}{sel}{S.RST} of "
