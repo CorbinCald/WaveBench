@@ -76,6 +76,10 @@ def _reset_ctx_cache() -> None:
     api_mod._MODEL_CONTEXTS_ATTEMPTED = False
 
 
+def test_reasoning_stall_timeout_is_thirty_minutes() -> None:
+    assert api_mod.REASONING_STALL_TIMEOUT == 30 * 60
+
+
 @asynccontextmanager
 async def _running_server(app: web.Application):
     """Run *app* on a random port for the duration of the block."""
