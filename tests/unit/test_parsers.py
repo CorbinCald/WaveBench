@@ -436,14 +436,13 @@ async def test_parse_llm_output_stage3_salvage() -> None:
     assert result["extension"] == ".py"
 
 
-async def test_parse_llm_output_stage4_fallback_prose_to_text() -> None:
-    # No JSON, no fences — treated as raw code-like text with guessed language.
+async def test_parse_llm_output_stage4_rejects_pure_prose() -> None:
+    # No JSON, no fences, and no syntactic code marker anywhere: this is
+    # prose — typically a refusal — and saving it as code would score the
+    # model a pass for declining the task.
     content = "Hello, this is just prose with no code markers."
     result = await parse_llm_output(None, None, "dummy-model", content)
-    assert result is not None
-    assert result["language"] == "text"
-    # An unknown language leaves extension empty.
-    assert result["extension"] == ""
+    assert result is None
 
 
 async def test_parse_llm_output_stage4_fallback_guesses_python() -> None:
@@ -458,3 +457,41 @@ async def test_parse_llm_output_empty_returns_none() -> None:
     assert await parse_llm_output(None, None, "m", "") is None
     assert await parse_llm_output(None, None, "m", "   \n  ") is None
     assert await parse_llm_output(None, None, "m", None) is None  # type: ignore[arg-type]
+
+
+async def test_parse_llm_output_rejects_refusal_prose() -> None:
+    content = "I'm sorry, but I can't help with that request."
+    assert await parse_llm_output(None, None, "dummy-model", content) is None
+
+
+async def test_parse_llm_output_unwraps_markdown_wrapped_code() -> None:
+    # A prose-tagged wrapper whose bare closer is really the inner block's
+    # closer: the actual answer is the python inside, not the wrapper.
+    content = "```markdown\nHere is the solution:\n\n```python\ndef main():\n    return 1\n```\n```"
+    result = await parse_llm_output(None, None, "dummy-model", content)
+    assert result is not None
+    assert result["language"] == "python"
+    assert result["code"].strip() == "def main():\n    return 1"
+    assert "Here is the solution" not in result["code"]
+
+
+async def test_parse_llm_output_four_backtick_wrapper_keeps_inner_fence() -> None:
+    # CommonMark: a longer fence run can contain a complete shorter fence.
+    # The old pattern let the inner ``` close the ```` wrapper mid-block and
+    # threw the real code away.
+    content = "````markdown\nIntro\n\n```python\nprint('hi')\n```\n\nOutro\n````"
+    result = await parse_llm_output(None, None, "dummy-model", content)
+    assert result is not None
+    assert result["language"] == "python"
+    assert result["code"].strip() == "print('hi')"
+
+
+async def test_parse_llm_output_plain_markdown_block_stays_markdown() -> None:
+    # A markdown fence with no inner code is a legitimate answer (e.g. a
+    # requested README), not a wrapper to unwrap or a refusal to reject.
+    content = "```markdown\n# My Project\n\nJust prose describing it.\n```"
+    result = await parse_llm_output(None, None, "dummy-model", content)
+    assert result is not None
+    assert result["language"] == "markdown"
+    assert result["extension"] == ".md"
+    assert "# My Project" in result["code"]

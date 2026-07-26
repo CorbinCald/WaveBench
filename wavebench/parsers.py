@@ -7,6 +7,8 @@
     Stage 3. Salvage from an unclosed fence.
     Stage 4. Treat the whole response as code, with language guessed
              from syntactic markers (shebang, DOCTYPE, ``def``, etc.).
+             A response with no marker at all is prose (typically a
+             refusal) and fails extraction rather than passing as code.
 
 ``get_directory_name()`` derives a concise ``snake_case`` directory name from
     the user's prompt, either through the configured LLM fallback chain or a
@@ -115,10 +117,19 @@ async def get_directory_name(
     return "benchmark_output"
 
 
+# CommonMark-style fences: opener and closer both anchored to line start,
+# closed by the same run of backticks/tildes.  The old pattern terminated on
+# a bare mid-text ``\1``, so the *inner* fence of a nested block (e.g. a
+# ```python example inside a ```markdown reply) closed the outer one and the
+# actual code was thrown away.
 _FENCE_RE = re.compile(
-    r"(```|~~~)\s*([^\n`]*)\n(.*?)\n\1",
+    r"(?m)^(`{3,}|~{3,})[ \t]*([^\n]*)\n(.*?)^\1[ \t]*$",
     re.DOTALL,
 )
+
+# Fence languages that mark prose rather than code.  A block tagged with one
+# of these is usually a document wrapper around the real answer.
+_PROSE_LANGS = ("markdown", "md", "text", "txt")
 
 _LANG_TO_EXT = {
     "python": ".py",
@@ -222,7 +233,9 @@ def _salvage_unclosed_fence(text: str) -> tuple[str, str] | None:
         return None
     lang = (m.group(2) or "").split()[0].lower() if (m.group(2) or "").strip() else ""
     code = (m.group(3) or "").strip()
-    if not code:
+    # A body that is only fence punctuation/whitespace (e.g. the tail of an
+    # empty ``` ``` pair) is not salvageable code.
+    if not code or not re.sub(r"[`~\s]+", "", code):
         return None
     return lang, code
 
@@ -332,6 +345,19 @@ def extract_code(content: str) -> dict[str, Any] | None:
             non_json_blocks = [b for b in blocks if b[0] not in ("json", "")]
             candidate_blocks = non_json_blocks if non_json_blocks else blocks
             lang, code = max(candidate_blocks, key=lambda item: len(item[1].strip()))
+            if lang in _PROSE_LANGS:
+                # A prose-tagged block is usually a wrapper; the real answer
+                # may be a fence inside it.  Only take the inner result when
+                # it actually narrowed to something that isn't prose — a
+                # whole-body echo means there was no inner code, and the
+                # block stands on its own (e.g. a requested README).
+                inner = extract_code(code)
+                if (
+                    inner is not None
+                    and inner["language"] not in _PROSE_LANGS
+                    and inner["code"].strip() != code.strip()
+                ):
+                    return inner
             return _build_parse_result(code, language_hint=lang)
 
         # Stage 3: recover from malformed/unclosed fence.
@@ -341,7 +367,14 @@ def extract_code(content: str) -> dict[str, Any] | None:
             return _build_parse_result(code, language_hint=lang)
 
         # Stage 4: final fallback — treat the full response as code-like text.
-        return _build_parse_result(content.strip())
+        result = _build_parse_result(content.strip())
+        if result["language"] == "text":
+            # No fence, no JSON payload, and no syntactic code marker in the
+            # whole response: this is prose — typically a refusal — and
+            # saving it as `model.py` would score the model a pass for
+            # declining the task.
+            return None
+        return result
     except Exception as exc:
         exc_str = str(exc) or exc.__class__.__name__
         print(f"    {_tri} {S.DIM}local parse error: {exc_str}{S.RST}")
