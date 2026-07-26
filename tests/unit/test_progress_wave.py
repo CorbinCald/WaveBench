@@ -214,7 +214,7 @@ def test_surface_contour_mask_follows_true_braille_geometry() -> None:
     assert mask == 0x21
 
 
-def test_foreground_edge_uses_body_color(monkeypatch) -> None:
+def test_foreground_gradient_tracks_depth_below_local_surface(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
     monkeypatch.setattr(
@@ -228,16 +228,44 @@ def test_foreground_edge_uses_body_color(monkeypatch) -> None:
         lambda *_args, **_kwargs: (
             [9.0] * 4,
             [9.0] * 4,
-            [2.4, 2.4, -1.0, -1.0],
+            [2.4, 2.4, -20.0, -20.0],
         ),
     )
 
     row = wave_mod.render_idle_wave(tick=0, width=2, height=1, intensity=0.5)[0]
     visible = re.sub(r"\033\[[0-9;]*m", "", row)
-    colors = re.findall(r"\033\[38;2;(\d+);(\d+);(\d+)m", row)
+    colors = _cell_colors(row)
 
     assert visible == "⣤⣿"
-    assert len(set(colors)) == 1
+    assert len(colors) == 2
+    assert sum(colors[0]) > 2 * sum(colors[1])
+
+
+def test_foreground_gradient_also_darkens_lower_cells(monkeypatch) -> None:
+    monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
+    monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
+    monkeypatch.setattr(
+        wave_mod._styles,
+        "IDLE_WAVE_COLORS",
+        ((10, 20, 30), (100, 120, 140), (240, 250, 255)),
+    )
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args, **_kwargs: (
+            [20.0] * 4,
+            [20.0] * 4,
+            [2.4, 2.4, 6.4, 6.4],
+        ),
+    )
+
+    rows = wave_mod.render_idle_wave(tick=0, width=2, height=2, intensity=0.5)
+    upper_colors = _cell_colors(rows[0])
+    lower_colors = _cell_colors(rows[1])
+
+    # Both are surface-band cells, but the lower one receives screen-depth
+    # attenuation. Within that lower row, submerged water remains darker still.
+    assert sum(upper_colors[0]) > sum(lower_colors[1]) > sum(lower_colors[0])
 
 
 def test_background_contour_does_not_leak_across_foreground_edge(monkeypatch) -> None:
@@ -414,40 +442,58 @@ def test_bar_color_tracks_position_not_wave_height(colored) -> None:
 # ── Depth ordering ────────────────────────────────────────────────────────
 
 
-def test_rear_contours_never_outshine_the_foreground_body(colored) -> None:
-    """A background contour brighter than the water in front of it inverts the
-    depth cue and reads as a stray color rather than distance."""
+def test_idle_wave_depth_colors_are_ordered(colored) -> None:
+    """Surface, distance, and underwater lightness retain clear depth cues."""
     tick, width, height, phase = 40, 150, 20, 26.0
 
     for intensity in (0.0, 0.5, 1.0):
-        _far, middle, foreground = wave_mod._idle_wave_surfaces(
+        far, middle, foreground = wave_mod._idle_wave_surfaces(
             tick, width * 2, height, intensity, phase
         )
+        far_occluding = [
+            min(middle_y, foreground_y)
+            for middle_y, foreground_y in zip(middle, foreground, strict=True)
+        ]
         rows = wave_mod.render_idle_wave(tick, width, height, intensity, wave_phase=phase)
 
-        bodies: list[int] = []
-        contours: list[int] = []
-        for index, row in enumerate(rows):
-            shades = sorted(
-                {
-                    tuple(map(int, match))
-                    for match in re.findall(r"\033\[38;2;(\d+);(\d+);(\d+)m", row)
-                },
-                key=sum,
-            )
-            if not shades:
-                continue
-            submerged = any(
-                wave_mod._surface_fill_mask(foreground, index, col) for col in range(width)
-            )
-            if submerged:
-                bodies.append(sum(shades[-1]))
-                contours += [sum(shade) for shade in shades[:-1]]
-            else:
-                contours += [sum(shade) for shade in shades]
+        surface_bodies: list[int] = []
+        deep_bodies: list[int] = []
+        middle_contours: list[int] = []
+        far_contours: list[int] = []
+        for row_index, row in enumerate(rows):
+            colors = _cell_colors(row)
+            assert len(colors) == width
+            for col, color in enumerate(colors):
+                if wave_mod._surface_fill_mask(foreground, row_index, col):
+                    band = wave_mod._surface_depth_band(
+                        foreground,
+                        row_index,
+                        col,
+                        height * 4,
+                    )
+                    if band == 0:
+                        surface_bodies.append(sum(color))
+                    elif band == wave_mod._DEPTH_BANDS - 1:
+                        deep_bodies.append(sum(color))
+                elif wave_mod._surface_contour_mask(
+                    middle,
+                    row_index,
+                    col,
+                    occluding_surface=foreground,
+                ):
+                    middle_contours.append(sum(color))
+                elif wave_mod._surface_contour_mask(
+                    far,
+                    row_index,
+                    col,
+                    occluding_surface=far_occluding,
+                ):
+                    far_contours.append(sum(color))
 
-        assert bodies, intensity
-        assert max(contours, default=0) < min(bodies), intensity
+        assert surface_bodies and deep_bodies and middle_contours and far_contours, intensity
+        assert max(far_contours) < min(middle_contours), intensity
+        assert max(middle_contours) < min(surface_bodies), intensity
+        assert max(deep_bodies) < min(surface_bodies), intensity
 
 
 # ── Reduced-color terminals ───────────────────────────────────────────────
@@ -532,10 +578,10 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
     drain blocks the write — and while it blocks, nothing reads the keyboard.
 
     Color changes are what cost bytes: a run of one color is nearly free, while
-    alternating color spends an escape sequence per cell. Dithering between
-    palette steps to smooth the gradient ran 3030 escapes a frame against 158 at
-    300 columns, and typing stopped appearing. Depth varies down the rows, so
-    each row must stay a flat run per layer however few palette steps there are.
+    alternating color spends an escape sequence per cell. Dithering once cost
+    3030 escapes a frame at 300 columns and typing stopped appearing. The six
+    broad depth bands may curve across a row, but must remain far below that
+    pathological output and the reduced-color path cannot make it worse.
     """
     for name in styles.THEME_NAMES:
         styles.apply_theme(name)
@@ -548,6 +594,7 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
                 )
             )
             counts.append(frame.count("\033["))
+        assert max(counts) < 600, (name, counts)
         assert counts[1] <= counts[0] * 1.2, (name, counts)
     styles.TRUECOLOR = True
     styles.apply_theme("default")
