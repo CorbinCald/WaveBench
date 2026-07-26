@@ -35,6 +35,7 @@ hooks:
     python3 -m venv .venv
     . .venv/bin/activate
     pip install -e '.[dev]'
+    pre-commit install
   before_run: |
     git status --short --branch
   after_run: |
