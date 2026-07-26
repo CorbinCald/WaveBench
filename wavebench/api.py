@@ -131,7 +131,7 @@ def _credit_token_limit_from_error(err_text: str) -> int | None:
 
 
 MAX_OUTPUT_TOKENS_DEFAULT = 32_000
-REASONING_STALL_TIMEOUT = 300  # 5 minutes with zero tokens → abort
+REASONING_STALL_TIMEOUT = 1_800  # 30 minutes with zero tokens → abort
 
 # Statuses that indicate a transient upstream condition rather than a real
 # request error. Each is retried with bounded exponential backoff.
