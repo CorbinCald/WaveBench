@@ -728,6 +728,7 @@ async def call_model_streaming(
                     return None, {}, resp.status, err
                 else:
                     buf = ""
+                    saw_done = False
                     content_stream = resp.content
                     while True:
                         if not _got_first_token:
@@ -758,9 +759,27 @@ async def call_model_streaming(
                                 continue
                             payload = line[6:].strip()
                             if payload == "[DONE]":
+                                saw_done = True
                                 continue
                             try:
                                 obj = json.loads(payload)
+                                # OpenRouter can accept the request (HTTP 200),
+                                # stream part of an answer, then deliver a
+                                # terminal error event with no choices at all.
+                                # Ignoring it would return the partial content
+                                # as if it were the whole answer.
+                                err_obj = obj.get("error")
+                                if isinstance(err_obj, dict) and err_obj:
+                                    err_code = err_obj.get("code")
+                                    err_msg = str(
+                                        err_obj.get("message") or ""
+                                    ).strip() or json.dumps(err_obj)
+                                    label = (
+                                        f"mid-stream error ({err_code})"
+                                        if err_code
+                                        else "mid-stream error"
+                                    )
+                                    raise RuntimeError(f"{label}: {err_msg[:200]}")
                                 if "usage" in obj:
                                     usage = obj["usage"]
                                 for ch in obj.get("choices", []):
@@ -793,6 +812,13 @@ async def call_model_streaming(
                                 pass
                     if finish_reason:
                         usage = {**usage, "finish_reason": finish_reason}
+                    elif not saw_done:
+                        # EOF with neither a finish_reason nor the [DONE]
+                        # sentinel: the connection dropped mid-generation and
+                        # the tail of the answer may be missing.  Surface it
+                        # through the same channel as max_tokens truncation so
+                        # the runner flags the file instead of passing it.
+                        usage = {**usage, "finish_reason": "incomplete"}
                     return "".join(parts), usage, 200, ""
             finally:
                 await resp_ctx.__aexit__(None, None, None)

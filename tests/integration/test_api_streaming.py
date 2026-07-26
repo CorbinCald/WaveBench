@@ -23,19 +23,20 @@ from aiohttp.test_utils import TestServer
 from wavebench import api as api_mod
 
 
-async def _sse_body(chunks: list[dict]) -> bytes:
+async def _sse_body(chunks: list[dict], include_done: bool = True) -> bytes:
     """Serialize a list of SSE event dicts into the on-wire byte stream."""
     out = bytearray()
     for chunk in chunks:
         out.extend(b"data: ")
         out.extend(json.dumps(chunk).encode("utf-8"))
         out.extend(b"\n\n")
-    out.extend(b"data: [DONE]\n\n")
+    if include_done:
+        out.extend(b"data: [DONE]\n\n")
     return bytes(out)
 
 
 def _make_streaming_app(
-    chunks: list[dict], status: int = 200, err_body: str = ""
+    chunks: list[dict], status: int = 200, err_body: str = "", include_done: bool = True
 ) -> web.Application:
     """Build a test app that streams *chunks* on POST to /chat/completions."""
 
@@ -44,7 +45,7 @@ def _make_streaming_app(
             return web.Response(status=status, text=err_body)
         resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
-        body = await _sse_body(chunks)
+        body = await _sse_body(chunks, include_done)
         # Write in a few pieces to make sure the parser handles multi-chunk input.
         mid = len(body) // 2
         await resp.write(body[:mid])
@@ -192,6 +193,102 @@ async def test_streaming_http_error_raises_runtime_error(
                     prompt="hi",
                     reasoning_effort=None,
                 )
+
+
+async def test_streaming_mid_stream_error_event_raises(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenRouter can accept the request (HTTP 200), stream part of an
+    # answer, then deliver a terminal error event with no choices at all.
+    # Returning the partial content as if complete would score a broken
+    # generation as a pass.
+    chunks = [
+        {"choices": [{"delta": {"content": "partial answer"}}]},
+        {"error": {"code": 502, "message": "Provider returned error"}},
+    ]
+    app = _make_streaming_app(chunks, include_done=False)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(RuntimeError, match="mid-stream error"):
+                await api_mod.call_model_streaming(
+                    session,
+                    api_key="test-key",
+                    model_id="test/model",
+                    prompt="hi",
+                    reasoning_effort=None,
+                )
+
+
+async def test_streaming_eof_without_done_is_marked_incomplete(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # EOF with neither a finish_reason nor the [DONE] sentinel: the
+    # connection dropped mid-generation and the tail may be missing.
+    chunks = [{"choices": [{"delta": {"content": "partial"}}]}]
+    app = _make_streaming_app(chunks, include_done=False)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            content, usage = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert content == "partial"
+    assert usage["finish_reason"] == "incomplete"
+
+
+async def test_streaming_finish_reason_wins_over_missing_done(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A provider that reports finish_reason but forgets the [DONE] sentinel
+    # still delivered a complete answer — don't flag it.
+    chunks = [{"choices": [{"delta": {"content": "whole answer"}, "finish_reason": "stop"}]}]
+    app = _make_streaming_app(chunks, include_done=False)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            _, usage = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert usage["finish_reason"] == "stop"
+
+
+async def test_streaming_done_without_finish_reason_is_not_flagged(
+    _reset_ctx_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The [DONE] sentinel alone marks a healthy end of stream.
+    chunks = [{"choices": [{"delta": {"content": "whole answer"}}]}]
+    app = _make_streaming_app(chunks)
+
+    async with _running_server(app) as server:
+        monkeypatch.setattr(api_mod, "API_URL", str(server.make_url("")).rstrip("/"))
+        async with aiohttp.ClientSession() as session:
+            _, usage = await api_mod.call_model_streaming(
+                session,
+                api_key="test-key",
+                model_id="test/model",
+                prompt="hi",
+                reasoning_effort=None,
+            )
+
+    assert "finish_reason" not in usage
 
 
 # ---------------------------------------------------------------------------
