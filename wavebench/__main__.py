@@ -202,8 +202,13 @@ def main() -> None:
     if args.clear_history:
         path = _history_path()
         if os.path.exists(path):
-            os.remove(path)
-            print(f"\n  {_ok} History cleared.\n")
+            try:
+                os.replace(path, path + ".bak")
+            except OSError as exc:
+                print(f"\n  {_fail} Could not clear history: {exc}\n")
+                return
+            kept = os.path.basename(path) + ".bak"
+            print(f"\n  {_ok} History cleared. {S.DIM}(previous history kept as {kept}){S.RST}\n")
         else:
             print(f"\n  {S.DIM}No history to clear.{S.RST}\n")
         return
