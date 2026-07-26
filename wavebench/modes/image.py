@@ -8,6 +8,7 @@ text ignored.
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import json
 import os
@@ -18,8 +19,10 @@ from typing import Any
 from wavebench.modes import ParsedOutput
 from wavebench.tui.styles import THEMES
 
+# The payload class is whitespace-tolerant (\s, not just \r\n) because some
+# providers hard-wrap base64 with indented continuation lines.
 _IMAGE_DATA_URL_RE = re.compile(
-    r"data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)",
+    r"data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)",
     re.IGNORECASE,
 )
 
@@ -101,16 +104,49 @@ def _detect_mime_from_bytes(data: bytes) -> str | None:
     return None
 
 
+def _is_complete_container(mime: str, data: bytes) -> bool:
+    """True when the container's end-of-file marker is present.
+
+    ``b64decode`` happily decodes any 4-char-aligned prefix of a longer
+    payload, so a stream cut mid-image still yields bytes with valid magic.
+    The trailer is the only cheap signal that the whole image arrived.
+    """
+    if mime == "image/png":
+        return data.endswith(b"IEND\xae\x42\x60\x82")
+    if mime == "image/jpeg":
+        return data.endswith(b"\xff\xd9")
+    if mime == "image/gif":
+        return data.endswith(b";")
+    if mime == "image/webp":
+        return len(data) >= 8 + int.from_bytes(data[4:8], "little")
+    return True
+
+
 def _decode_data_url(mime_type: str, payload: str) -> DecodedImage | None:
-    cleaned = "".join(payload.split())
-    try:
-        data = base64.b64decode(cleaned, validate=True)
-    except Exception:
+    chunks = payload.split()
+    if not chunks:
         return None
-    if not data:
-        return None
-    mime = _detect_mime_from_bytes(data) or mime_type.lower()
-    return DecodedImage(data=data, mime_type=mime, extension=_extension_for_mime(mime))
+    joined = "".join(chunks)
+    # The whitespace-tolerant payload class can swallow prose that follows a
+    # bare data URL ("...ggg== Enjoy!"), so when the full cleaned payload
+    # doesn't hold up, fall back to the first whitespace-delimited run.
+    candidates = [joined] if joined == chunks[0] else [joined, chunks[0]]
+    for candidate in candidates:
+        try:
+            data = base64.b64decode(candidate, validate=True)
+        except Exception:
+            continue
+        if not data:
+            continue
+        detected = _detect_mime_from_bytes(data)
+        # Only trust bytes whose magic identified a real container when that
+        # container is complete; a payload cut mid-stream decodes cleanly but
+        # saves as a corrupt file that would score the model a pass.
+        if detected is not None and not _is_complete_container(detected, data):
+            continue
+        mime = detected or mime_type.lower()
+        return DecodedImage(data=data, mime_type=mime, extension=_extension_for_mime(mime))
+    return None
 
 
 def _extract_from_string(value: str) -> list[DecodedImage]:
@@ -128,12 +164,20 @@ def extract_image_outputs(response: Any) -> list[DecodedImage]:
     OpenRouter normalizes generated images as data URLs in the assistant
     message. Providers can place them under ``message.images``, inside a
     multimodal ``content`` array, or in text-like fields, so this walks the
-    response recursively and ignores all non-image text.
+    response recursively and ignores all non-image text. The same image often
+    appears in several of those fields at once, so results are deduplicated
+    by content hash.
     """
     images: list[DecodedImage] = []
+    seen: set[bytes] = set()
 
     def add_from_string(text: str) -> None:
-        images.extend(_extract_from_string(text))
+        for decoded in _extract_from_string(text):
+            digest = hashlib.sha256(decoded.data).digest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            images.append(decoded)
 
     def walk(value: Any) -> None:
         if isinstance(value, str):

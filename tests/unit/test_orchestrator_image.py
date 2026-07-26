@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -52,7 +53,7 @@ def test_resolve_image_mode_provider_defaults_do_not_send_config() -> None:
     assert mode.image_config() is None
 
 
-async def test_main_async_image_filters_models_generates_gallery_and_skips_history(
+async def test_main_async_image_filters_models_generates_gallery_and_records_history(
     tmp_state_dir: Path,
     monkeypatch,
 ) -> None:
@@ -149,7 +150,16 @@ async def test_main_async_image_filters_models_generates_gallery_and_skips_histo
     assert "imageModel.png" in gallery_html
     assert 'data-theme="plum"' in gallery_html
     assert opened == [str(gallery)]
-    assert not (tmp_state_dir / ".benchmark_history.json").exists()
+    # Image runs are first-class history entries: "Every run is recorded".
+    history_path = tmp_state_dir / ".benchmark_history.json"
+    assert history_path.exists()
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(history["runs"]) == 1
+    run = history["runs"][0]
+    assert run["prompt"] == "A neon wave"
+    assert run["models"]["imageModel"]["status"] == "success"
+    # Reasoning effort never applies to image generation, so it is not stamped.
+    assert "reasoning_effort" not in run
 
 
 async def test_main_async_image_uses_bundled_defaults_when_no_image_models_selected(

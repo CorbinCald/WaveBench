@@ -383,7 +383,30 @@ async def main_async(
                 )
 
             tasks = [_run_model_task(name, mid) for name, mid in targets]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            task_errors = await asyncio.gather(*tasks, return_exceptions=True)
+            # run_model records its own failures, so a leaked exception here
+            # means a task died before writing its result.  Backstop it —
+            # a model must never be silently absent from the results box.
+            for (name, _mid), err in zip(targets, task_errors, strict=True):
+                if not isinstance(err, BaseException) or name in results:
+                    continue
+                if isinstance(err, asyncio.CancelledError):
+                    results[name] = {
+                        "status": "cancelled",
+                        "time_s": 0.0,
+                        "file": None,
+                        "usage": {},
+                        "retries": [],
+                    }
+                else:
+                    results[name] = {
+                        "status": "failed",
+                        "time_s": 0.0,
+                        "file": None,
+                        "usage": {},
+                        "retries": [],
+                        "error": str(err) or err.__class__.__name__,
+                    }
 
             if image_mode and output_dir_task.done():
                 out = output_dir_task.result()
@@ -499,7 +522,11 @@ async def main_async(
                 detail = f"{S.DIM}cancelled{S.RST}"
             else:
                 sym = _fail
-                detail = f"{S.RED}failed{S.RST}{cost_s}"
+                err = str(info.get("error") or "")
+                err_s = (
+                    f"  {S.DIM}{_truncate(err, max(12, inner_w - pad - 30))}{S.RST}" if err else ""
+                )
+                detail = f"{S.RED}failed{S.RST}{err_s}{cost_s}"
             rank = f"{S.DIM}{i:>2}.{S.RST}"
             content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             if st == "success" and _vlen(content) + 2 + len(t) > inner_w:
@@ -527,20 +554,19 @@ async def main_async(
         print(_box_bot(w))
 
     # ── Record run & show lifetime analytics ───────────────────────────────
-    if not image_mode:
-        run_costs = {name: _result_cost(name, info) for name, info in results.items()}
-        record_run(
-            history,
-            user_prompt,
-            output_dir_final[0],
-            total_time,
-            results,
-            costs=run_costs,
-            reasoning_effort=raw_effort if not tts_mode else None,
-        )
-        display_analytics(
-            history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs")
-        )
+    # Image runs included: "Every run is recorded" (README) — skipping them
+    # made image benchmarks invisible to history and lifetime analytics.
+    run_costs = {name: _result_cost(name, info) for name, info in results.items()}
+    record_run(
+        history,
+        user_prompt,
+        output_dir_final[0],
+        total_time,
+        results,
+        costs=run_costs,
+        reasoning_effort=raw_effort if not (tts_mode or image_mode) else None,
+    )
+    display_analytics(history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs"))
     if tts_mode and output_dir_final[0]:
         from wavebench.tui.tts_player import browse_tts_outputs
 
