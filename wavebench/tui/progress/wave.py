@@ -353,14 +353,35 @@ def _surface_contour_mask(
 
 # Depth ramp for the three ocean layers, as a fraction of the active colour.
 # Every layer is the same colour scaled down, so depth reads as lightness only.
-# Both rear layers stay below 1.0 at every row, keeping a background contour
-# from ever out-shining the foreground body it is meant to sit behind.
+# Both rear layers stay below the foreground surface highlight, preserving the
+# front-to-back depth cue even where deep foreground water is darker.
 _FAR_DEPTH = 0.42
 _MIDDLE_DEPTH = 0.66
-# Top-to-bottom darkening of the water. Braille lights only ~1/3 of a cell, so
-# a steeper falloff than this crushes the body to near-black and the wave stops
-# reading as one colour with bright crests floating on it.
-_DEPTH_FALLOFF = 0.28
+# The foreground gradient combines distance below its local surface with a
+# smaller absolute top-to-bottom falloff. Six local bands are enough to read as
+# water depth at braille resolution while keeping each frame compact for a PTY.
+_DEPTH_BANDS = 6
+_SURFACE_SHADE = 1.15
+_DEEP_SHADE = 0.55
+_SCREEN_DEPTH_FALLOFF = 0.16
+
+
+def _surface_depth_band(
+    surface: list[float],
+    row: int,
+    col: int,
+    total_height: int,
+) -> int:
+    """Map one water cell to a lightness band below its local surface."""
+    surface_y = (surface[col * 2] + surface[col * 2 + 1]) * 0.5
+    cell_midpoint = row * 4 + 1.5
+    depth = max(0.0, cell_midpoint - surface_y)
+    water_column = max(total_height - surface_y, 4.0)
+    depth_t = min(1.0, depth / water_column)
+    # Smoothstep holds a soft highlight near the surface and avoids crowding
+    # most of the available colors into the shallowest cells.
+    depth_t = depth_t * depth_t * (3.0 - 2.0 * depth_t)
+    return min(_DEPTH_BANDS - 1, round(depth_t * (_DEPTH_BANDS - 1)))
 
 
 def render_idle_wave(
@@ -403,14 +424,22 @@ def render_idle_wave(
 
     rows: list[str] = []
     for row in range(height):
-        row_depth = row / max(height - 1, 1)
-        row_shade = 1.0 - _DEPTH_FALLOFF * row_depth
-        # One color per layer for the whole row. Depth varies down the rows, not
-        # across them, so a row is a single run of each layer's color — which is
-        # what keeps the frame down to a handful of escape sequences.
-        foreground_body_code = _color_code(_scale_color(active_color, row_shade))
-        middle_contour_code = _color_code(_scale_color(active_color, row_shade * middle_depth))
-        far_contour_code = _color_code(_scale_color(active_color, row_shade * far_depth))
+        screen_depth = (row + 0.5) / height
+        screen_shade = 1.0 - _SCREEN_DEPTH_FALLOFF * screen_depth
+        foreground_depth_codes = tuple(
+            _color_code(
+                _scale_color(
+                    active_color,
+                    (_SURFACE_SHADE + (_DEEP_SHADE - _SURFACE_SHADE) * band / (_DEPTH_BANDS - 1))
+                    * screen_shade,
+                )
+            )
+            for band in range(_DEPTH_BANDS)
+        )
+        # Rear contours retain their distance cue while sharing the gentle
+        # screen-depth attenuation applied to the foreground water.
+        middle_contour_code = _color_code(_scale_color(active_color, middle_depth * screen_shade))
+        far_contour_code = _color_code(_scale_color(active_color, far_depth * screen_shade))
         parts: list[str] = []
         current_color: str | None = None
 
@@ -418,7 +447,13 @@ def render_idle_wave(
             foreground_mask = _surface_fill_mask(foreground_surface, row, col)
             if foreground_mask:
                 mask = foreground_mask
-                color = foreground_body_code
+                depth_band = _surface_depth_band(
+                    foreground_surface,
+                    row,
+                    col,
+                    height * 4,
+                )
+                color = foreground_depth_codes[depth_band]
             else:
                 middle_mask = _surface_contour_mask(
                     middle_surface,
