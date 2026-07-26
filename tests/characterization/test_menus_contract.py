@@ -256,7 +256,9 @@ def test_config_menu_filters_catalog_models_into_matching_tabs() -> None:
         pricing_lookup={},
     )
 
-    normal_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "claude", tts=False)]
+    normal_matches = [
+        items[i]["id"] for i in _filter_config_model_indices(items, "claude", tts=False)
+    ]
     tts_matches = [items[i]["id"] for i in _filter_config_model_indices(items, "tts", tts=True)]
     image_matches = [
         items[i]["id"] for i in _filter_config_model_indices(items, "test-image", image=True)

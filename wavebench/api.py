@@ -1173,7 +1173,5 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
     speech_count = min(len(speech_filtered), max(0, count - image_count), 20)
     text_count = max(0, count - image_count - speech_count)
     return (
-        filtered[:text_count]
-        + speech_filtered[:speech_count]
-        + image_filtered[:image_count]
+        filtered[:text_count] + speech_filtered[:speech_count] + image_filtered[:image_count]
     ), pricing_lookup

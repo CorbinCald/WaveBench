@@ -114,9 +114,7 @@ def resolve_config(
         api_key=api_key,
         project_slug=project_slug,
         active_states=_string_list(tracker_raw.get("active_states"), _DEFAULT_ACTIVE_STATES),
-        terminal_states=_string_list(
-            tracker_raw.get("terminal_states"), _DEFAULT_TERMINAL_STATES
-        ),
+        terminal_states=_string_list(tracker_raw.get("terminal_states"), _DEFAULT_TERMINAL_STATES),
         working_state=_optional_str(tracker_raw.get("working_state")) or _DEFAULT_WORKING_STATE,
         review_state=_optional_str(tracker_raw.get("review_state")) or _DEFAULT_REVIEW_STATE,
         merging_state=_optional_str(tracker_raw.get("merging_state")) or _DEFAULT_MERGING_STATE,
@@ -158,9 +156,7 @@ def resolve_config(
         ingest_linear_images=_bool_value(
             pi_raw.get("ingest_linear_images"), False, "pi.ingest_linear_images"
         ),
-        max_linear_images=_positive_int(
-            pi_raw.get("max_linear_images"), 6, "pi.max_linear_images"
-        ),
+        max_linear_images=_positive_int(pi_raw.get("max_linear_images"), 6, "pi.max_linear_images"),
         max_linear_image_bytes=_positive_int(
             pi_raw.get("max_linear_image_bytes"), 8_000_000, "pi.max_linear_image_bytes"
         ),

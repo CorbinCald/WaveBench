@@ -84,7 +84,10 @@ async def test_git_workspace_clones_and_switches_to_issue_branch(tmp_path: Path)
 
     workspace = await manager.create_for_issue(issue)
 
-    assert _git(workspace.path, "branch", "--show-current").stdout.strip() == "symphony/wb-1-add-tts-mode"
+    assert (
+        _git(workspace.path, "branch", "--show-current").stdout.strip()
+        == "symphony/wb-1-add-tts-mode"
+    )
     assert (workspace.path / "README.md").read_text(encoding="utf-8") == "hello\n"
 
 
@@ -161,15 +164,17 @@ async def test_git_workspace_migrates_dirty_main_to_issue_branch(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_create_pull_request_commits_pushes_and_uses_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_pull_request_commits_pushes_and_uses_gh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     remote = _create_remote_repo(tmp_path)
     gh_log = tmp_path / "gh.log"
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/bin/sh\n"
-        "echo \"$@\" >> \"$GH_LOG\"\n"
-        "if [ \"$1 $2\" = \"pr view\" ]; then exit 1; fi\n"
-        "if [ \"$1 $2\" = \"pr create\" ]; then echo https://github.com/example/repo/pull/7; exit 0; fi\n"
+        'echo "$@" >> "$GH_LOG"\n'
+        'if [ "$1 $2" = "pr view" ]; then exit 1; fi\n'
+        'if [ "$1 $2" = "pr create" ]; then echo https://github.com/example/repo/pull/7; exit 0; fi\n'
         "exit 2\n",
         encoding="utf-8",
     )
