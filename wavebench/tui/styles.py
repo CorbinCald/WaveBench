@@ -183,6 +183,36 @@ class S:
     HWHT = "" if _NO_COLOR else "\033[97m"
 
 
+# Display control, deliberately *not* gated on NO_COLOR: these move and hide the
+# cursor rather than colour anything, and a monochrome terminal needs them just
+# as much as a colour one.
+CURSOR_HIDE = "\033[?25l"
+CURSOR_SHOW = "\033[?25h"
+CURSOR_SAVE = "\0337"  # DECSC — position + attributes, not visibility
+CURSOR_RESTORE = "\0338"  # DECRC
+SYNC_BEGIN = "\033[?2026h"  # synchronized output; ignored where unsupported
+SYNC_END = "\033[?2026l"
+
+
+def overlay_frame(body: str) -> str:
+    """Wrap a full-screen repaint that must not disturb the cursor.
+
+    A wave frame runs to tens of kilobytes, but a PTY accepts only ~4 KB per
+    write, so the terminal receives one frame as several chunks and repaints
+    between them. Left unguarded it draws the block cursor over whichever cell
+    the stream happened to reach — a white-on-black artifact at a different
+    random position every frame.
+
+    Two layers stop that. ``?2026`` asks terminals that support synchronized
+    output to present the whole frame at once, so no intermediate state is ever
+    shown. Terminals without it still never see a stray cursor, because the
+    frame hides it up front and only shows it again after DECRC has put it back
+    where the caller left it. The hide/show pair sits *inside* the synchronized
+    block so terminals honouring ``?2026`` never render the hidden state at all.
+    """
+    return f"{SYNC_BEGIN}{CURSOR_HIDE}{CURSOR_SAVE}{body}{CURSOR_RESTORE}{CURSOR_SHOW}{SYNC_END}"
+
+
 PHASE_GRADIENT: list[str] = [
     "" if _NO_COLOR else "\033[38;2;30;65;187m",  # solid deep blue
     "" if _NO_COLOR else "\033[38;2;40;105;204m",  # medium blue
