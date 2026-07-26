@@ -31,6 +31,10 @@ from wavebench.tui.styles import S, _tri
 
 API_URL = "https://openrouter.ai/api/v1"
 _MODEL_CONTEXT_CACHE: dict[str, int] = {}
+# Separate from context length: a model with a 1M context window may still
+# refuse a completion longer than 128k.  Budgeting output from the context
+# window alone over-requests on models with a small output ceiling.
+_MODEL_MAX_COMPLETION_CACHE: dict[str, int] = {}
 _MODEL_CONTEXTS_ATTEMPTED = False
 _MODEL_CONTEXT_LOCK = asyncio.Lock()
 
@@ -64,6 +68,13 @@ async def _load_model_context_lengths(
                     ctx = m.get("context_length")
                     if not mid:
                         continue
+                    max_out = (m.get("top_provider") or {}).get("max_completion_tokens")
+                    try:
+                        max_out_i = int(max_out)
+                    except (TypeError, ValueError):
+                        max_out_i = 0
+                    if max_out_i > 0:
+                        _MODEL_MAX_COMPLETION_CACHE[mid] = max_out_i
                     try:
                         ctx_i = int(ctx)
                     except (TypeError, ValueError):
@@ -88,6 +99,11 @@ async def _resolve_max_tokens(
     request an absurdly large completion that exceeds credit budgets
     (HTTP 402) or wastes context window.  Callers can still pass an
     explicit *max_tokens* to override this cap.
+
+    Also clamped to the provider's advertised ``max_completion_tokens``
+    where known.  Context length is not an output budget: a 1M-context
+    model may still cap a single completion far lower, and requesting
+    more than it allows is a 400 rather than a shorter answer.
     """
     if model_id in _MODEL_CONTEXT_CACHE:
         context_limit = _MODEL_CONTEXT_CACHE[model_id]
@@ -98,7 +114,27 @@ async def _resolve_max_tokens(
     prompt_tokens_est = max(1, len(prompt) // 4)
     safety_buffer = 512
     available = max(1, context_limit - prompt_tokens_est - safety_buffer)
-    return min(available, MAX_OUTPUT_TOKENS_DEFAULT)
+    capped = min(available, MAX_OUTPUT_TOKENS_DEFAULT)
+    provider_max = _MODEL_MAX_COMPLETION_CACHE.get(model_id)
+    if provider_max:
+        capped = min(capped, provider_max)
+    return max(1, capped)
+
+
+def _usage_with_finish(body: dict) -> dict:
+    """Return the response ``usage`` dict with ``finish_reason`` folded in.
+
+    ``finish_reason`` lives on the choice rather than on usage, but callers
+    only receive usage back.  Carrying it here is what lets them tell a
+    complete answer from one the ``max_tokens`` cap cut off mid-token.
+    """
+    usage = dict(body.get("usage") or {})
+    choices = body.get("choices") or []
+    if choices and isinstance(choices[0], dict):
+        fr = choices[0].get("finish_reason")
+        if fr:
+            usage["finish_reason"] = fr
+    return usage
 
 
 def _context_limit_from_error_text(err_text: str) -> int | None:
@@ -130,7 +166,19 @@ def _credit_token_limit_from_error(err_text: str) -> int | None:
     return limit if limit > 0 else None
 
 
-MAX_OUTPUT_TOKENS_DEFAULT = 32_000
+# Ceiling on a single completion.  Kept at the highest value the current
+# frontier models accept (Claude Opus 5 and GPT-5.6 Sol both advertise
+# max_completion_tokens=128000) so a long single-file program isn't cut off
+# mid-statement.  _resolve_max_tokens clamps this down per model, so a model
+# with a smaller output ceiling never sees a request it would reject.
+MAX_OUTPUT_TOKENS_DEFAULT = 128_000
+# Step-down used when a model rejects the ceiling above.  ~13% of the
+# OpenRouter catalog advertises no max_completion_tokens, so for those the
+# request goes out optimistically and this is the recovery: retry once at the
+# value that was the hard ceiling before, rather than failing the model.
+MAX_OUTPUT_TOKENS_FALLBACK = 32_000
+# Ceiling for the ``reasoning.max_tokens`` attempt — see _reasoning_attempts.
+_MAX_REASONING_BUDGET = 32_768
 REASONING_STALL_TIMEOUT = 1_800  # 30 minutes with zero tokens → abort
 
 # Statuses that indicate a transient upstream condition rather than a real
@@ -404,7 +452,10 @@ def _reasoning_attempts(
     else:
         _add({"reasoning": {"effort": _map_effort(effort, supported)}})
 
-    budget = max(1024, int(max_tokens * 0.8))
+    # 80% of the output budget, but capped: the providers that want this
+    # form (Gemini / Qwen-style thinking budgets) top out around 32k, so
+    # scaling it with a 128k output ceiling would send a budget they reject.
+    budget = min(max(1024, int(max_tokens * 0.8)), _MAX_REASONING_BUDGET)
     _add({"reasoning": {"max_tokens": budget}})
     _add({"reasoning": {"enabled": True}})
     _add({"reasoning_effort": effort})
@@ -468,7 +519,7 @@ async def call_model_async(
             if r.status == 200:
                 body = await r.json()
                 content = body["choices"][0]["message"]["content"]
-                usage = body.get("usage", {})
+                usage = _usage_with_finish(body)
                 return (content, usage) if return_usage else content
             t = await r.text()
             raise RuntimeError(f"HTTP {r.status}: {t[:120].strip()}")
@@ -488,7 +539,7 @@ async def call_model_async(
                         try:
                             body = await resp.json()
                             content = body["choices"][0]["message"]["content"]
-                            usage = body.get("usage", {})
+                            usage = _usage_with_finish(body)
                             return (content, usage) if return_usage else content
                         except (KeyError, IndexError, json.JSONDecodeError) as e:
                             print(f"    {_tri} {S.DIM}parse error ({model_id}): {e}{S.RST}")
@@ -541,7 +592,7 @@ async def call_model_async(
             try:
                 body = await resp.json()
                 content = body["choices"][0]["message"]["content"]
-                usage = body.get("usage", {})
+                usage = _usage_with_finish(body)
                 return (content, usage) if return_usage else content
             except (KeyError, IndexError, json.JSONDecodeError) as e:
                 raise RuntimeError(f"parse error: {e}")
@@ -571,7 +622,7 @@ async def call_model_async(
                         if retry_resp.status == 200:
                             body = await retry_resp.json()
                             content = body["choices"][0]["message"]["content"]
-                            usage = body.get("usage", {})
+                            usage = _usage_with_finish(body)
                             return (content, usage) if return_usage else content
                         retry_text = await retry_resp.text()
                         raise RuntimeError(f"HTTP {retry_resp.status}: {retry_text[:120].strip()}")
@@ -636,6 +687,7 @@ async def call_model_streaming(
         nonlocal _got_first_token
         parts: list[str] = []
         usage: dict = {}
+        finish_reason = ""
         total_chars = 0
 
         def _stall_remaining() -> float:
@@ -712,6 +764,14 @@ async def call_model_streaming(
                                 if "usage" in obj:
                                     usage = obj["usage"]
                                 for ch in obj.get("choices", []):
+                                    # "length" means the model was cut off by
+                                    # max_tokens, not that it finished.  Keep
+                                    # the last non-null one — callers use it to
+                                    # flag a truncated file instead of writing
+                                    # it out as if it were complete.
+                                    fr = ch.get("finish_reason")
+                                    if fr:
+                                        finish_reason = fr
                                     delta = ch.get("delta", {})
                                     txt = delta.get("content", "")
                                     reasoning = delta.get("reasoning", "")
@@ -731,6 +791,8 @@ async def call_model_streaming(
                                             on_progress(total_chars)
                             except json.JSONDecodeError:
                                 pass
+                    if finish_reason:
+                        usage = {**usage, "finish_reason": finish_reason}
                     return "".join(parts), usage, 200, ""
             finally:
                 await resp_ctx.__aexit__(None, None, None)
@@ -806,12 +868,24 @@ async def call_model_streaming(
                 print(f"    {_tri} {S.DIM}{model_id} reasoning err: {exc_str}{S.RST}")
             break  # non-400 failures skip remaining reasoning formats
 
+    def _empty_response_error(usage: dict) -> RuntimeError:
+        """Describe a 200 that carried no content.
+
+        A model that thinks past its whole output budget returns success with
+        an empty message and finish_reason "length".  Reporting that as a bare
+        "empty response" sends the reader looking for a network fault when the
+        real fix is a larger max_tokens or a lower effort.
+        """
+        if (usage or {}).get("finish_reason") == "length":
+            return RuntimeError("output budget spent on reasoning — no content returned")
+        return RuntimeError("empty response")
+
     # Final attempt — without reasoning
     content, usage, status, err = await _do_stream(base_data)
     if status == 200 and content:
         return content, usage
     if status == 200:
-        raise RuntimeError("empty response")
+        raise _empty_response_error(usage)
     if status == 402:
         result = await _stream_retry_402(base_data, err)
         if result is not None:
@@ -828,7 +902,21 @@ async def call_model_streaming(
                 if status == 200 and content:
                     return content, usage
                 if status == 200:
-                    raise RuntimeError("empty response")
+                    raise _empty_response_error(usage)
+        elif base_data.get("max_tokens", 0) > MAX_OUTPUT_TOKENS_FALLBACK:
+            # No parseable limit in the error, but we asked for more output
+            # than the old ceiling.  Providers word "too many output tokens"
+            # a dozen different ways, so step down once instead of trying to
+            # match the message — a lower cap costs a truncation warning,
+            # while giving up costs the whole result.
+            print(
+                f"    {_tri} {S.DIM}{model_id} 400 — retrying with "
+                f"max_tokens={MAX_OUTPUT_TOKENS_FALLBACK:,}{S.RST}"
+            )
+            retry_data = {**base_data, "max_tokens": MAX_OUTPUT_TOKENS_FALLBACK}
+            content, usage, status, err = await _do_stream(retry_data)
+            if status == 200 and content:
+                return content, usage
     raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
 
 
