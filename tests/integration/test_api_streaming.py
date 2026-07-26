@@ -660,6 +660,125 @@ def test_effort_naming_bridge_allows_real_downgrades_through() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claude 5 family effort support
+#
+# Regression guard: the capability table once listed only 4.x patterns, so
+# `anthropic/claude-opus-5` matched nothing, fell through to `return None`
+# ("legacy Claude"), and the user's xhigh/max was dropped from the wire
+# entirely in favour of `{"reasoning": {"enabled": True}}`.
+# ---------------------------------------------------------------------------
+
+
+def test_supported_efforts_claude_5_family_has_full_ladder() -> None:
+    # Verified 2026-07-25 against OpenRouter: every tier is accepted and
+    # distinct on claude-opus-5 (551 → 1,280 → 1,645 → 1,852 reasoning
+    # tokens for low → high → xhigh → max on one identical prompt).
+    for slug in [
+        "anthropic/claude-opus-5",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-fable-5",
+        "anthropic/claude-mythos-5",
+        "anthropic/claude-opus-4.8",
+    ]:
+        assert api_mod._supported_efforts(slug) == [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ], slug
+
+
+def test_claude_5_effort_reaches_the_wire() -> None:
+    # The bug was invisible at the _supported_efforts level for anyone not
+    # reading the None branch, so assert on the actual payload.
+    for effort in ("xhigh", "max"):
+        primary = api_mod._reasoning_attempts("anthropic/claude-opus-5", effort, 16000)[0]
+        assert primary == {"reasoning": {"effort": effort}}, effort
+
+
+def test_unknown_modern_claude_slug_keeps_effort() -> None:
+    # An unrecognised Claude id must not silently lose the effort setting:
+    # over-guessing falls forward on a 400, under-guessing fails silently.
+    assert api_mod._supported_efforts("anthropic/claude-opus-6") == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+
+
+def test_pre_effort_claude_models_still_return_none() -> None:
+    # Both slug orderings ("claude-3.7-sonnet" and "claude-sonnet-3.5").
+    for slug in [
+        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-3.7-sonnet",
+        "anthropic/claude-sonnet-3.5",
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-2",
+    ]:
+        assert api_mod._supported_efforts(slug) is None, slug
+
+
+# ---------------------------------------------------------------------------
+# GPT version parsing / the 5.6+ `max` tier
+#
+# Regression guard: the substring test `"gpt-5" in model_id` swept every
+# newer release into the pre-5.6 family's `xhigh` ceiling, so `max` on
+# gpt-5.6-sol was clamped to `xhigh` *and* the downgrade notice was
+# suppressed by _is_effort_naming_bridge.
+# ---------------------------------------------------------------------------
+
+
+def test_gpt_version_parsing() -> None:
+    assert api_mod._gpt_version("openai/gpt-5.6-sol") == (5, 6)
+    assert api_mod._gpt_version("openai/gpt-5.5-pro") == (5, 5)
+    assert api_mod._gpt_version("openai/gpt-5-pro") == (5, 0)
+    assert api_mod._gpt_version("openai/gpt-4o") == (4, 0)
+    # Date suffixes must not be read as a minor version.
+    assert api_mod._gpt_version("openai/gpt-5-2025-12-15") == (5, 0)
+    assert api_mod._gpt_version("anthropic/claude-opus-5") is None
+
+
+def test_supported_efforts_gpt_56_includes_max() -> None:
+    # Verified 2026-07-25 on openai/gpt-5.6-sol via OpenRouter: one identical
+    # prompt spent 7,434 reasoning tokens at `high`, 10,105 at `xhigh` and
+    # 13,984 at `max` — `max` is a real tier, not an alias for `xhigh`.
+    assert api_mod._supported_efforts("openai/gpt-5.6-sol") == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+
+
+def test_gpt_56_max_is_not_clamped() -> None:
+    levels = api_mod._supported_efforts("openai/gpt-5.6-sol")
+    assert api_mod._map_effort("max", levels) == "max"
+    primary = api_mod._reasoning_attempts("openai/gpt-5.6-sol", "max", 16000)[0]
+    assert primary == {"reasoning": {"effort": "max"}}
+
+
+def test_gpt_56_max_to_xhigh_is_not_a_naming_bridge() -> None:
+    # Should 5.6+ ever be clamped, the loss is real and must stay visible.
+    assert api_mod._is_effort_naming_bridge("openai/gpt-5.6-sol", "max", "xhigh") is False
+
+
+def test_date_suffixed_gpt_5_keeps_pre_56_ceiling() -> None:
+    # "gpt-5-2025-12-15" is plain GPT-5, not version 5.2025.
+    assert api_mod._supported_efforts("openai/gpt-5-2025-12-15") == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # load_api_key
 # ---------------------------------------------------------------------------
 

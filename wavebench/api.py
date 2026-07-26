@@ -183,13 +183,22 @@ def load_api_key() -> str | None:
 # unsupported effort choice down to the closest level the model accepts.
 _EFFORT_ORDER: list[str] = ["low", "medium", "high", "xhigh", "max"]
 
-# Per-model effort capabilities (as of 2026-04-22).  Patterns match as
+# Per-model effort capabilities (as of 2026-07-25).  Patterns match as
 # substrings against the lower-cased OpenRouter model id; most-specific
 # entries first so "opus-4.7" wins over a hypothetical generic "opus".
 _CLAUDE_EFFORT_CAPABILITIES: list[tuple] = [
+    # Claude 5 family — full ladder through `max`.  Verified 2026-07-25 on
+    # anthropic/claude-opus-5 via OpenRouter: every tier is accepted *and*
+    # distinct (551 → 1,280 → 1,645 → 1,852 reasoning tokens for
+    # low → high → xhigh → max on an identical prompt).
+    ("opus-5", ["low", "medium", "high", "xhigh", "max"]),
+    ("sonnet-5", ["low", "medium", "high", "xhigh", "max"]),
+    ("fable-5", ["low", "medium", "high", "xhigh", "max"]),
+    ("mythos", ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4-8", ["low", "medium", "high", "xhigh", "max"]),
+    ("opus-4.8", ["low", "medium", "high", "xhigh", "max"]),
     ("opus-4-7", ["low", "medium", "high", "xhigh", "max"]),
     ("opus-4.7", ["low", "medium", "high", "xhigh", "max"]),
-    ("mythos", ["low", "medium", "high", "xhigh", "max"]),
     ("opus-4-6", ["low", "medium", "high", "max"]),
     ("opus-4.6", ["low", "medium", "high", "max"]),
     ("sonnet-4-6", ["low", "medium", "high", "max"]),
@@ -197,6 +206,50 @@ _CLAUDE_EFFORT_CAPABILITIES: list[tuple] = [
     ("opus-4-5", ["low", "medium", "high"]),
     ("opus-4.5", ["low", "medium", "high"]),
 ]
+
+# Claude models that predate the effort parameter — they reject
+# ``reasoning.effort`` outright and only respond to ``reasoning.enabled``.
+# This is a deliberate *allowlist* of known-old slugs rather than a catch-all
+# fallback: see _supported_efforts for why an unrecognised Claude id is now
+# assumed modern.  Checked only after _CLAUDE_EFFORT_CAPABILITIES, so a
+# broad pattern here ("sonnet-4") can't shadow an explicit newer entry.
+_CLAUDE_NO_EFFORT_PATTERNS: tuple[str, ...] = (
+    "sonnet-4-5",
+    "sonnet-4.5",
+    "sonnet-4",
+    "haiku",
+    "opus-4-1",
+    "opus-4.1",
+    # Claude 3.x ships under both orderings — "claude-3.7-sonnet" and
+    # "claude-sonnet-3.5" — so match the version on either side of the tier.
+    "claude-3",
+    "sonnet-3",
+    "opus-3",
+    "claude-2",
+    "claude-instant",
+)
+
+# GPT-5 family: the first version whose OpenRouter validator accepts the
+# literal `max` as a tier *above* `xhigh` rather than 400-ing on it.
+_GPT_MAX_EFFORT_MIN_VERSION: tuple[int, int] = (5, 6)
+
+# Only a dot separates major from minor, so date-suffixed ids such as
+# "gpt-5-2025-12-15" parse as (5, 0) and not (5, 2025).
+_GPT_VERSION_RE = re.compile(r"gpt-(\d+)(?:\.(\d+))?")
+
+
+def _gpt_version(lower: str) -> tuple[int, int] | None:
+    """Parse the (major, minor) GPT version out of a lower-cased model id.
+
+    Returns None when *lower* is not a GPT model.  A missing minor reads as
+    0, so "gpt-5-pro" → (5, 0) and "gpt-5.6-sol" → (5, 6).  Comparing
+    versions numerically — rather than substring-matching "gpt-5" — keeps a
+    newer release from silently inheriting an older family's effort ceiling.
+    """
+    m = _GPT_VERSION_RE.search(lower)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
 
 
 def _supported_efforts(model_id: str) -> list[str] | None:
@@ -209,7 +262,16 @@ def _supported_efforts(model_id: str) -> list[str] | None:
         for pat, levels in _CLAUDE_EFFORT_CAPABILITIES:
             if pat in lower:
                 return levels
-        return None  # legacy Claude — only reasoning.enabled toggles work
+        for pat in _CLAUDE_NO_EFFORT_PATTERNS:
+            if pat in lower:
+                return None  # legacy Claude — only reasoning.enabled works
+        # Unrecognised Claude id — assume the current full ladder instead of
+        # dropping the user's effort choice.  The two failure modes are not
+        # symmetric: if the model really does reject `effort`, the caller
+        # falls forward to the next payload shape on the 400 and reasoning
+        # still happens; returning None instead discards the setting with no
+        # error at all.  Guessing high self-heals, guessing low fails silently.
+        return ["low", "medium", "high", "xhigh", "max"]
     if "deepseek-v4" in lower:
         # V4 *does* have a max-reasoning tier natively (DeepSeek exposes two
         # thinking levels — `high` and `max`, per api-docs.deepseek.com/
@@ -221,12 +283,20 @@ def _supported_efforts(model_id: str) -> list[str] | None:
         # actually reaches V4's highest tier — it's a naming bridge, not a
         # downgrade.
         return ["low", "medium", "high", "xhigh"]
-    if "gpt-5" in lower:
-        # Same OpenRouter naming bridge as DeepSeek V4. Verified 2026-04-25
-        # against gpt-5, gpt-5-pro, gpt-5-mini, gpt-5-nano, gpt-5-codex,
-        # gpt-5.5, gpt-5.5-pro: every variant's validator accepts
-        # xhigh|high|medium|low|minimal|none and 400s on literal `max`.
-        # `xhigh` is the top reasoning tier across the family.
+    gpt = _gpt_version(lower)
+    if gpt is not None and gpt >= (5, 0):
+        if gpt >= _GPT_MAX_EFFORT_MIN_VERSION:
+            # From 5.6 on, `max` is accepted *and is a real tier above*
+            # `xhigh` — clamping it away is a genuine quality downgrade.
+            # Verified 2026-07-25 on openai/gpt-5.6-sol via OpenRouter: one
+            # identical prompt spent 7,434 reasoning tokens at `high`,
+            # 10,105 at `xhigh` and 13,984 at `max`.
+            return ["low", "medium", "high", "xhigh", "max"]
+        # Pre-5.6: same OpenRouter naming bridge as DeepSeek V4. Verified
+        # 2026-04-25 against gpt-5, gpt-5-pro, gpt-5-mini, gpt-5-nano,
+        # gpt-5-codex, gpt-5.5, gpt-5.5-pro: every variant's validator
+        # accepts xhigh|high|medium|low|minimal|none and 400s on literal
+        # `max`.  `xhigh` is the top reasoning tier for those versions.
         return ["low", "medium", "high", "xhigh"]
     return ["low", "medium", "high"]
 
@@ -240,9 +310,18 @@ def _is_effort_naming_bridge(model_id: str, requested: str, mapped: str) -> bool
     normalization layer names the identical tier ``xhigh``. Callers building
     user-facing effort-adjustment notices should skip entries for which this
     predicate returns True.
+
+    Scoped by version for GPT, not by a "gpt-5" substring: from 5.6 on the
+    literal `max` is a distinct tier above `xhigh`, so a max → xhigh mapping
+    there is a real downgrade and must stay visible to the user.
     """
     lower = model_id.lower()
-    return requested == "max" and mapped == "xhigh" and ("deepseek-v4" in lower or "gpt-5" in lower)
+    if requested != "max" or mapped != "xhigh":
+        return False
+    if "deepseek-v4" in lower:
+        return True
+    gpt = _gpt_version(lower)
+    return gpt is not None and (5, 0) <= gpt < _GPT_MAX_EFFORT_MIN_VERSION
 
 
 def _map_effort(effort: str, supported: list[str]) -> str:
