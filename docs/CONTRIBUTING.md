@@ -8,7 +8,9 @@ to review.
 
 - Python 3.10+
 - An [OpenRouter API key](https://openrouter.ai/keys) only if you want to run
-  real benchmarks. The test suite never calls OpenRouter.
+  real benchmarks. The default test suite never calls OpenRouter; the only
+  live test is marked `slow`, which is deselected by default and only runs
+  when you explicitly opt in with `python -m pytest -m slow`.
 
 ## Local setup
 
@@ -42,8 +44,19 @@ The suite is intentionally fast; it currently runs in well under a second in
 the project venv. If your shell's default Python does not have the dev extras
 installed, use `.venv/bin/python -m pytest ...`.
 
-If you're writing a slow test, mark it with `@pytest.mark.slow` and run it
-with `python -m pytest -m slow` when needed.
+Tests marked `@pytest.mark.slow` are **deselected by default** (via `addopts`
+in `pyproject.toml`). This marker gates live tests that make real OpenRouter
+calls and spend API credits — currently
+`tests/integration/test_directory_naming_live.py`. To run them intentionally:
+
+```bash
+python -m pytest -m slow                # only the slow/live tests
+```
+
+These require `OPENROUTER_API_KEY` in the environment or `.env` and will
+skip without it. If you're writing a new test that is slow or hits the
+network, mark it with `@pytest.mark.slow` so the default suite stays fast,
+free, and offline.
 
 ## Style & linting
 

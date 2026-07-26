@@ -1,7 +1,10 @@
 """Live integration test for prompt-derived directory naming.
 
-This test intentionally calls OpenRouter. It is skipped unless
-``OPENROUTER_API_KEY`` is available in the environment or local ``.env`` file.
+This test intentionally calls OpenRouter and spends real API credits. It is
+marked ``slow`` and therefore deselected by default (see ``addopts`` in
+``pyproject.toml``); run it explicitly with ``python -m pytest -m slow``.
+Even then it is skipped unless ``OPENROUTER_API_KEY`` is available in the
+environment or local ``.env`` file.
 """
 
 from __future__ import annotations

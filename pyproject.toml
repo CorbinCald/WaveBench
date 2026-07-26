@@ -64,7 +64,7 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--strict-markers -ra"
+addopts = "--strict-markers -ra -m 'not slow'"
 markers = [
-    "slow: marks tests that take several seconds (deselect with -m 'not slow')",
+    "slow: live/expensive tests (real OpenRouter calls); deselected by default, opt in with -m slow",
 ]
