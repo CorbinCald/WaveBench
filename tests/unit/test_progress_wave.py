@@ -108,6 +108,16 @@ def _hue_drift(colors: list[tuple[int, int, int]]) -> float:
     return max(max(hue[i] for hue in hues) - min(hue[i] for hue in hues) for i in range(3))
 
 
+_GLYPH_LEVEL = {
+    glyph: level for level, glyphs in enumerate(wave_mod._WAVE_CHARS) for glyph in glyphs
+}
+
+
+def _wave_levels(rendered: str) -> list[int]:
+    visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
+    return [_GLYPH_LEVEL[glyph] for glyph in visible]
+
+
 def test_idle_wave_layers_are_ordered_back_to_front() -> None:
     layers = wave_mod._idle_wave_surfaces(
         tick=24,
@@ -144,6 +154,52 @@ def test_idle_wave_layers_move_with_parallax() -> None:
         for old, new in zip(first, second, strict=True)
     ]
     assert motion[0] < motion[1] < motion[2]
+
+
+@pytest.mark.parametrize(("width", "height"), [(78, 14), (118, 20), (78, 40)])
+def test_idle_wave_surfaces_keep_a_gentle_slope(width: int, height: int) -> None:
+    """Even an energetic swell should roll rather than form a steep wall.
+
+    Surface samples are half a terminal column apart and use four vertical
+    dots per terminal row, so ``delta / 2`` is the rise in rows per column.
+    The tall/narrow case also guards the aspect-ratio amplitude damping.
+    """
+    for tick in (0, 40, 120):
+        for phase in (0.0, 26.0, 90.0):
+            for surface in wave_mod._idle_wave_surfaces(
+                tick=tick,
+                width=width * 2,
+                height=height,
+                intensity=1.0,
+                wave_phase=phase,
+            ):
+                slopes = [abs(after - before) / 2.0 for before, after in pairwise(surface)]
+                assert max(slopes) <= 0.65
+
+
+def test_compact_waves_change_height_gradually() -> None:
+    for tick in range(0, 80, 5):
+        title = _wave_levels(wave_mod._title_wave(tick, width=20))
+        reasoning = _wave_levels(wave_mod._render_pre_wave_bar(40, tick))
+
+        assert max(abs(after - before) for before, after in pairwise(title)) <= 2
+        assert max(abs(after - before) for before, after in pairwise(reasoning)) <= 1
+
+
+def test_progress_wave_has_no_sheer_edge() -> None:
+    for tick in (0, 30, 75):
+        for phase in (0.0, 2.0, 5.5):
+            for chars in (100, 250, 500, 750, 900, 1000):
+                levels = _wave_levels(
+                    wave_mod._render_pulse_bar(
+                        chars,
+                        1000,
+                        tick,
+                        phase=phase,
+                        bar_width=28,
+                    )
+                )
+                assert max(abs(after - before) for before, after in pairwise(levels)) <= 3
 
 
 def test_surface_fill_mask_samples_both_braille_columns() -> None:
