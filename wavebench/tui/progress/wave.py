@@ -93,7 +93,10 @@ def _title_wave(tick: int, width: int = 5) -> str:
     parts: list[str] = []
     prev_level = -1
     for i in range(width):
-        val = math.sin(tick * 0.15 - i * 0.7) * 0.5 + 0.5
+        # A broad arc reads more like a rolling swell than a tiny sawtooth in
+        # the five-character title. Keep the full height range, but spread the
+        # rise over more cells so adjacent glyphs change gradually.
+        val = math.sin(tick * 0.13 - i * 0.48) * 0.44 + 0.5
         level = max(1, min(8, round(val * 8)))
         pool = _WAVE_CHARS[level]
         ch = pool[(i + tick) % len(pool)]
@@ -127,7 +130,7 @@ def _render_pulse_bar(
     empty = bar_width - filled
 
     t = tick * 0.008
-    bandwidth = 0.70
+    bandwidth = 0.44
     amplitude = (0.35 + 0.65 * ratio) * (0.92 + 0.08 * math.sin(t * 1.7 + 2.0))
     parts: list[str] = []
     crest = filled - 1
@@ -135,15 +138,21 @@ def _render_pulse_bar(
 
     for i in range(filled):
         w = math.sin(i * bandwidth - phase)
-        w2 = math.sin(i * bandwidth * 1.8 - phase * 0.6 + 1.2) * 0.25
-        val = max(0.0, min(1.0, (w + w2) * 0.5 + 0.5)) * amplitude
+        w2 = math.sin(i * bandwidth * 1.55 - phase * 0.58 + 1.2) * 0.16
+        val = max(0.0, min(1.0, (w + w2) * 0.48 + 0.5)) * amplitude
         val = max(0.12, val)
 
-        edge = filled - 1 - i
-        if edge < 3 and filled > 4:
-            val = min(1.0, val + (3 - edge) * 0.15)
-
         level = max(1, min(8, round(val * 8)))
+        if empty:
+            # Ease the tall generated wave into the low trailing swell. The
+            # old three-cell crest boost ended in a sheer 5-dot cliff. This
+            # smoothstep taper keeps the progress edge distinct through color
+            # while making its silhouette continuous.
+            edge_distance = filled - i
+            tall_weight = min(1.0, edge_distance / 5.0)
+            tall_weight = tall_weight * tall_weight * (3.0 - 2.0 * tall_weight)
+            trailing_level = _pre_wave_level(i, tick)
+            level = round(trailing_level + (level - trailing_level) * tall_weight)
 
         pool = _WAVE_CHARS[level]
         ch = pool[(i + tick) % len(pool)]
@@ -164,6 +173,15 @@ def _render_pulse_bar(
     return "".join(parts)
 
 
+def _pre_wave_level(index: int, tick: int) -> int:
+    """Return the gently rolling 1–3 dot height of the reasoning swell."""
+    phase = tick * 0.085
+    w = math.sin(index * 0.43 - phase)
+    w2 = math.sin(index * 0.76 - phase * 0.62 + 1.3) * 0.18
+    val = max(0.0, min(1.0, (w + w2) * 0.48 + 0.5))
+    return max(1, min(3, round(val * 3)))
+
+
 def _render_pre_wave_bar(
     width: int, tick: int, crest: int = 0, span: int | None = None, offset: int = 0
 ) -> str:
@@ -177,17 +195,12 @@ def _render_pre_wave_bar(
     *crest* points back at the leading edge just behind it.
     """
     parts: list[str] = []
-    phase = tick * 0.10
     span = width if span is None else span
     prev_color: str | None = None
 
     for i in range(width):
         index = offset + i
-
-        w = math.sin(index * 0.6 - phase)
-        w2 = math.sin(index * 1.05 - phase * 0.65 + 1.3) * 0.28
-        val = max(0.0, min(1.0, (w + w2) * 0.5 + 0.5))
-        level = max(1, min(3, round(val * 3)))
+        level = _pre_wave_level(index, tick)
 
         pool = _WAVE_CHARS[level]
         ch = pool[(index + tick) % len(pool)]
@@ -208,12 +221,12 @@ def _render_pre_wave_bar(
 
 
 def _shape_wave(value: float, stokes: float, crest_exp: float, limiter: float) -> float:
-    """Sharpen positive crests while leaving troughs broad and rounded."""
+    """Give a swell mild asymmetry while keeping its crests rounded."""
     value += stokes * value * value
     if value > 0:
         value = value**crest_exp
         return value / (1.0 + limiter * value)
-    return -(abs(value) ** 1.3)
+    return -(abs(value) ** 1.12)
 
 
 def _idle_wave_surfaces(
@@ -230,21 +243,24 @@ def _idle_wave_surfaces(
     intensity = max(0.0, min(1.0, intensity))
     total_sp = height * 4
 
-    amp_scale = 0.14 + 0.24 * intensity
-    amp_breath = 0.06 + 0.12 * intensity
-    amp = total_sp * amp_scale * (1.0 + amp_breath * math.sin(tick * 0.019 + 1.0))
+    # Braille cells are sampled at 2-by-4 dots. On an unusually tall/narrow
+    # terminal, damp the amplitude so the same curve cannot become a wall.
+    aspect_damping = min(1.0, width / max(total_sp * 2.2, 1.0))
+    amp_scale = 0.12 + 0.15 * intensity
+    amp_breath = 0.04 + 0.07 * intensity
+    amp = total_sp * amp_scale * aspect_damping * (1.0 + amp_breath * math.sin(tick * 0.019 + 1.0))
 
-    center_norm = 0.75 - 0.20 * intensity
-    center_sway = 0.12 + 0.22 * intensity
+    center_norm = 0.74 - 0.15 * intensity
+    center_sway = 0.08 + 0.10 * intensity
     center = total_sp * center_norm + amp * center_sway * math.sin(tick * 0.024)
-    depth_gap = total_sp * (0.085 + 0.015 * intensity)
+    depth_gap = total_sp * (0.085 + 0.010 * intensity)
 
     if wave_phase is None:
         wave_phase = tick * (0.35 + 0.75 * intensity)
 
-    stokes = 0.06 + 0.18 * intensity
-    crest_exp = 1.3 + 0.5 * intensity
-    limiter = 0.35 - 0.15 * intensity
+    stokes = 0.025 + 0.065 * intensity
+    crest_exp = 1.06 + 0.12 * intensity
+    limiter = 0.28 + 0.04 * (1.0 - intensity)
 
     far: list[float] = []
     middle: list[float] = []
@@ -253,36 +269,35 @@ def _idle_wave_surfaces(
         nx = col / max(width - 1, 1)
 
         far_height = (
-            0.72 * math.sin(nx * 18.0 - wave_phase * 0.045 + 0.8)
-            + 0.12 * math.sin(nx * 31.0 - wave_phase * 0.064 + 2.4)
-            + 0.03 * math.sin(nx * 52.0 - wave_phase * 0.083 + 0.3)
+            0.72 * math.sin(nx * 12.2 - wave_phase * 0.038 + 0.8)
+            + 0.08 * math.sin(nx * 22.0 - wave_phase * 0.052 + 2.4)
+            + 0.015 * math.sin(nx * 34.0 - wave_phase * 0.068 + 0.3)
         )
         far_height = _shape_wave(
             far_height,
-            stokes * 0.30,
-            1.10 + 0.15 * intensity,
+            stokes * 0.20,
+            1.02 + 0.04 * intensity,
             limiter + 0.16,
         )
-        far.append(center - depth_gap * 2.0 - far_height * amp * 0.36)
+        far.append(center - depth_gap * 2.0 - far_height * amp * 0.34)
 
         middle_height = (
-            0.67 * math.sin(nx * 15.8 - wave_phase * 0.074 + 0.3)
-            + (0.08 + 0.08 * intensity) * math.sin(nx * 28.0 - wave_phase * 0.103 + 2.0)
-            + (0.02 + 0.04 * intensity) * math.sin(nx * 47.0 - wave_phase * 0.132 + 3.4)
+            0.68 * math.sin(nx * 11.2 - wave_phase * 0.061 + 0.3)
+            + (0.055 + 0.035 * intensity) * math.sin(nx * 20.4 - wave_phase * 0.084 + 2.0)
+            + (0.012 + 0.018 * intensity) * math.sin(nx * 32.0 - wave_phase * 0.108 + 3.4)
         )
         middle_height = _shape_wave(
             middle_height,
-            stokes * 0.62,
-            1.18 + 0.28 * intensity,
+            stokes * 0.50,
+            1.04 + 0.07 * intensity,
             limiter + 0.08,
         )
-        middle.append(center - depth_gap - middle_height * amp * 0.65)
+        middle.append(center - depth_gap - middle_height * amp * 0.62)
 
         foreground_height = (
-            0.62 * math.sin(nx * 14.0 - wave_phase * 0.107)
-            + (0.08 + 0.14 * intensity) * math.sin(nx * 26.0 - wave_phase * 0.147 + 1.7)
-            + (0.02 + 0.08 * intensity) * math.sin(nx * 44.0 - wave_phase * 0.187 + 3.1)
-            + (0.01 + 0.03 * intensity) * math.sin(nx * 68.0 - wave_phase * 0.240 + 0.9)
+            0.64 * math.sin(nx * 10.2 - wave_phase * 0.086)
+            + (0.06 + 0.055 * intensity) * math.sin(nx * 18.8 - wave_phase * 0.116 + 1.7)
+            + (0.015 + 0.030 * intensity) * math.sin(nx * 29.0 - wave_phase * 0.148 + 3.1)
         )
         foreground_height = _shape_wave(
             foreground_height,
