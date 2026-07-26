@@ -298,6 +298,8 @@ async def main_async(
     output_dir_final = [None]
     t0 = time.monotonic()
 
+    # Read-only snapshot for token-average pacing hints; record_run re-reads
+    # fresh under a lock at write time, so this stale copy is never written back.
     history = load_history()
     avg_tokens: dict[str, float] = {}
     for run in history.get("runs", []):
@@ -557,8 +559,7 @@ async def main_async(
     # Image runs included: "Every run is recorded" (README) — skipping them
     # made image benchmarks invisible to history and lifetime analytics.
     run_costs = {name: _result_cost(name, info) for name, info in results.items()}
-    record_run(
-        history,
+    history = record_run(
         user_prompt,
         output_dir_final[0],
         total_time,
