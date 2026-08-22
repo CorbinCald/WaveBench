@@ -43,7 +43,7 @@ def test_constants_preserved() -> None:
 
     assert core.OUTPUT_DIR == "benchmarkResults"
     assert core.MAX_CONCURRENCY == 12
-    assert core.REQUEST_TIMEOUT == 1800
+    assert core.REQUEST_TIMEOUT == 3_600
     # SYSTEM_PROMPT_* constants moved into ``wavebench.modes.code`` and
     # ``wavebench.modes.text`` in Deliverable #3 — they are no longer
     # module-level in ``core``. The equivalent assertions now target the

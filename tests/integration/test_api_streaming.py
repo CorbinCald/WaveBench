@@ -79,8 +79,8 @@ def _reset_ctx_cache() -> None:
     api_mod._MODEL_CONTEXTS_ATTEMPTED = False
 
 
-def test_reasoning_stall_timeout_is_thirty_minutes() -> None:
-    assert api_mod.REASONING_STALL_TIMEOUT == 30 * 60
+def test_reasoning_stall_timeout_is_one_hour() -> None:
+    assert api_mod.REASONING_STALL_TIMEOUT == 60 * 60
 
 
 @asynccontextmanager
