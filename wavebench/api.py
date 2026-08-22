@@ -179,7 +179,7 @@ MAX_OUTPUT_TOKENS_DEFAULT = 128_000
 MAX_OUTPUT_TOKENS_FALLBACK = 32_000
 # Ceiling for the ``reasoning.max_tokens`` attempt — see _reasoning_attempts.
 _MAX_REASONING_BUDGET = 32_768
-REASONING_STALL_TIMEOUT = 1_800  # 30 minutes with zero tokens → abort
+REASONING_STALL_TIMEOUT = 3_600  # 1 hour with zero tokens → abort
 
 # Statuses that indicate a transient upstream condition rather than a real
 # request error. Each is retried with bounded exponential backoff.

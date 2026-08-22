@@ -57,7 +57,7 @@ from .runner import run_model
 
 OUTPUT_DIR = "benchmarkResults"
 MAX_CONCURRENCY = 12
-REQUEST_TIMEOUT = 1800  # seconds
+REQUEST_TIMEOUT = 3_600  # 1 hour, in seconds
 
 
 def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = None) -> Mode:
