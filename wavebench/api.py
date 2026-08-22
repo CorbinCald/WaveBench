@@ -320,6 +320,12 @@ def _supported_efforts(model_id: str) -> list[str] | None:
         # still happens; returning None instead discards the setting with no
         # error at all.  Guessing high self-heals, guessing low fails silently.
         return ["low", "medium", "high", "xhigh", "max"]
+    if "qwen3.8-27b" in lower:
+        # OpenRouter advertises this model's sparse effort ladder as
+        # xhigh|medium|low (verified 2026-08-22 via GET /api/v1/models).
+        # Keeping that exact ladder maps the unsupported `max` and `high`
+        # choices upward to Qwen's highest accepted tier, `xhigh`.
+        return ["low", "medium", "xhigh"]
     if "deepseek-v4" in lower:
         # V4 *does* have a max-reasoning tier natively (DeepSeek exposes two
         # thinking levels — `high` and `max`, per api-docs.deepseek.com/

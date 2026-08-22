@@ -639,6 +639,23 @@ def test_supported_efforts_non_anthropic_returns_low_medium_high() -> None:
     assert api_mod._supported_efforts("google/gemini-3-pro") == ["low", "medium", "high"]
 
 
+def test_supported_efforts_qwen_38_27b_uses_advertised_sparse_ladder() -> None:
+    assert api_mod._supported_efforts("qwen/qwen3.8-27b") == ["low", "medium", "xhigh"]
+
+
+def test_qwen_38_27b_max_reaches_wire_as_xhigh() -> None:
+    model_id = "qwen/qwen3.8-27b"
+    levels = api_mod._supported_efforts(model_id)
+    mapped = api_mod._map_effort("max", levels)
+
+    assert mapped == "xhigh"
+    assert api_mod._reasoning_attempts(model_id, "max", 128_000)[0] == {
+        "reasoning": {"effort": "xhigh"}
+    }
+    # This is an explicit model adjustment, so the UI must not suppress it.
+    assert api_mod._is_effort_naming_bridge(model_id, "max", mapped) is False
+
+
 def test_supported_efforts_opus_47_returns_five_levels() -> None:
     levels = api_mod._supported_efforts("anthropic/claude-opus-4.7")
     assert levels == ["low", "medium", "high", "xhigh", "max"]
