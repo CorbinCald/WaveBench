@@ -189,6 +189,21 @@ def test_guess_html_tag() -> None:
     assert _guess_language_from_code("<html><body></body></html>") == "html"
 
 
+def test_guess_python_when_flask_app_embeds_html_template() -> None:
+    code = '''import secrets
+from flask import Flask, render_template_string
+
+app = Flask(__name__)
+PAGE = """<!doctype html><html><body>{{ title }}</body></html>"""
+
+@app.route("/")
+def index():
+    return render_template_string(PAGE, title=secrets.token_hex(4))
+'''
+
+    assert _guess_language_from_code(code) == "python"
+
+
 def test_guess_javascript_function() -> None:
     assert _guess_language_from_code("function hello() { console.log('x'); }") == "javascript"
 

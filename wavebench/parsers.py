@@ -243,6 +243,12 @@ def _salvage_unclosed_fence(text: str) -> tuple[str, str] | None:
 def _guess_language_from_code(code: str) -> str:
     stripped = code.lstrip()
     first = stripped.splitlines()[0] if stripped.splitlines() else ""
+    html_match = re.search(r"<!doctype\s+html\b|<html\b", stripped, re.IGNORECASE)
+    python_match = re.search(
+        r"^(?:from\s+[\w.]+\s+import\b|import\s+[\w.]|def\s+\w+\(|class\s+\w+\b|@[\w.]+)",
+        stripped,
+        re.MULTILINE,
+    )
 
     if stripped.startswith("#!/") and "python" in stripped[:100].lower():
         return "python"
@@ -250,7 +256,14 @@ def _guess_language_from_code(code: str) -> str:
         "bash" in stripped[:100].lower() or "sh" in stripped[:100].lower()
     ):
         return "bash"
-    if "<!doctype html" in stripped.lower() or "<html" in stripped.lower():
+    # Server-side Python commonly embeds complete HTML templates in strings.
+    # Whichever strong language marker appears first represents the outer file;
+    # otherwise a Flask app is mistaken for a standalone HTML document.
+    if python_match is not None and (
+        html_match is None or python_match.start() < html_match.start()
+    ):
+        return "python"
+    if html_match is not None:
         return "html"
     if first.startswith("SELECT ") or "\nSELECT " in code.upper():
         return "sql"
