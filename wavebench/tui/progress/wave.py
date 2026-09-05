@@ -412,6 +412,9 @@ _DEEP_SHADE = 0.38
 _SCREEN_DEPTH_FALLOFF = 0.16
 _SURFACE_RIM_DOTS = 1.0
 _BACKGROUND_EFFECT_PADDING = 1.5
+# A shared character cannot give its rear dots a separate color. Keep this
+# narrow transition at water-body brightness, below the individual crest rim.
+_OVERLAP_LIGHTING = 0.80
 
 
 def _surface_depth_band(
@@ -601,7 +604,8 @@ def render_idle_wave(
     wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
     Each layer carries its own moving material. Nearer water hides rear dots
     only below its surface, including gaps in its phosphor texture. Shared
-    cells combine exposed dots using the nearest visible layer's color.
+    cells use a quiet blend of the layers' colors, so a front crest cannot
+    brighten the rear wave's texture or create a flare where two rims meet.
     """
     if _NO_COLOR or height <= 0 or width <= 0:
         return [" " * width] * max(height, 0)
@@ -658,6 +662,7 @@ def render_idle_wave(
         screen_shade = 1.0 - _SCREEN_DEPTH_FALLOFF * screen_depth
         # Only build shades for visible layers and depth bands in this row.
         depth_codes: dict[tuple[int, int], tuple[str, ...]] = {}
+        overlap_codes: dict[int, str] = {}
         parts: list[str] = []
         current_color: str | None = None
         caustic_ys = [(row * 4 + 2) * field[0] for field in fields]
@@ -668,12 +673,16 @@ def render_idle_wave(
 
         for col in range(width):
             mask = covered = 0
+            cell_layers = 0
             color_layer = None
             for layer_index, (surface, occluder, layer_depth, _phase) in enumerate(layers):
                 fill = _surface_fill_mask(surface, row, col)
                 exposed = fill & ~covered
                 covered |= fill
                 if exposed:
+                    # Include occupied water even when its phosphor dot is off.
+                    # Otherwise the shared shade would alternate with the dither.
+                    cell_layers |= 1 << layer_index
                     scale, columns, caustic_neighbors, xs, y_offsets = fields[layer_index]
                     cx = xs[col] + caustic_x_offsets[layer_index]
                     cy = caustic_ys[layer_index] + y_offsets[col]
@@ -733,6 +742,23 @@ def render_idle_wave(
                 len(lighting_levels) if rim else round(light * (len(lighting_levels) - 1))
             )
             color = codes[lighting_band]
+            if cell_layers & (cell_layers - 1):
+                # Use quiet, consistent shading across this thin shared edge.
+                # Carrying either rim's bright highlight onto all of the other
+                # layer's dots made intersections flash as dense, blocky patches.
+                color = overlap_codes.get(cell_layers)
+                if color is None:
+                    depth = (
+                        sum(
+                            layer[2]
+                            for index, layer in enumerate(layers)
+                            if cell_layers & (1 << index)
+                        )
+                        / cell_layers.bit_count()
+                    )
+                    shade = _SURFACE_SHADE * screen_shade * depth * _OVERLAP_LIGHTING
+                    color = _color_code(_scale_color(active_color, shade))
+                    overlap_codes[cell_layers] = color
             # Keep color runs open across blank texture to avoid excess SGR.
             if color != current_color:
                 parts.append(color)
