@@ -312,7 +312,7 @@ def test_foreground_gradient_tracks_depth_below_local_surface(monkeypatch) -> No
     colors = _cell_colors(row)
 
     assert visible[0] == "⣤"
-    # Deep water now has gaps between currents instead of a solid block.
+    # Deep water has fine phosphor texture instead of a solid block.
     assert 0 < (ord(visible[1]) - 0x2800).bit_count() < 8
     assert len(colors) == 2
     assert sum(colors[0]) > 2 * sum(colors[1])
@@ -431,10 +431,10 @@ def test_render_idle_wave_uses_multiple_depth_colors(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(("width", "height"), [(38, 9), (78, 14), (118, 26)])
-def test_current_ribbons_leave_open_water_but_keep_a_continuous_crest(
+def test_water_has_a_continuous_crest_and_a_connected_body(
     colored, width: int, height: int
 ) -> None:
-    """The visible ocean has breathing room while its leading edge stays intact."""
+    """Caustics leave fine texture, but never cut empty bands through the water."""
     for intensity in (0.0, 0.5, 1.0):
         for tick in (0, 40, 100):
             foreground = wave_mod._idle_wave_surfaces(tick, width * 2, height, intensity, None)[-1]
@@ -450,6 +450,8 @@ def test_current_ribbons_leave_open_water_but_keep_a_continuous_crest(
                     water_dots += water.bit_count()
                     lit_dots += mask.bit_count()
                     assert mask & ~water == 0
+                    if water == 0xFF:
+                        assert mask, "submerged cells must retain some water between highlights"
                     for subcol in range(2):
                         for subrow in range(4):
                             depth = row_index * 4 + subrow + 0.5 - foreground[col * 2 + subcol]
@@ -459,7 +461,7 @@ def test_current_ribbons_leave_open_water_but_keep_a_continuous_crest(
             assert 0.35 < lit_dots / water_dots < 0.75
 
 
-def test_distant_contours_cannot_shine_through_current_gaps(colored, monkeypatch) -> None:
+def test_distant_contours_cannot_shine_through_water_texture(colored, monkeypatch) -> None:
     """A gap in the foreground's dot texture is still in front of distant water."""
     monkeypatch.setattr(
         wave_mod,
@@ -489,6 +491,43 @@ def test_main_wave_fits_small_and_resized_terminals(colored, width: int, height:
             assert "\033[" not in row or row.endswith("\033[0m")
 
 
+def test_caustics_light_local_patches_instead_of_horizontal_bands(colored, monkeypatch) -> None:
+    """Even a flat water surface has bright and dark patches across each row."""
+    width, height = 100, 18
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * (width * 2), [100.0] * (width * 2), [4.0] * (width * 2)),
+    )
+    for phase in (0.0, 30.0, 75.0):
+        rows = wave_mod.render_idle_wave(40, width, height, 0.8, wave_phase=phase)
+        for row in rows[3:]:
+            brightness = [sum(color) for color in _cell_colors(row)]
+            assert max(brightness) > min(brightness) * 1.8
+            transitions = sum(a != b for a, b in pairwise(brightness))
+            assert transitions >= 4, "light should gather around separate caustic cells"
+
+
+def test_caustics_deform_smoothly_with_the_accumulated_phase(colored, monkeypatch) -> None:
+    """The texture flows independently of the silhouette, without random frame noise."""
+    width, height = 100, 18
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * (width * 2), [100.0] * (width * 2), [4.0] * (width * 2)),
+    )
+    frames = []
+    for phase in (30.0, 31.0, 60.0):
+        rows = wave_mod.render_idle_wave(40, width, height, 0.8, wave_phase=phase)
+        frames.append(re.sub(r"\033\[[0-9;]*m", "", "".join(rows)))
+    changes = [
+        sum((ord(a) ^ ord(b)).bit_count() for a, b in zip(frames[0], frame, strict=True))
+        for frame in frames[1:]
+    ]
+    assert 0 < changes[0] < width * height * 8 * 0.06
+    assert changes[1] > changes[0] * 3
+
+
 # ── Hue lock ──────────────────────────────────────────────────────────────
 #
 # Every wave is one theme color varied in lightness. Regression guards for the
@@ -506,7 +545,9 @@ def test_bar_waves_stay_on_a_single_hue(colored) -> None:
     assert _hue_drift(sampled) < 0.08
 
 
-def test_idle_wave_stays_on_a_single_hue(colored) -> None:
+@pytest.mark.parametrize("theme", styles.THEME_NAMES)
+def test_idle_wave_stays_on_a_single_hue(colored, theme: str) -> None:
+    styles.apply_theme(theme)
     sampled: list[tuple[int, int, int]] = []
     for intensity in (0.0, 0.5, 1.0):
         for row in wave_mod.render_idle_wave(
@@ -517,7 +558,10 @@ def test_idle_wave_stays_on_a_single_hue(colored) -> None:
                 for match in re.findall(r"\033\[38;2;(\d+);(\d+);(\d+)m", row)
             ]
 
-    assert _hue_drift(sampled) < 0.08
+    try:
+        assert _hue_drift(sampled) < 0.08
+    finally:
+        styles.apply_theme("default")
 
 
 def test_every_theme_keeps_its_bar_wave_on_one_hue(colored) -> None:
@@ -607,7 +651,8 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
                         col,
                         height * 4,
                     )
-                    if band == 0:
+                    surface_y = (foreground[col * 2] + foreground[col * 2 + 1]) * 0.5
+                    if row_index * 4 + 2 - surface_y < 2.5:
                         surface_bodies.append(sum(color))
                     elif band == wave_mod._DEPTH_BANDS - 1:
                         deep_bodies.append(sum(color))
@@ -715,13 +760,15 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
 
     Color changes are what cost bytes: a run of one color is nearly free, while
     alternating color spends an escape sequence per cell. Dithering once cost
-    3030 escapes a frame at 300 columns and typing stopped appearing. The broad
-    depth bands may curve across a row, but must remain far below that
-    pathological output and the reduced-color path cannot make it worse.
+    3030 escapes a frame at 300 columns and typing stopped appearing. Local
+    caustic highlights add transitions, but the whole 300×60 frame must stay
+    within 64 KiB and well below that previous escape count. Reduced color
+    must not increase the output cost.
     """
     for name in styles.THEME_NAMES:
         styles.apply_theme(name)
         counts = []
+        sizes = []
         for truecolor in (True, False):
             styles.TRUECOLOR = truecolor
             frame = "".join(
@@ -730,7 +777,9 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
                 )
             )
             counts.append(frame.count("\033["))
-        assert max(counts) < 600, (name, counts)
+            sizes.append(len(frame.encode()))
+        assert max(counts) < 1600, (name, counts)
+        assert max(sizes) < 64 * 1024, (name, sizes)
         assert counts[1] <= counts[0] * 1.2, (name, counts)
     styles.TRUECOLOR = True
     styles.apply_theme("default")

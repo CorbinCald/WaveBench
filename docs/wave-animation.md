@@ -1,5 +1,7 @@
 # Wave animation preview
 
-![WaveBench's live progress display with layered, flowing wave currents](assets/wave-animation.gif)
+![WaveBench's water animation with moving caustic highlights and fine CRT texture](assets/wave-animation.gif)
 
-This recording shows the actual terminal progress display with simulated streaming updates. The wave builds height, brightness, and motion as output arrives.
+The water carries a deforming caustic tessellation and fine CRT scanlines. Its height, brightness, and motion build as output arrives.
+
+This recording shows the actual terminal progress display in the Blueberry theme, using simulated streaming updates.
