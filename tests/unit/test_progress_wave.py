@@ -1,4 +1,4 @@
-"""Focused tests for the layered idle-wave renderer and the bar waves."""
+"""Visual geometry, terminal compatibility, and motion of the wave renderers."""
 
 from __future__ import annotations
 
@@ -311,7 +311,9 @@ def test_foreground_gradient_tracks_depth_below_local_surface(monkeypatch) -> No
     visible = re.sub(r"\033\[[0-9;]*m", "", row)
     colors = _cell_colors(row)
 
-    assert visible == "⣤⣿"
+    assert visible[0] == "⣤"
+    # Deep water now has gaps between currents instead of a solid block.
+    assert 0 < (ord(visible[1]) - 0x2800).bit_count() < 8
     assert len(colors) == 2
     assert sum(colors[0]) > 2 * sum(colors[1])
 
@@ -381,7 +383,7 @@ def test_far_contour_is_occluded_below_middle_surface(monkeypatch) -> None:
     assert visible == ["⠤", " "]
 
 
-def test_render_idle_wave_uses_contours_behind_filled_foreground(monkeypatch) -> None:
+def test_render_idle_wave_uses_contours_behind_the_surface_rim(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
 
@@ -426,6 +428,65 @@ def test_render_idle_wave_uses_multiple_depth_colors(monkeypatch) -> None:
     }
     assert len(colors) >= 4
     assert all(styles._vlen(row) == 72 for row in rows)
+
+
+@pytest.mark.parametrize(("width", "height"), [(38, 9), (78, 14), (118, 26)])
+def test_current_ribbons_leave_open_water_but_keep_a_continuous_crest(
+    colored, width: int, height: int
+) -> None:
+    """The visible ocean has breathing room while its leading edge stays intact."""
+    for intensity in (0.0, 0.5, 1.0):
+        for tick in (0, 40, 100):
+            foreground = wave_mod._idle_wave_surfaces(tick, width * 2, height, intensity, None)[-1]
+            rows = wave_mod.render_idle_wave(tick, width, height, intensity)
+            water_dots = lit_dots = 0
+            for row_index, rendered in enumerate(rows):
+                visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
+                for col, glyph in enumerate(visible):
+                    water = wave_mod._surface_fill_mask(foreground, row_index, col)
+                    if not water:
+                        continue
+                    mask = ord(glyph) - 0x2800 if glyph != " " else 0
+                    water_dots += water.bit_count()
+                    lit_dots += mask.bit_count()
+                    assert mask & ~water == 0
+                    for subcol in range(2):
+                        for subrow in range(4):
+                            depth = row_index * 4 + subrow + 0.5 - foreground[col * 2 + subcol]
+                            if 0 <= depth < 1.5:
+                                assert mask & wave_mod._BRAILLE_DOT_BITS[subrow][subcol]
+
+            assert 0.35 < lit_dots / water_dots < 0.75
+
+
+def test_distant_contours_cannot_shine_through_current_gaps(colored, monkeypatch) -> None:
+    """A gap in the foreground's dot texture is still in front of distant water."""
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([7.2] * 12, [5.4] * 12, [0.2] * 12),
+    )
+    with_background = wave_mod.render_idle_wave(40, 6, 6, 0.5)
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * 12, [100.0] * 12, [0.2] * 12),
+    )
+    without_background = wave_mod.render_idle_wave(40, 6, 6, 0.5)
+
+    assert with_background == without_background
+
+
+@pytest.mark.parametrize(("width", "height"), [(1, 1), (10, 3), (40, 60), (300, 60)])
+def test_main_wave_fits_small_and_resized_terminals(colored, width: int, height: int) -> None:
+    for intensity in (0.0, 1.0):
+        rows = wave_mod.render_idle_wave(40, width, height, intensity)
+        assert len(rows) == height
+        for row in rows:
+            visible = re.sub(r"\033\[[0-9;]*m", "", row)
+            assert len(visible) == width
+            assert all(glyph == " " or "\u2801" <= glyph <= "\u28ff" for glyph in visible)
+            assert "\033[" not in row or row.endswith("\033[0m")
 
 
 # ── Hue lock ──────────────────────────────────────────────────────────────
@@ -654,8 +715,8 @@ def test_reduced_color_costs_no_more_output_than_truecolor(colored) -> None:
 
     Color changes are what cost bytes: a run of one color is nearly free, while
     alternating color spends an escape sequence per cell. Dithering once cost
-    3030 escapes a frame at 300 columns and typing stopped appearing. The six
-    broad depth bands may curve across a row, but must remain far below that
+    3030 escapes a frame at 300 columns and typing stopped appearing. The broad
+    depth bands may curve across a row, but must remain far below that
     pathological output and the reduced-color path cannot make it worse.
     """
     for name in styles.THEME_NAMES:
