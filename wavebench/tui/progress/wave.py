@@ -415,6 +415,8 @@ def _surface_depth_band(
 _PhosphorLimits = tuple[tuple[float, ...], ...]
 _CausticSite = tuple[float, float, _PhosphorLimits]
 _CausticEdge = tuple[float, float, float]
+# Keep the light falloff one dot wide, even as the facets grow with the terminal.
+_CAUSTIC_FALLOFF_DOTS = 1.0
 
 
 def _caustic_grid(
@@ -438,7 +440,10 @@ def _caustic_grid(
             sites[x, y] = (
                 x + 0.5 + 0.34 * math.sin(seed + time),
                 y + 0.5 + 0.34 * math.sin(seed * 1.37 - time * 0.83),
-                _phosphor_limits(0.28 + 0.04 * math.sin(seed * 0.7 + time * 0.4)),
+                _phosphor_limits(
+                    0.28 + 0.04 * math.sin(seed * 0.7 + time * 0.4),
+                    _CAUSTIC_FALLOFF_DOTS / cell_size,
+                ),
             )
     neighbors = [
         tuple(sites[x + dx, y + dy] for dy in (-1, 0, 1) for dx in (-1, 0, 1))
@@ -489,7 +494,7 @@ _PHOSPHOR = (
 )
 
 
-def _phosphor_limits(ambient: float) -> _PhosphorLimits:
+def _phosphor_limits(ambient: float, falloff: float) -> _PhosphorLimits:
     """Precompute how close each dot must be to a caustic to light up.
 
     Invert the highlight falloff once per facet instead of evaluating it at
@@ -504,7 +509,7 @@ def _phosphor_limits(ambient: float) -> _PhosphorLimits:
             if light < 0:
                 distances.append(math.inf)
             else:
-                distances.append(0.25 * (1.0 - math.sqrt(light)))
+                distances.append(falloff * (1.0 - math.sqrt(light)))
         limits.append(tuple(distances))
     return tuple(limits)
 
@@ -633,7 +638,9 @@ def render_idle_wave(
                 )
                 surface_y = (foreground_surface[col * 2] + foreground_surface[col * 2 + 1]) * 0.5
                 rim = row * 4 + 2 - surface_y < 2.5
-                focused_light = min(edges[0][2], edges[1][2]) < 0.12
+                focused_light = (
+                    min(edges[0][2], edges[1][2]) < 0.5 * _CAUSTIC_FALLOFF_DOTS * caustic_scale
+                )
                 color = foreground_depth_codes[depth_band][rim or focused_light]
             else:
                 middle_mask = _surface_contour_mask(
