@@ -315,8 +315,13 @@ def _idle_wave_surfaces(
         )
         middle.append(center - depth_gap - middle_height * amp * 0.62)
 
+        foreground_phase = nx * 10.2 - wave_phase * 0.086
         foreground_height = (
-            0.64 * math.sin(nx * 10.2 - wave_phase * 0.086)
+            0.64 * math.sin(foreground_phase)
+            # Bound harmonics narrow the peaks and lean their leading faces,
+            # while leaving room for broad, rounded troughs.
+            - (0.075 + 0.040 * intensity) * math.cos(foreground_phase * 2.0)
+            - (0.030 + 0.015 * intensity) * math.sin(foreground_phase * 2.0)
             + (0.050 + 0.080 * intensity) * math.sin(nx * 18.8 - wave_phase * 0.116 + 1.7)
             + (0.012 + 0.040 * intensity) * math.sin(nx * 29.0 - wave_phase * 0.148 + 3.1)
         )
@@ -326,7 +331,14 @@ def _idle_wave_surfaces(
             crest_exp,
             limiter,
         )
-        foreground.append(center - foreground_height * amp)
+        # Small crossing ripples roughen the crests continuously, with less
+        # detail in the troughs and a dot-sized cap at large terminal sizes.
+        crest = 0.5 + 0.5 * math.sin(foreground_phase)
+        ripple = 0.65 * math.sin(nx * 57.3 - wave_phase * 0.39 + 1.2) + 0.35 * math.sin(
+            nx * 91.7 - wave_phase * 0.61 + 2.8
+        )
+        ripple *= min(1.2, amp * 0.14) * aspect_damping * (0.30 + 0.70 * crest * crest)
+        foreground.append(center - foreground_height * amp - ripple)
 
     return far, middle, foreground
 
@@ -392,6 +404,7 @@ _DEPTH_BANDS = 12
 _SURFACE_SHADE = 1.08
 _DEEP_SHADE = 0.38
 _SCREEN_DEPTH_FALLOFF = 0.16
+_SURFACE_RIM_DOTS = 1.0
 
 
 def _surface_depth_band(
@@ -538,7 +551,7 @@ def _surface_water_mask(
             edge_b += by
             if depth < 0:
                 continue
-            if depth < 1.8:
+            if depth < _SURFACE_RIM_DOTS:
                 mask |= _BRAILLE_DOT_BITS[subrow][subcol]
                 continue
             if lit:
@@ -639,7 +652,7 @@ def render_idle_wave(
                     height * 4,
                 )
                 surface_y = (foreground_surface[col * 2] + foreground_surface[col * 2 + 1]) * 0.5
-                rim = row * 4 + 2 - surface_y < 2.5
+                rim = row * 4 + 2 - surface_y < _SURFACE_RIM_DOTS
                 # Ease the shimmer in and out as an edge crosses the cell.
                 # A faint shoulder softens the light without widening its dots.
                 light = max(
