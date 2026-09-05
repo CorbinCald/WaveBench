@@ -417,6 +417,8 @@ _CausticSite = tuple[float, float, _PhosphorLimits]
 _CausticEdge = tuple[float, float, float]
 # Keep the light falloff one dot wide, even as the facets grow with the terminal.
 _CAUSTIC_FALLOFF_DOTS = 1.0
+# Low-contrast shades let refracted light blend into the surrounding water.
+_CAUSTIC_LIGHTING = (0.62, 0.67, 0.72, 0.77, 0.82)
 
 
 def _caustic_grid(
@@ -505,7 +507,7 @@ def _phosphor_limits(ambient: float, falloff: float) -> _PhosphorLimits:
         scanline = 0.86 if row == 3 else 1.0
         distances: list[float] = []
         for threshold in thresholds:
-            light = (threshold / scanline - ambient) / 0.90
+            light = (threshold / scanline - ambient) / 0.40
             if light < 0:
                 distances.append(math.inf)
             else:
@@ -609,7 +611,7 @@ def render_idle_wave(
                         * lighting,
                     )
                 )
-                for lighting in (0.46, 1.08)
+                for lighting in (*_CAUSTIC_LIGHTING, 0.96)
             )
             for band in range(_DEPTH_BANDS)
         )
@@ -638,10 +640,18 @@ def render_idle_wave(
                 )
                 surface_y = (foreground_surface[col * 2] + foreground_surface[col * 2 + 1]) * 0.5
                 rim = row * 4 + 2 - surface_y < 2.5
-                focused_light = (
-                    min(edges[0][2], edges[1][2]) < 0.5 * _CAUSTIC_FALLOFF_DOTS * caustic_scale
+                # Ease the shimmer in and out as an edge crosses the cell.
+                # A faint shoulder softens the light without widening its dots.
+                light = max(
+                    0.0,
+                    1.0
+                    - min(edges[0][2], edges[1][2]) / (1.5 * _CAUSTIC_FALLOFF_DOTS * caustic_scale),
                 )
-                color = foreground_depth_codes[depth_band][rim or focused_light]
+                light = light * light * (3.0 - 2.0 * light)
+                lighting_band = (
+                    len(_CAUSTIC_LIGHTING) if rim else round(light * (len(_CAUSTIC_LIGHTING) - 1))
+                )
+                color = foreground_depth_codes[depth_band][lighting_band]
             else:
                 middle_mask = _surface_contour_mask(
                     middle_surface,
