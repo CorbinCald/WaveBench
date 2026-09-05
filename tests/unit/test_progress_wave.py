@@ -492,7 +492,7 @@ def test_main_wave_fits_small_and_resized_terminals(colored, width: int, height:
 
 
 def test_caustics_light_local_patches_instead_of_horizontal_bands(colored, monkeypatch) -> None:
-    """Even a flat water surface has bright and dark patches across each row."""
+    """Even flat water has local shimmer, blended gently into its base color."""
     width, height = 100, 18
     monkeypatch.setattr(
         wave_mod,
@@ -503,7 +503,8 @@ def test_caustics_light_local_patches_instead_of_horizontal_bands(colored, monke
         rows = wave_mod.render_idle_wave(40, width, height, 0.8, wave_phase=phase)
         for row in rows[3:]:
             brightness = [sum(color) for color in _cell_colors(row)]
-            assert max(brightness) > min(brightness) * 1.8
+            assert 1.1 < max(brightness) / min(brightness) < 1.5
+            assert len(set(brightness)) >= 3, "caustic light should fade through softer shades"
             transitions = sum(a != b for a, b in pairwise(brightness))
             assert transitions >= 4, "light should gather around separate caustic cells"
 
