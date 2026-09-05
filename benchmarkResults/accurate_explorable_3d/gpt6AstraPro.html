@@ -1,0 +1,2385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#102329">
+<title>Washington County, Utah — Terrain Driver</title>
+<style>
+  :root {
+    --glass: rgba(14, 31, 37, .91);
+    --line: rgba(220, 240, 239, .15);
+    --text: #edf5ef;
+    --muted: #a7bbb9;
+    --mint: #8fe2cb;
+    --gold: #ffc768;
+    --red: #ff9990;
+  }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: #102329; color: var(--text);
+    font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  button, select, input { font: inherit; }
+  button, select {
+    color: var(--text); border: 1px solid var(--line);
+    background: rgba(255,255,255,.055); border-radius: 9px;
+  }
+  button { cursor: pointer; padding: 9px 12px; transition: background .15s, border-color .15s; }
+  button:hover { background: rgba(255,255,255,.13); border-color: rgba(220,240,239,.35); }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+  button.active, button[aria-pressed="true"] {
+    color: #123a32; background: var(--mint); border-color: var(--mint);
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  select { padding: 9px; background: #20363c; max-width: 175px; }
+  a { color: inherit; }
+  .hidden { display: none !important; }
+  .glass {
+    background: var(--glass); border: 1px solid var(--line);
+    box-shadow: 0 8px 32px rgba(0,0,0,.16);
+    backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+  }
+  #world { position: fixed; inset: 0; }
+  #world canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #ui { position: fixed; inset: 0; pointer-events: none; }
+  #ui button, #ui select, #ui a, .interactive { pointer-events: auto; }
+  header {
+    position: absolute; left: 22px; right: 22px; top: 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 15px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; padding: 13px 17px; border-radius: 14px; }
+  .brand svg { width: 38px; height: 38px; color: var(--mint); }
+  .eyebrow { font-size: 9px; letter-spacing: .2em; color: var(--mint); font-weight: 700; }
+  h1 { margin: 4px 0 0; font-size: 20px; font-weight: 650; letter-spacing: -.6px; }
+  .view-tabs { padding: 5px; display: flex; gap: 4px; border-radius: 12px; }
+  .view-tabs button { border-color: transparent; background: transparent; padding: 10px 16px; }
+  .view-tabs button.active { background: var(--mint); }
+  .header-actions { display: flex; gap: 8px; }
+  .header-actions button { background: var(--glass); padding: 12px 15px; backdrop-filter: blur(12px); }
+  #dataBadge {
+    position: absolute; right: 23px; top: 103px; padding: 9px 12px;
+    display: flex; align-items: center; gap: 8px; border-radius: 9px;
+    font-size: 11px; color: var(--muted);
+  }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); flex-shrink: 0; }
+  .dot.busy { background: var(--gold); animation: pulse 1.4s infinite; }
+  .dot.error { background: var(--red); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  #placesPanel {
+    position: absolute; top: 105px; left: 23px; width: 295px; border-radius: 14px;
+    padding: 17px; max-height: calc(100vh - 340px); overflow: auto;
+    pointer-events: auto; touch-action: pan-y;
+  }
+  .panel-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .panel-heading h2 { font-size: 15px; margin: 0; }
+  .small-close { border: 0; padding: 3px 8px; font-size: 20px; background: transparent; }
+  .subtle { color: var(--muted); font-size: 11px; line-height: 1.6; }
+  #placesList { display: grid; gap: 6px; margin-top: 13px; }
+  .place-button { text-align: left; display: flex; align-items: center; gap: 11px; padding: 11px; }
+  .place-index { color: var(--mint); font: 11px ui-monospace, monospace; opacity: .7; }
+  .place-button strong { display: block; font-size: 12px; font-weight: 600; }
+  .place-button small { display: block; color: var(--muted); font-size: 10px; margin-top: 4px; }
+  #toast {
+    position: absolute; left: 50%; top: 106px; transform: translate(-50%, -8px);
+    max-width: min(540px, calc(100vw - 30px)); padding: 12px 17px;
+    border-radius: 10px; text-align: center; line-height: 1.5; opacity: 0;
+    transition: opacity .2s, transform .2s; z-index: 8;
+  }
+  #toast.visible { opacity: 1; transform: translate(-50%, 0); }
+  #roadLoading {
+    position: absolute; left: 50%; top: 158px; transform: translateX(-50%);
+    border-radius: 11px; padding: 10px 14px; text-align: center; z-index: 6;
+  }
+  #roadLoading span { display: block; margin-bottom: 8px; font-size: 12px; }
+  #roadLoading button { font-size: 11px; padding: 6px 10px; }
+  #minimap {
+    position: absolute; left: 23px; bottom: 43px; width: 233px;
+    border-radius: 13px; padding: 7px; overflow: hidden;
+  }
+  #minimapCanvas { display: block; width: 217px; height: 157px; border-radius: 8px; cursor: pointer; touch-action: none; }
+  #minimapCaption {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 3px 3px; font-size: 9px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .1em;
+  }
+  #minimapCaption b { color: var(--mint); font-weight: 500; }
+  #drivingHud { position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%); width: 350px; }
+  .road-title {
+    text-align: center; padding: 11px 17px; border-radius: 12px 12px 0 0;
+    border-bottom: 0;
+  }
+  #roadName { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #roadMeta { font-size: 10px; color: var(--muted); margin-top: 5px; }
+  .instrument-panel { border-radius: 0 0 14px 14px; padding: 12px 15px 10px; }
+  .instruments { display: flex; align-items: center; justify-content: space-between; }
+  .speed-block { min-width: 109px; text-align: center; }
+  #speed { font-size: 49px; font-weight: 650; letter-spacing: -3px; line-height: 1; font-variant-numeric: tabular-nums; }
+  .speed-unit { color: var(--muted); font-size: 9px; letter-spacing: .16em; margin-top: 4px; }
+  .limit-sign {
+    background: #e8ece2; color: #25302a; border: 2px solid #394139;
+    border-radius: 6px; outline: 2px solid #e8ece2; width: 41px; padding: 4px 1px; text-align: center;
+  }
+  .limit-sign small { display: block; font-size: 6px; font-weight: 800; letter-spacing: .03em; }
+  #limit { display: block; font-size: 22px; font-weight: 750; line-height: 1.1; }
+  .telemetry { min-width: 91px; display: grid; gap: 7px; font-size: 10px; color: var(--muted); }
+  .telemetry b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .drive-buttons { display: flex; gap: 5px; margin-top: 12px; }
+  .drive-buttons button { flex: 1; font-size: 10px; padding: 7px 5px; white-space: nowrap; }
+  #turnButton {
+    display: block; width: fit-content; margin: 0 auto 7px; padding: 7px 12px;
+    background: var(--glass); border-color: var(--gold); color: var(--gold); font-size: 11px;
+  }
+  #controlsHint {
+    position: absolute; right: 23px; bottom: 43px; width: 222px;
+    padding: 15px; border-radius: 12px; font-size: 10px; line-height: 1.7; color: var(--muted);
+  }
+  .keyrow { display: flex; gap: 10px; align-items: center; margin-top: 7px; }
+  .keyrow:first-child { margin-top: 0; }
+  kbd {
+    font: 10px inherit; color: #d7e8df; border: 1px solid var(--line);
+    background: rgba(255,255,255,.04); padding: 1px 5px; border-radius: 4px;
+    white-space: nowrap;
+  }
+  #exploreHelp {
+    position: absolute; bottom: 43px; left: 50%; transform: translateX(-50%);
+    max-width: calc(100vw - 35px); width: max-content; padding: 13px 18px;
+    border-radius: 12px; text-align: center; font-size: 12px; line-height: 1.7;
+  }
+  #exploreHelp span { display: block; font-size: 10px; color: var(--muted); }
+  #labels { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
+  .map-label {
+    position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 11px;
+    padding: 6px 10px; border-radius: 6px; color: #ebf8f1;
+    background: rgba(13,35,38,.88); border: 1px solid rgba(180,233,218,.38);
+    pointer-events: auto; box-shadow: 0 3px 12px #0002; will-change: transform;
+  }
+  .map-label::before { content: "•"; color: var(--mint); margin-right: 6px; }
+  .map-label.car-label { color: var(--gold); border-color: var(--gold); }
+  .map-label.car-label::before { color: var(--gold); }
+  #attribution {
+    position: absolute; bottom: 7px; left: 12px; right: 12px; text-align: center;
+    font-size: 9px; color: #e8f1e5; line-height: 1.4; text-shadow: 0 1px 4px #000, 0 1px 4px #000;
+  }
+  #attribution a { text-decoration: none; }
+  #attribution a:hover { text-decoration: underline; }
+  #touchControls { display: none; position: absolute; inset: 0; pointer-events: none; }
+  .touch-pad { position: absolute; bottom: 48px; display: flex; gap: 8px; pointer-events: auto; }
+  .touch-pad.left { left: 15px; }
+  .touch-pad.right { right: 15px; align-items: flex-end; }
+  .touch-pad button {
+    width: 62px; height: 68px; font-size: 22px; background: var(--glass);
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  .touch-pad button.pressed { background: var(--mint); color: #153b33; }
+  .touch-pad .pedal { height: 88px; width: 64px; font-size: 12px; font-weight: 700; }
+  .touch-pad .brake { height: 66px; width: 53px; font-size: 10px; color: var(--red); }
+  #loader {
+    position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+    background: radial-gradient(ellipse at 50% 30%, rgba(24,55,61,.93), rgba(7,18,25,.96));
+    padding: 22px;
+  }
+  .loading-card { width: min(485px, 100%); text-align: center; }
+  .loading-mark { width: 100px; height: 72px; margin-bottom: 20px; color: var(--mint); }
+  #loader h2 { font-size: 34px; letter-spacing: -1px; font-weight: 550; margin: 10px 0 12px; }
+  #loaderDetail { color: var(--muted); line-height: 1.8; font-size: 12px; min-height: 43px; }
+  .load-list { display: grid; gap: 0; margin: 26px 0 21px; text-align: left; border-top: 1px solid var(--line); }
+  .load-list div {
+    display: flex; align-items: center; justify-content: space-between; gap: 15px;
+    padding: 13px 3px; border-bottom: 1px solid var(--line); font-size: 12px;
+  }
+  .load-list b { color: var(--mint); font-size: 11px; font-weight: 400; text-align: right; }
+  #enterButton { background: var(--mint); color: #123b33; border-color: var(--mint); padding: 12px 22px; }
+  .loading-footnote { margin-top: 19px; color: #7f9a9c; font-size: 10px; line-height: 1.6; }
+  dialog {
+    color: var(--text); background: #142b32; border: 1px solid #456065; border-radius: 17px;
+    padding: 25px; width: min(585px, calc(100vw - 28px)); max-height: calc(100dvh - 35px);
+    overflow: auto; box-shadow: 0 20px 90px #0006; touch-action: pan-y;
+  }
+  dialog::backdrop { background: #061218b8; backdrop-filter: blur(5px); }
+  dialog h2 { font-size: 21px; margin: 0; letter-spacing: -.4px; }
+  dialog h3 { font-size: 12px; color: var(--mint); margin: 24px 0 10px; letter-spacing: .08em; text-transform: uppercase; }
+  dialog p, dialog li { font-size: 12px; line-height: 1.8; color: #b7cac8; }
+  dialog ul { padding-left: 18px; }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .settings-row input { accent-color: var(--mint); width: 17px; height: 17px; }
+  .stats { font: 11px/1.9 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--muted); }
+  .stats b { color: var(--text); font-weight: 400; }
+  .dialog-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 16px; }
+  @media (max-width: 1120px) {
+    #controlsHint { display: none; }
+    .brand { padding: 11px 13px; }
+    .brand svg { width: 29px; height: 29px; }
+    h1 { font-size: 18px; }
+    .view-tabs button { padding: 10px 11px; }
+  }
+  @media (max-width: 760px) {
+    header { top: 12px; left: 12px; right: 12px; flex-wrap: wrap; gap: 8px; }
+    .brand { padding: 10px 12px; gap: 8px; }
+    .brand svg { width: 27px; height: 27px; }
+    h1 { font-size: 16px; letter-spacing: -.5px; }
+    .eyebrow { font-size: 8px; }
+    .header-actions { margin-left: auto; }
+    .header-actions button { padding: 10px; font-size: 11px; }
+    .view-tabs { order: 3; width: 100%; justify-content: center; padding: 3px; }
+    .view-tabs button { flex: 1; padding: 8px 10px; font-size: 11px; }
+    #dataBadge { top: 118px; right: 12px; max-width: calc(100vw - 24px); font-size: 9px; padding: 7px 9px; }
+    #toast { top: 155px; font-size: 11px; }
+    #roadLoading { top: 204px; width: 240px; }
+    #placesPanel { left: 12px; top: 120px; width: 275px; max-height: calc(100dvh - 240px); z-index: 12; }
+    #minimap { bottom: auto; top: 155px; left: 12px; width: 155px; padding: 5px; }
+    #minimapCanvas { width: 143px; height: 112px; }
+    #minimapCaption { padding: 7px 2px 2px; font-size: 7px; letter-spacing: .04em; }
+    #drivingHud { width: 300px; bottom: 37px; }
+    #attribution { font-size: 7px; bottom: 5px; left: 8px; right: 8px; }
+    #exploreHelp { bottom: 40px; font-size: 11px; }
+    .map-label { font-size: 9px; padding: 5px 7px; }
+  }
+  @media (pointer: coarse) {
+    #touchControls { display: block; }
+    #controlsHint { display: none; }
+    #drivingHud { bottom: 145px; width: 292px; }
+    .road-title { padding: 8px 12px; }
+    .instrument-panel { padding: 9px 13px; }
+    #speed { font-size: 39px; }
+    .drive-buttons { margin-top: 9px; }
+    .touch-pad button { backdrop-filter: blur(10px); }
+  }
+  @media (pointer: coarse) and (min-width: 761px) {
+    #drivingHud { bottom: 43px; width: 330px; }
+    #minimap { top: 155px; bottom: auto; }
+  }
+  @media (max-height: 580px) {
+    .brand svg { display: none; }
+    #minimap { display: none; }
+    #dataBadge { top: 94px; }
+    #drivingHud { bottom: 31px; width: 290px; }
+    #speed { font-size: 33px; }
+    .road-title { padding: 7px; }
+    .instrument-panel { padding: 7px 12px; }
+    .telemetry { gap: 3px; }
+    .drive-buttons { margin-top: 7px; }
+    .touch-pad { bottom: 32px; }
+    #placesPanel { max-height: calc(100vh - 150px); }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="world"></div>
+<div id="labels"></div>
+<div id="ui">
+  <header>
+    <div class="brand glass">
+      <svg viewBox="0 0 44 44" fill="none" aria-hidden="true">
+        <path d="M3 33 13 15l7 10 7-17 14 25H3Z" stroke="currentColor" stroke-width="1.5"/>
+        <path d="m9 33 9-7 8 7m-2-19 5 8 4-3M4 39h36" stroke="currentColor" stroke-width="1.2"/>
+        <circle cx="8" cy="9" r="3" stroke="currentColor"/>
+      </svg>
+      <div><div class="eyebrow">UTAH · TERRAIN DRIVER</div><h1>Washington County</h1></div>
+    </div>
+    <nav class="view-tabs glass" aria-label="Camera mode">
+      <button id="driveView" class="active" title="Follow the car (F)">Drive</button>
+      <button id="exploreView" title="Orbit, pan and zoom (F)">Explore</button>
+      <button id="countyView" title="Frame the whole county (M)">County view ↗</button>
+    </nav>
+    <div class="header-actions">
+      <button id="placesToggle">Places ⌄</button>
+      <button id="helpButton" title="Controls, settings and data sources">Data & help</button>
+    </div>
+  </header>
+
+  <button id="dataBadge" class="glass" title="Inspect data sources and loading status">
+    <i id="dataDot" class="dot busy"></i><span id="dataSummary">Streaming real geography…</span>
+  </button>
+
+  <section id="placesPanel" class="glass hidden">
+    <div class="panel-heading"><h2>Choose your starting point</h2><button id="placesClose" class="small-close" aria-label="Close places">×</button></div>
+    <div class="subtle">Jump to a place, then join its nearest public OSM road. No straight-line, fictional routes.</div>
+    <div id="placesList"></div>
+  </section>
+
+  <div id="toast" class="glass" role="status" aria-live="polite"></div>
+  <div id="roadLoading" class="glass hidden">
+    <span id="roadLoadingText">Finding a real road…</span>
+    <button id="freeDrive">Free drive while data loads</button>
+  </div>
+
+  <section id="minimap" class="glass interactive" title="Click to explore around the car. Scroll to change map scale.">
+    <canvas id="minimapCanvas" aria-label="North-up minimap"></canvas>
+    <div id="minimapCaption"><span>North up · click to explore</span><b>1:1</b></div>
+  </section>
+
+  <section id="drivingHud">
+    <button id="turnButton" class="hidden" title="Clear queued turn (X)">Next junction: straight</button>
+    <div class="road-title glass"><div id="roadName">Finding a starting road</div><div id="roadMeta">Real terrain · real OpenStreetMap centerlines</div></div>
+    <div class="instrument-panel glass">
+      <div class="instruments">
+        <div class="limit-sign" title="OSM speed limit, or an estimate for this road class"><small>SPEED<br>LIMIT</small><span id="limit">25</span></div>
+        <div class="speed-block"><div id="speed">0</div><div class="speed-unit">MILES PER HOUR</div></div>
+        <div class="telemetry">
+          <div>ALT <b id="elevation">—</b></div>
+          <div>DIR <b id="compass">E · 090°</b></div>
+          <div>TRIP <b id="trip">0.00 mi</b></div>
+        </div>
+      </div>
+      <div class="drive-buttons">
+        <button id="guideButton" aria-pressed="true" title="Road guide: follow OSM roads; A/D select the next turn (G)">Road guide</button>
+        <button id="cruiseButton" aria-pressed="false" title="Maintain a comfortable speed on the road (E)">Cruise</button>
+        <button id="cameraButton" title="Switch chase / driver's view (C)">Chase</button>
+        <button id="pauseButton" title="Pause or resume (P)">Ⅱ</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="controlsHint" class="glass">
+    <div class="keyrow"><kbd>W / S</kbd><span>Accelerate / brake / reverse</span></div>
+    <div class="keyrow"><kbd>A / D</kbd><span>Choose next junction turn</span></div>
+    <div class="keyrow"><kbd>G</kbd><span>Road guide / free steering</span></div>
+    <div class="keyrow"><kbd>Space</kbd><span>Handbrake</span></div>
+    <div class="keyrow"><kbd>R</kbd><span>Rejoin the nearest road</span></div>
+    <div class="keyrow"><kbd>F / M</kbd><span>Explore / county overview</span></div>
+  </section>
+
+  <div id="exploreHelp" class="glass hidden">
+    Drag to orbit · wheel / pinch to zoom · right-drag to pan
+    <span>Double-click terrain to put your car on a nearby road. Press F to return to driving.</span>
+  </div>
+
+  <div id="touchControls">
+    <div class="touch-pad left">
+      <button data-code="KeyA" aria-label="Steer left or select a left turn">←</button>
+      <button data-code="KeyD" aria-label="Steer right or select a right turn">→</button>
+    </div>
+    <div class="touch-pad right">
+      <button class="brake" data-code="Space" aria-label="Handbrake">STOP</button>
+      <button class="pedal" data-code="KeyS" aria-label="Brake and reverse">REV<br>▼</button>
+      <button class="pedal" data-code="KeyW" aria-label="Accelerate">▲<br>GO</button>
+    </div>
+  </div>
+
+  <footer id="attribution">
+    <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+    · <a href="https://github.com/tilezen/joerd" target="_blank" rel="noopener">Elevation: Mapzen / USGS & others</a>
+    · <a href="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer" target="_blank" rel="noopener">Imagery © Esri, Maxar, Earthstar Geographics & contributors</a>
+    · County: U.S. Census
+  </footer>
+</div>
+
+<div id="loader">
+  <div class="loading-card">
+    <svg class="loading-mark" viewBox="0 0 110 80" fill="none" aria-hidden="true">
+      <path d="m5 60 24-32 16 18L66 9l39 51H5Z" stroke="currentColor" stroke-width="1.4"/>
+      <path d="m17 60 15-18 14 12 21-28 26 34M5 68h100M23 75h63" stroke="currentColor" opacity=".45"/>
+      <path d="m57 25 11 13 10-11M23 35l11 9" stroke="currentColor"/>
+      <circle cx="18" cy="14" r="7" stroke="currentColor" opacity=".55"/>
+    </svg>
+    <div class="eyebrow">37° NORTH · 113° WEST</div>
+    <h2 id="loaderTitle">A county. A little car.</h2>
+    <div id="loaderDetail">Loading actual elevation, satellite imagery and streets.<br>From St. George’s valley to Zion’s sandstone cliffs.</div>
+    <div class="load-list">
+      <div><span>3D terrain</span><b id="loaderTerrain">Connecting to elevation tiles…</b></div>
+      <div><span>Drivable road network</span><b id="loaderRoads">Contacting OpenStreetMap…</b></div>
+      <div><span>Washington County outline</span><b id="loaderBoundary">Verifying FIPS 49053…</b></div>
+    </div>
+    <button id="enterButton">Explore while loading</button>
+    <div class="loading-footnote">Internet required · No API key · Real-world scale, no vertical exaggeration<br>Terrain detail and roads stream as you move.</div>
+  </div>
+</div>
+
+<dialog id="infoDialog">
+  <div class="panel-heading"><h2>Your window into southwest Utah</h2><button id="closeInfo" class="small-close" aria-label="Close help">×</button></div>
+  <p>Explore Washington County’s approximately 2,430 square miles with actual elevation and mapped roads. All model distances and vehicle dimensions are in meters, with <strong>1× vertical scale</strong>.</p>
+
+  <h3>Drive & explore</h3>
+  <ul>
+    <li><b>W / ↑</b> accelerates. <b>S / ↓</b> brakes, then reverses. <b>Space</b> is the handbrake.</li>
+    <li><b>Road guide ON:</b> the car follows connected OSM centerlines. <b>A / ←</b> or <b>D / →</b> queues the next available left or right junction. <b>X</b> clears it. Ordinary road bends are followed automatically.</li>
+    <li><b>G</b> toggles guide/free steering. In free steering, hold A/D to steer. <b>R</b> rejoins a nearby road. <b>E</b> toggles guided cruise.</li>
+    <li><b>C</b> changes chase/driver camera. <b>P</b> pauses. <b>F</b> switches driving/exploration. <b>M</b> frames the county.</li>
+    <li>In Explore, orbit with left-drag, pan with right-drag, and zoom with the wheel. On touch screens, use one finger to orbit and two to pan/zoom. Double-click terrain or choose a place to relocate.</li>
+  </ul>
+
+  <h3>Display</h3>
+  <label class="settings-row"><span>Terrain appearance</span><select id="styleSelect"><option value="satellite">Satellite imagery</option><option value="elevation">Elevation colors</option></select></label>
+  <label class="settings-row"><span>Detail / GPU load</span><select id="detailSelect"><option value="detailed">Detailed</option><option value="fast">Lighter</option></select></label>
+  <label class="settings-row"><span>OSM building footprints, extruded</span><input type="checkbox" id="buildingsCheck" checked></label>
+  <label class="settings-row"><span>Road guide</span><input type="checkbox" id="guideCheck" checked></label>
+
+  <h3>Data, not invented geography</h3>
+  <p>
+    Elevation is decoded from public <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrarium terrain tiles</a>.
+    Satellite images come from <a href="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer" target="_blank" rel="noopener">Esri World Imagery</a>.
+    Roads and building footprints are requested from <a href="https://www.openstreetmap.org" target="_blank" rel="noopener">OpenStreetMap</a> through Overpass.
+    The county boundary is Census TIGERweb, with a Census-derived generalized outline as a fallback.
+    Requests are limited and OSM responses are cached in your browser.
+  </p>
+  <p>
+    This is an <b>arcade terrain explorer, not a navigation or engineering model</b>.
+    DEM resolution varies, generally tens of meters; fine road cuts, tunnels and bridge decks are not resolved.
+    Roads are draped over the DEM, lane paint is illustrative, and missing building heights are estimated.
+    Speed signs use OSM limits where available, otherwise road-class estimates.
+    Traffic, permissions, seasonal closures and Zion shuttle-only restrictions are not fully modeled.
+    Imagery is provider photography, not a live feed.
+    If a source fails, it is reported; fictional terrain or roads are never substituted.
+  </p>
+
+  <h3>Streaming status</h3>
+  <div class="stats">
+    <div>Terrain: <b id="statTerrain">—</b></div>
+    <div>Roads: <b id="statRoads">—</b></div>
+    <div>Buildings: <b id="statBuildings">—</b></div>
+    <div>Boundary: <b id="statBoundary">—</b></div>
+    <div>Requests: <b id="statNetwork">—</b></div>
+  </div>
+  <div class="dialog-actions"><button id="retryButton">Retry unavailable data</button><span class="subtle">No key or account required</span></div>
+  <p class="subtle">Imagery credits include Esri, Maxar, Earthstar Geographics, USDA FSA, USGS, and the GIS User Community. OpenStreetMap data © contributors, ODbL. Terrain tiles aggregate USGS and other open DEM sources. An internet connection and a modern WebGL2 browser are required.</p>
+</dialog>
+
+<script type="module">
+async function main() {
+  const [THREE, { OrbitControls }, { Sky }, { RoundedBoxGeometry }] = await Promise.all([
+    import("three"),
+    import("three/addons/controls/OrbitControls.js"),
+    import("three/addons/objects/Sky.js"),
+    import("three/addons/geometries/RoundedBoxGeometry.js")
+  ]);
+
+  const $ = id => document.getElementById(id);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const mix = (a, b, t) => a + (b - a) * t;
+  const damp = (a, b, rate, dt) => mix(a, b, 1 - Math.exp(-rate * dt));
+  const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const mobile = matchMedia("(pointer: coarse)").matches;
+  const DEG = Math.PI / 180;
+  const R = 6378137;
+  const LAT0 = 37.28, LON0 = -113.48;
+  const SCALE = Math.cos(LAT0 * DEG);
+  const METERS = R * SCALE;
+  const WORLD = 2 * Math.PI * METERS;
+  const ORIGIN_X = METERS * LON0 * DEG;
+  const ORIGIN_Y = METERS * Math.log(Math.tan(Math.PI / 4 + LAT0 * DEG / 2));
+  const ROOT_Z = 9;
+  const DEFAULT_HEIGHT = 860;
+
+  // Locally scaled Web Mercator: x east, z south, y elevation in meters.
+  function project(lon, lat) {
+    return {
+      x: METERS * lon * DEG - ORIGIN_X,
+      z: ORIGIN_Y - METERS * Math.log(Math.tan(Math.PI / 4 + lat * DEG / 2))
+    };
+  }
+  function unproject(x, z) {
+    return {
+      lon: (x + ORIGIN_X) / METERS / DEG,
+      lat: Math.atan(Math.sinh((ORIGIN_Y - z) / METERS)) / DEG
+    };
+  }
+  function tileXY(x, z, zoom) {
+    const n = 2 ** zoom;
+    return {
+      x: Math.floor(((x + ORIGIN_X) / WORLD + .5) * n),
+      y: Math.floor(((z - ORIGIN_Y) / WORLD + .5) * n)
+    };
+  }
+  function tileBounds(zoom, x, y) {
+    const size = WORLD / 2 ** zoom;
+    const minX = x * size - WORLD / 2 - ORIGIN_X;
+    const minZ = y * size - WORLD / 2 + ORIGIN_Y;
+    return { minX, minZ, maxX: minX + size, maxZ: minZ + size, size };
+  }
+  function boxFromGeo(west, south, east, north) {
+    const a = project(west, north), b = project(east, south);
+    return { minX: a.x, minZ: a.z, maxX: b.x, maxZ: b.z };
+  }
+  function distanceToBox(x, z, b) {
+    return Math.hypot(Math.max(b.minX - x, 0, x - b.maxX), Math.max(b.minZ - z, 0, z - b.maxZ));
+  }
+  function boxesIntersect(a, b) {
+    return a.minX <= b.maxX && a.maxX >= b.minX && a.minZ <= b.maxZ && a.maxZ >= b.minZ;
+  }
+  function bboxString(b) {
+    const nw = unproject(b.minX, b.minZ), se = unproject(b.maxX, b.maxZ);
+    return [se.lat, nw.lon, nw.lat, se.lon].map(v => v.toFixed(6)).join(",");
+  }
+  function insideRing(x, y, points) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const a = points[i], b = points[j];
+      if ((a[1] > y) !== (b[1] > y) &&
+          x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside;
+  }
+
+  let preferences = {};
+  try { preferences = JSON.parse(localStorage.getItem("wc-driver-preferences") || "{}"); } catch {}
+  const state = {
+    mode: "drive",
+    countyView: false,
+    guide: preferences.guide !== false,
+    imagery: preferences.style !== "elevation",
+    buildings: preferences.buildings !== false,
+    detail: preferences.detail || (mobile ? "fast" : "detailed"),
+    cruise: false,
+    paused: false,
+    cameraStyle: "chase",
+    spawnPending: true,
+    spawnToken: 0,
+    turn: 0,
+    turnExpiry: 0,
+    trip: 0
+  };
+  function savePreferences() {
+    try {
+      localStorage.setItem("wc-driver-preferences", JSON.stringify({
+        guide: state.guide, style: state.imagery ? "satellite" : "elevation",
+        buildings: state.buildings, detail: state.detail
+      }));
+    } catch {}
+  }
+  let countyBox = boxFromGeo(-114.055, 36.998, -112.88, 37.625);
+  let countyGeometry = null, countySource = "", boundaryFailed = false, boundaryPromise = null;
+  let geometryDirty = true, overviewDirty = true;
+  let toastTimeout;
+  function toast(message, duration = 4000) {
+    $("toast").textContent = message;
+    $("toast").classList.add("visible");
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => $("toast").classList.remove("visible"), duration);
+  }
+  function markGeometryDirty() { geometryDirty = true; overviewDirty = true; }
+
+  const PLACES = [
+    { name: "St. George", note: "Downtown streets · the starting line", lon: -113.5829, lat: 37.1082 },
+    { name: "Washington", note: "Historic town · the Virgin River valley", lon: -113.5087, lat: 37.1305 },
+    { name: "Hurricane", note: "SR-9 · red-rock country", lon: -113.2899, lat: 37.1760 },
+    { name: "Ivins", note: "Below the Red Mountain cliffs", lon: -113.6794, lat: 37.1686 },
+    { name: "Springdale / Zion", note: "The southern gateway to Zion", lon: -112.9989, lat: 37.1889 },
+    { name: "Zion Canyon", note: "Scenic canyon road · restrictions apply", lon: -112.9777, lat: 37.2174 },
+    { name: "Pine Valley", note: "Mountain air · high-country roads", lon: -113.5148, lat: 37.3901 },
+    { name: "Veyo", note: "Volcanic country · north on SR-18", lon: -113.6927, lat: 37.3385 },
+    { name: "Kolob Canyons", note: "Zion’s quieter northwest corner", lon: -113.2240, lat: 37.4543 }
+  ];
+  let initialPlace = PLACES[0];
+  try {
+    const p = new URLSearchParams(location.hash.slice(1));
+    const lat = Number(p.get("lat")), lon = Number(p.get("lon"));
+    if (p.has("lat") && p.has("lon") && lat > 36.99 && lat < 37.63 && lon > -114.06 && lon < -112.87) {
+      initialPlace = { lat, lon, name: "Shared location" };
+    }
+  } catch {}
+  const initial = project(initialPlace.lon, initialPlace.lat);
+  const car = {
+    x: initial.x, z: initial.z, y: DEFAULT_HEIGHT, heading: Math.PI / 2,
+    speed: 0, steer: 0, pitch: 0, roll: 0, wheelSpin: 0,
+    track: null, history: [], nearest: null, lastSafe: null,
+    road: null, nextNearCheck: 0
+  };
+  const keys = new Set();
+
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true, logarithmicDepthBuffer: true, powerPreference: "high-performance"
+  });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, state.detail === "fast" ? 1.25 : 1.8));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = .92;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  $("world").appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color("#c2d5d9");
+  scene.fog = new THREE.FogExp2("#c2d5d9", .000014);
+  const camera = new THREE.PerspectiveCamera(57, innerWidth / innerHeight, .15, 650000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enabled = false;
+  controls.enableDamping = true;
+  controls.dampingFactor = .08;
+  controls.minDistance = 8;
+  controls.maxDistance = 420000;
+  controls.maxPolarAngle = Math.PI * .492;
+  controls.screenSpacePanning = true;
+  controls.zoomSpeed = 1.1;
+  const cameraLook = new THREE.Vector3(car.x, car.y + 1, car.z);
+  camera.position.set(car.x - 15, car.y + 7, car.z + 6);
+  camera.lookAt(cameraLook);
+
+  scene.add(new THREE.HemisphereLight("#deedff", "#8a6650", 1.45));
+  const sunVector = new THREE.Vector3(-.53, .77, .36).normalize();
+  const sun = new THREE.DirectionalLight("#fff0d6", 2.5);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1536, 1536);
+  Object.assign(sun.shadow.camera, { left: -95, right: 95, top: 95, bottom: -95, near: 1, far: 6500 });
+  sun.shadow.bias = -.00008;
+  sun.shadow.normalBias = .14;
+  scene.add(sun, sun.target);
+  const sky = new Sky();
+  sky.scale.setScalar(480000);
+  sky.material.uniforms.turbidity.value = 3.4;
+  sky.material.uniforms.rayleigh.value = 1.5;
+  sky.material.uniforms.mieCoefficient.value = .003;
+  sky.material.uniforms.mieDirectionalG.value = .78;
+  sky.material.uniforms.sunPosition.value.copy(sunVector);
+  scene.add(sky);
+
+  class TaskQueue {
+    constructor(limit) { this.limit = limit; this.active = 0; this.jobs = []; this.serial = 0; }
+    add(fn, priority = 0) {
+      return new Promise((resolve, reject) => {
+        this.jobs.push({ fn, priority, serial: this.serial++, resolve, reject });
+        this.pump();
+      });
+    }
+    pump() {
+      this.jobs.sort((a, b) => a.priority - b.priority || a.serial - b.serial);
+      while (this.active < this.limit && this.jobs.length) {
+        const job = this.jobs.shift();
+        this.active++;
+        Promise.resolve().then(job.fn).then(job.resolve, job.reject).finally(() => {
+          this.active--; this.pump();
+        });
+      }
+    }
+  }
+
+  class BrowserCache {
+    constructor() {
+      this.writes = 0;
+      this.db = new Promise(resolve => {
+        let done = false;
+        const finish = db => { if (!done) { done = true; resolve(db); } };
+        const timer = setTimeout(() => finish(null), 1800);
+        try {
+          const request = indexedDB.open("washington-county-terrain-driver-v3", 1);
+          request.onupgradeneeded = () => {
+            const store = request.result.createObjectStore("items", { keyPath: "key" });
+            store.createIndex("time", "time");
+          };
+          request.onsuccess = () => { clearTimeout(timer); finish(request.result); };
+          request.onerror = request.onblocked = () => { clearTimeout(timer); finish(null); };
+        } catch { clearTimeout(timer); finish(null); }
+      });
+    }
+    async get(key, age = 7 * 86400000) {
+      const db = await this.db;
+      if (!db) return null;
+      return new Promise(resolve => {
+        try {
+          const req = db.transaction("items", "readonly").objectStore("items").get(key);
+          req.onsuccess = () => {
+            const row = req.result;
+            resolve(row && Date.now() - row.time < age ? row.value : null);
+          };
+          req.onerror = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    }
+    async put(key, value) {
+      const db = await this.db;
+      if (!db) return;
+      try {
+        const tx = db.transaction("items", "readwrite");
+        const store = tx.objectStore("items");
+        store.put({ key, value, time: Date.now() });
+        if (++this.writes % 12 === 0) {
+          const req = store.count();
+          req.onsuccess = () => {
+            let excess = req.result - 95;
+            if (excess <= 0) return;
+            const cursor = store.index("time").openCursor();
+            cursor.onsuccess = () => {
+              const c = cursor.result;
+              if (c && excess-- > 0) { c.delete(); c.continue(); }
+            };
+          };
+        }
+      } catch {}
+    }
+  }
+  const cache = new BrowserCache();
+  const demQueue = new TaskQueue(mobile ? 3 : 4);
+  const imageQueue = new TaskQueue(3);
+  const osmQueue = new TaskQueue(1);
+  let osmLastRequest = 0, osmRequestLabel = "", osmLastError = "";
+  // Kumi is the old name for Private.coffee, not an independent fallback.
+  // Keep a working service first and give failed services time to recover.
+  const osmEndpoints = [
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter"
+  ].map(url => ({ url, retryAt: 0 }));
+
+  async function fetchJSON(url, options = {}, timeout = 23000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message || "Data service error");
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`Request timed out after ${timeout / 1000}s`);
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+  function loadImage(url, timeout = 14000) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.decoding = "async";
+      const clean = () => { clearTimeout(timer); img.onload = img.onerror = null; };
+      const timer = setTimeout(() => { clean(); img.src = ""; reject(new Error("Tile request timed out")); }, timeout);
+      img.onload = () => { clean(); resolve(img); };
+      img.onerror = () => { clean(); reject(new Error("Tile source unavailable")); };
+      img.src = url;
+    });
+  }
+  async function fetchOSM(query, key, priority, label) {
+    const cached = await cache.get(key);
+    if (cached && Array.isArray(cached.elements)) return cached;
+    return osmQueue.add(async () => {
+      const failures = [];
+      osmRequestLabel = label;
+      try {
+        const endpoints = osmEndpoints.filter(endpoint => endpoint.retryAt <= Date.now());
+        if (!endpoints.length) throw new Error(osmLastError || "Map services are recovering; retry in a minute");
+        for (const endpoint of endpoints) {
+          const host = new URL(endpoint.url).hostname;
+          osmRequestLabel = `${label} (${host})`;
+          const wait = 1400 - (Date.now() - osmLastRequest);
+          if (wait > 0) await sleep(wait);
+          osmLastRequest = Date.now();
+          try {
+            // Allow 15s in Overpass's queue, 20s to execute, and 5s to transfer.
+            const data = await fetchJSON(endpoint.url, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+              body: "data=" + encodeURIComponent(query)
+            }, 40000);
+            if (!Array.isArray(data.elements)) throw new Error("Invalid OSM response");
+            if (data.remark && /timed out|runtime error|out of memory/i.test(data.remark)) throw new Error(data.remark);
+            cache.put(key, data);
+            endpoint.retryAt = 0;
+            osmEndpoints.splice(osmEndpoints.indexOf(endpoint), 1);
+            osmEndpoints.unshift(endpoint);
+            osmLastError = "";
+            return data;
+          } catch (error) {
+            endpoint.retryAt = Date.now() + 60000;
+            failures.push(`${host}: ${error.message}`);
+            osmLastError = failures.join("; ");
+          }
+        }
+        throw new Error(osmLastError || "OpenStreetMap is unavailable");
+      } finally { osmRequestLabel = ""; }
+    }, priority);
+  }
+
+  const heightStops = [
+    [600, new THREE.Color("#c8b996")],
+    [1000, new THREE.Color("#bd9571")],
+    [1500, new THREE.Color("#b17b61")],
+    [2050, new THREE.Color("#9c8873")],
+    [2700, new THREE.Color("#809788")],
+    [3500, new THREE.Color("#d4d8c9")]
+  ];
+  function heightColor(h, out) {
+    let i = 0;
+    while (i < heightStops.length - 2 && h > heightStops[i + 1][0]) i++;
+    const a = heightStops[i], b = heightStops[i + 1];
+    return out.copy(a[1]).lerp(b[1], clamp((h - a[0]) / (b[0] - a[0]), 0, 1));
+  }
+
+  class Terrain {
+    constructor() {
+      this.group = new THREE.Group();
+      scene.add(this.group);
+      this.tiles = new Map();
+      this.roots = [];
+      this.active = [];
+      this.activeSignature = "";
+      this.desired = new Set();
+      this.force = null;
+      this.revision = 0;
+      this.lastLOD = 0;
+      this.lastEvict = 0;
+      this.errorNotified = false;
+      this.setBounds(countyBox);
+    }
+    setBounds(b) {
+      const pad = 26000;
+      this.bounds = { minX: b.minX - pad, minZ: b.minZ - pad, maxX: b.maxX + pad, maxZ: b.maxZ + pad };
+      const a = tileXY(this.bounds.minX, this.bounds.minZ, ROOT_Z);
+      const c = tileXY(this.bounds.maxX, this.bounds.maxZ, ROOT_Z);
+      this.roots = [];
+      for (let y = a.y; y <= c.y; y++) for (let x = a.x; x <= c.x; x++) this.roots.push(this.get(ROOT_Z, x, y));
+      this.lastLOD = 0;
+    }
+    get(zoom, x, y) {
+      const key = `${zoom}/${x}/${y}`;
+      let tile = this.tiles.get(key);
+      if (!tile) {
+        tile = {
+          key, zoom, x, y, ...tileBounds(zoom, x, y),
+          status: "idle", imageStatus: "idle", mesh: null, children: null,
+          split: false, lastNeeded: performance.now(), retryAt: 0
+        };
+        this.tiles.set(key, tile);
+      }
+      return tile;
+    }
+    children(tile) {
+      if (!tile.children) {
+        const z = tile.zoom + 1, x = tile.x * 2, y = tile.y * 2;
+        tile.children = [this.get(z, x, y), this.get(z, x + 1, y), this.get(z, x, y + 1), this.get(z, x + 1, y + 1)];
+      }
+      return tile.children;
+    }
+    sampleDEM(tile, u, v) {
+      const x = clamp(u * 256 - .5, 0, 255), z = clamp(v * 256 - .5, 0, 255);
+      const ix = Math.floor(x), iz = Math.floor(z), jx = Math.min(ix + 1, 255), jz = Math.min(iz + 1, 255);
+      return mix(
+        mix(tile.dem[iz * 256 + ix], tile.dem[iz * 256 + jx], x - ix),
+        mix(tile.dem[jz * 256 + ix], tile.dem[jz * 256 + jx], x - ix), z - iz
+      );
+    }
+    build(tile) {
+      const N = !mobile && tile.zoom <= 12 ? 96 : 64;
+      tile.N = N;
+      tile.heights = new Float32Array((N + 1) * (N + 1));
+      const positions = [], colors = [], uvs = [], indices = [];
+      const color = new THREE.Color();
+      for (let z = 0; z <= N; z++) {
+        for (let x = 0; x <= N; x++) {
+          const h = this.sampleDEM(tile, x / N, z / N);
+          tile.heights[z * (N + 1) + x] = h;
+          positions.push((x / N - .5) * tile.size, h, (z / N - .5) * tile.size);
+          heightColor(h, color);
+          colors.push(color.r, color.g, color.b);
+          uvs.push(x / N, 1 - z / N);
+          if (x < N && z < N) {
+            const a = z * (N + 1) + x, b = a + 1, c = a + N + 1, d = c + 1;
+            indices.push(a, c, b, b, c, d);
+          }
+        }
+      }
+      // Downward skirts conceal cracks between independently sampled LOD tiles.
+      const skirtDepth = Math.max(80, tile.size * .014);
+      const addSkirt = (a, b) => {
+        const k = positions.length / 3;
+        for (const [id, drop] of [[a, 0], [b, 0], [a, skirtDepth], [b, skirtDepth]]) {
+          positions.push(positions[id * 3], positions[id * 3 + 1] - drop, positions[id * 3 + 2]);
+          colors.push(colors[id * 3] * .88, colors[id * 3 + 1] * .88, colors[id * 3 + 2] * .88);
+          uvs.push(uvs[id * 2], uvs[id * 2 + 1]);
+        }
+        indices.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
+      };
+      for (let i = 0; i < N; i++) {
+        addSkirt(i + 1, i);
+        addSkirt(N * (N + 1) + i, N * (N + 1) + i + 1);
+        addSkirt(i * (N + 1), (i + 1) * (N + 1));
+        addSkirt((i + 1) * (N + 1) + N, i * (N + 1) + N);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      geometry.computeBoundingSphere();
+      const material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, vertexColors: true });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(tile.minX + tile.size / 2, 0, tile.minZ + tile.size / 2);
+      mesh.receiveShadow = true;
+      mesh.castShadow = tile.zoom >= 13;
+      mesh.visible = false;
+      mesh.userData.tile = tile;
+      tile.mesh = mesh;
+      this.group.add(mesh);
+
+      const preview = document.createElement("canvas");
+      preview.width = preview.height = 64;
+      const ctx = preview.getContext("2d");
+      const pixels = ctx.createImageData(64, 64);
+      for (let z = 0; z < 64; z++) for (let x = 0; x < 64; x++) {
+        heightColor(this.sampleDEM(tile, (x + .5) / 64, (z + .5) / 64), color).convertLinearToSRGB();
+        const i = (z * 64 + x) * 4;
+        pixels.data[i] = color.r * 255; pixels.data[i + 1] = color.g * 255;
+        pixels.data[i + 2] = color.b * 255; pixels.data[i + 3] = 255;
+      }
+      ctx.putImageData(pixels, 0, 0);
+      tile.preview = preview;
+    }
+    request(tile, priority) {
+      if (tile.status === "ready") {
+        if (state.imagery) this.requestImage(tile, priority);
+        return;
+      }
+      if (tile.status === "loading" || tile.status === "queued" || performance.now() < tile.retryAt) return;
+      tile.status = "queued";
+      demQueue.add(async () => {
+        if (!this.desired.has(tile.key) && performance.now() - tile.lastNeeded > 7000) {
+          tile.status = "idle";
+          return;
+        }
+        tile.status = "loading";
+        let img;
+        try {
+          try {
+            img = await loadImage(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${tile.key}.png`);
+          } catch {
+            img = await loadImage(`https://elevation-tiles-prod.s3.amazonaws.com/terrarium/${tile.key}.png`);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 256;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0, 256, 256);
+          const rgba = ctx.getImageData(0, 0, 256, 256).data;
+          const heights = new Float32Array(256 * 256);
+          let invalid = 0;
+          for (let i = 0; i < heights.length; i++) {
+            const j = i * 4;
+            const h = rgba[j] * 256 + rgba[j + 1] + rgba[j + 2] / 256 - 32768;
+            if (h < -1000 || h > 9000 || rgba[j + 3] === 0) invalid++;
+            heights[i] = h;
+          }
+          if (invalid) throw new Error("Elevation tile contains missing samples");
+          tile.dem = heights;
+          this.build(tile);
+          tile.status = "ready";
+          this.updateVisibility();
+          if (state.imagery) this.requestImage(tile, priority);
+        } catch (error) {
+          tile.status = "error";
+          tile.retryAt = performance.now() + 90000;
+          if (!this.errorNotified && !this.active.length) {
+            this.errorNotified = true;
+            toast("The elevation source is slow or unavailable. Data & help → Retry will reconnect.", 7000);
+          }
+        }
+      }, priority).catch(() => { tile.status = "error"; tile.retryAt = performance.now() + 90000; });
+    }
+    requestImage(tile, priority) {
+      if (tile.imageStatus === "ready" || tile.imageStatus === "loading" || !tile.mesh) return;
+      if (tile.imageStatus === "error" && performance.now() < (tile.imageRetryAt || 0)) return;
+      tile.imageStatus = "loading";
+      imageQueue.add(async () => {
+        if (!tile.mesh) { tile.imageStatus = "idle"; return; }
+        try {
+          const image = await loadImage(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${tile.zoom}/${tile.y}/${tile.x}`);
+          if (!tile.mesh) { tile.imageStatus = "idle"; return; }
+          tile.image = image;
+          tile.texture = new THREE.Texture(image);
+          tile.texture.colorSpace = THREE.SRGBColorSpace;
+          tile.texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+          tile.texture.needsUpdate = true;
+          tile.imageStatus = "ready";
+          this.applyStyle(tile);
+        } catch {
+          tile.imageStatus = "error";
+          tile.imageRetryAt = performance.now() + 120000;
+        }
+      }, priority).catch(() => { tile.imageStatus = "error"; });
+    }
+    applyStyle(tile) {
+      if (!tile.mesh) return;
+      tile.mesh.material.map = state.imagery && tile.texture ? tile.texture : null;
+      tile.mesh.material.vertexColors = !tile.mesh.material.map;
+      tile.mesh.material.needsUpdate = true;
+    }
+    setStyle() {
+      for (const tile of this.tiles.values()) {
+        this.applyStyle(tile);
+        if (state.imagery && this.desired.has(tile.key)) this.requestImage(tile, 5);
+      }
+    }
+    focus(x, z, zoom = 14) {
+      this.force = { x, z, zoom, until: performance.now() + 24000 };
+      this.updateLOD(true);
+    }
+    updateLOD(force = false) {
+      const now = performance.now();
+      if (!force && now - this.lastLOD < 800) return;
+      this.lastLOD = now;
+      this.desired.clear();
+      for (const tile of this.tiles.values()) tile.split = false;
+      const maxZoom = state.detail === "fast" ? 14 : 15;
+      const cx = camera.position.x, cz = camera.position.z;
+      const altitude = Math.max(25, camera.position.y - this.heightAt(cx, cz));
+      const forced = this.force && this.force.until > now ? this.force : null;
+      const visit = tile => {
+        this.desired.add(tile.key);
+        tile.lastNeeded = now;
+        const distance = distanceToBox(cx, cz, tile);
+        const distance3D = Math.hypot(distance, altitude * .8);
+        const isCounty = boxesIntersect(tile, countyBox);
+        const overviewMinimum = state.mode === "explore" && altitude > 15000 && isCounty ? 11 : ROOT_Z;
+        const containsForced = forced && forced.x >= tile.minX && forced.x < tile.maxX &&
+          forced.z >= tile.minZ && forced.z < tile.maxZ && tile.zoom < Math.min(forced.zoom, maxZoom);
+        tile.split = tile.zoom < maxZoom &&
+          (tile.zoom < overviewMinimum || tile.size > distance3D * 1.65 || containsForced);
+        const fd = forced ? distanceToBox(forced.x, forced.z, tile) : Infinity;
+        this.request(tile, (tile.zoom - ROOT_Z) * 2 + Math.min(distance, fd) / 2500);
+        if (tile.split) {
+          const children = this.children(tile).slice().sort((a, b) =>
+            distanceToBox(cx, cz, a) - distanceToBox(cx, cz, b));
+          for (const child of children) visit(child);
+        }
+      };
+      for (const root of this.roots.slice().sort((a, b) => distanceToBox(cx, cz, a) - distanceToBox(cx, cz, b))) visit(root);
+      this.updateVisibility();
+      if (now - this.lastEvict > 15000) { this.lastEvict = now; this.evict(); }
+    }
+    updateVisibility() {
+      for (const tile of this.tiles.values()) if (tile.mesh) tile.mesh.visible = false;
+      const active = [];
+      const visit = tile => {
+        if (!tile.mesh) return;
+        if (tile.split && tile.children && tile.children.every(c => c.mesh)) {
+          for (const child of tile.children) visit(child);
+        } else {
+          tile.mesh.visible = true;
+          active.push(tile);
+        }
+      };
+      for (const root of this.roots) visit(root);
+      const signature = active.map(t => t.key).sort().join("|");
+      if (signature !== this.activeSignature) {
+        this.activeSignature = signature;
+        this.revision++;
+        markGeometryDirty();
+      }
+      this.active = active;
+    }
+    surfaceTile(x, z) {
+      for (let zoom = 15; zoom >= ROOT_Z; zoom--) {
+        const p = tileXY(x, z, zoom);
+        const tile = this.tiles.get(`${zoom}/${p.x}/${p.y}`);
+        if (tile?.mesh?.visible && tile.heights) return tile;
+      }
+      return null;
+    }
+    heightAt(x, z) {
+      const tile = this.surfaceTile(x, z);
+      if (!tile) return DEFAULT_HEIGHT;
+      const N = tile.N;
+      const u = clamp((x - tile.minX) / tile.size * N, 0, N - .000001);
+      const v = clamp((z - tile.minZ) / tile.size * N, 0, N - .000001);
+      const ix = Math.floor(u), iz = Math.floor(v), fx = u - ix, fz = v - iz;
+      const i = iz * (N + 1) + ix;
+      const a = tile.heights[i], b = tile.heights[i + 1];
+      const c = tile.heights[i + N + 1], d = tile.heights[i + N + 2];
+      // Match the actual rendered triangles, rather than a different bilinear surface.
+      return fx + fz <= 1 ? a + (b - a) * fx + (c - a) * fz :
+        d + (c - d) * (1 - fx) + (b - d) * (1 - fz);
+    }
+    evict() {
+      const ready = [...this.tiles.values()].filter(t => t.mesh);
+      let excess = ready.length - (mobile ? 150 : 220);
+      if (excess <= 0) return;
+      const candidates = ready.filter(t => !this.desired.has(t.key) && !t.mesh.visible && t.zoom !== ROOT_Z)
+        .sort((a, b) => a.lastNeeded - b.lastNeeded);
+      for (const tile of candidates) {
+        if (excess <= 0 || performance.now() - tile.lastNeeded < 18000) break;
+        this.group.remove(tile.mesh);
+        tile.mesh.geometry.dispose(); tile.mesh.material.dispose(); tile.texture?.dispose();
+        tile.mesh = tile.texture = tile.image = tile.preview = tile.dem = tile.heights = null;
+        tile.status = tile.imageStatus = "idle";
+        excess--;
+      }
+    }
+    retry() {
+      for (const t of this.tiles.values()) {
+        if (t.status === "error") { t.status = "idle"; t.retryAt = 0; }
+        if (t.imageStatus === "error") { t.imageStatus = "idle"; t.imageRetryAt = 0; }
+      }
+      this.errorNotified = false;
+      this.updateLOD(true);
+    }
+    metrics() {
+      let loaded = 0, images = 0, failed = 0;
+      for (const t of this.tiles.values()) {
+        if (t.mesh) loaded++;
+        if (t.image) images++;
+        if (this.desired.has(t.key) && t.status === "error") failed++;
+      }
+      return { loaded, images, failed };
+    }
+  }
+  const terrain = new Terrain();
+
+  const ROAD_RE = "^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street|service|track)$";
+  const MAIN_RE = "^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link)$";
+  const roadDefaults = {
+    motorway: [8, 65], motorway_link: [5, 35], trunk: [8, 60], trunk_link: [5, 35],
+    primary: [8, 50], primary_link: [5, 30], secondary: [7.5, 45], secondary_link: [5, 30],
+    tertiary: [7, 35], tertiary_link: [5, 25], unclassified: [6, 30], residential: [6.5, 25],
+    living_street: [4, 10], service: [4.5, 15], track: [3.5, 15]
+  };
+  function parseMeters(value) {
+    if (!value) return NaN;
+    const v = parseFloat(value);
+    return /ft|feet|'/.test(String(value)) ? v * .3048 : v;
+  }
+  function roadDescription(tags) {
+    if (tags.name && tags.ref && !tags.name.includes(tags.ref)) return `${tags.name} · ${tags.ref}`;
+    return tags.name || tags.ref || ({
+      residential: "Residential street", service: "Access road", track: "Unpaved track",
+      unclassified: "Local road", living_street: "Shared street"
+    }[tags.highway]) || (tags.highway || "Road").replaceAll("_", " ");
+  }
+
+  class RoadNetwork {
+    constructor() {
+      this.ways = new Map(); this.nodes = new Map(); this.edges = [];
+      this.cells = new Map(); this.hash = new Map(); this.hashSize = 220;
+      this.cellSize = 3000; this.totalLength = 0; this.countyStatus = "idle";
+      this.errorNotified = false;
+    }
+    node(id, x, z) {
+      let n = this.nodes.get(id);
+      if (!n) { n = { id, x, z, edges: [] }; this.nodes.set(id, n); }
+      return n;
+    }
+    add(data) {
+      let count = 0;
+      for (const element of data.elements || []) {
+        const tags = element.tags || {};
+        if (element.type !== "way" || !tags.highway || !roadDefaults[tags.highway] || !element.geometry || this.ways.has(element.id)) continue;
+        const def = roadDefaults[tags.highway];
+        const lanes = parseFloat(tags.lanes);
+        let width = parseMeters(tags.width);
+        if (!Number.isFinite(width)) width = Number.isFinite(lanes) ? lanes * 3.15 + .5 : def[0];
+        width = clamp(width, 2.5, 25);
+        let limit = def[1] * .44704;
+        const maxspeed = parseFloat(tags.maxspeed);
+        const actualLimit = Number.isFinite(maxspeed) && maxspeed > 0;
+        if (actualLimit) limit = maxspeed / (/mph/i.test(tags.maxspeed) ? 2.236936 : 3.6);
+        let oneway = /^(yes|1|true)$/i.test(tags.oneway || "") || tags.junction === "roundabout" ? 1 : 0;
+        if (tags.oneway === "-1") oneway = -1;
+        if (/^(no|0|false)$/i.test(tags.oneway || "")) oneway = 0;
+        const allowed = !/^(private|no)$/i.test(tags.access || "") &&
+          !/^(private|no)$/i.test(tags.motor_vehicle || "") && !/^no$/i.test(tags.vehicle || "");
+        const way = {
+          id: element.id, tags, highway: tags.highway, width, limit, actualLimit, oneway, allowed,
+          name: roadDescription(tags), edges: [], points: [], total: 0,
+          major: /^(motorway|trunk|primary|secondary)/.test(tags.highway),
+          dirt: tags.highway === "track" || /^(unpaved|gravel|dirt|ground|sand|compacted|fine_gravel)$/.test(tags.surface || "")
+        };
+        for (let i = 0; i < element.geometry.length; i++) {
+          const g = element.geometry[i];
+          if (!g || !Number.isFinite(g.lat)) { way.points.push(null); continue; }
+          const p = project(g.lon, g.lat);
+          const id = element.nodes?.[i] ?? `${g.lon.toFixed(7)},${g.lat.toFixed(7)}`;
+          way.points.push({ id, ...p });
+        }
+        for (let i = 0; i < way.points.length - 1; i++) {
+          const p = way.points[i], q = way.points[i + 1];
+          if (!p || !q) continue;
+          const length = Math.hypot(q.x - p.x, q.z - p.z);
+          if (length < .2 || length > 50000) continue;
+          const b = { minX: Math.min(p.x, q.x), minZ: Math.min(p.z, q.z), maxX: Math.max(p.x, q.x), maxZ: Math.max(p.z, q.z) };
+          if (!boxesIntersect(b, terrain.bounds)) continue;
+          const a = this.node(p.id, p.x, p.z), end = this.node(q.id, q.x, q.z);
+          const edge = { id: `${way.id}:${i}`, a, b: end, length, way, start: way.total, box: b, heading: Math.atan2(q.x - p.x, -(q.z - p.z)) };
+          way.total += length;
+          way.edges.push(edge); this.edges.push(edge);
+          if (allowed) { a.edges.push(edge); end.edges.push(edge); }
+          this.totalLength += length;
+          const seen = new Set();
+          const steps = Math.ceil(length / (this.hashSize * .45));
+          for (let s = 0; s <= steps; s++) {
+            const x = Math.floor(mix(a.x, end.x, s / steps) / this.hashSize);
+            const z = Math.floor(mix(a.z, end.z, s / steps) / this.hashSize);
+            const key = `${x},${z}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (!this.hash.has(key)) this.hash.set(key, new Set());
+            this.hash.get(key).add(edge);
+          }
+        }
+        this.ways.set(way.id, way); count++;
+      }
+      if (count) markGeometryDirty();
+      return count;
+    }
+    candidates(x, z, radius) {
+      const result = new Set(), s = this.hashSize;
+      for (let iz = Math.floor((z - radius) / s); iz <= Math.floor((z + radius) / s); iz++) {
+        for (let ix = Math.floor((x - radius) / s); ix <= Math.floor((x + radius) / s); ix++) {
+          const bucket = this.hash.get(`${ix},${iz}`);
+          if (bucket) for (const edge of bucket) result.add(edge);
+        }
+      }
+      return result;
+    }
+    nearest(x, z, radius = 400) {
+      let best = null, bestSq = radius * radius;
+      for (const e of this.candidates(x, z, radius)) {
+        if (!e.way.allowed) continue;
+        const dx = e.b.x - e.a.x, dz = e.b.z - e.a.z;
+        const t = clamp(((x - e.a.x) * dx + (z - e.a.z) * dz) / (e.length * e.length), 0, 1);
+        const px = e.a.x + dx * t, pz = e.a.z + dz * t;
+        const sq = (x - px) ** 2 + (z - pz) ** 2;
+        if (sq < bestSq) { bestSq = sq; best = { edge: e, t, x: px, z: pz, distance: Math.sqrt(sq) }; }
+      }
+      return best;
+    }
+    outgoing(node, obeyOneway = true) {
+      const result = [];
+      for (const edge of node.edges) {
+        const dir = edge.a.id === node.id ? 1 : -1;
+        if (!obeyOneway || !edge.way.oneway || edge.way.oneway === dir) result.push({ edge, dir });
+      }
+      return result;
+    }
+    ensureAt(x, z, priority = 0, force = false) {
+      const ix = Math.floor(x / this.cellSize), iz = Math.floor(z / this.cellSize);
+      const key = `${ix},${iz}`;
+      const old = this.cells.get(key);
+      if (old?.status === "ready" && !force) return Promise.resolve(true);
+      if (old?.status === "loading") return old.promise;
+      if (old?.status === "error" && performance.now() < old.retryAt && !force) return Promise.resolve(false);
+      const pad = 140;
+      const bounds = {
+        minX: ix * this.cellSize - pad, minZ: iz * this.cellSize - pad,
+        maxX: (ix + 1) * this.cellSize + pad, maxZ: (iz + 1) * this.cellSize + pad
+      };
+      const query = `[out:json][timeout:20];way["highway"~"${ROAD_RE}"](${bboxString(bounds)});out body geom;`;
+      const cell = { status: "loading", retryAt: 0 };
+      this.cells.set(key, cell);
+      cell.promise = fetchOSM(query, `roads-v3:${key}`, priority, "local roads").then(data => {
+        this.add(data); cell.status = "ready"; this.errorNotified = false; return true;
+      }).catch(() => {
+        cell.status = "error"; cell.retryAt = performance.now() + 90000;
+        if (!this.errorNotified && !this.edges.length) {
+          this.errorNotified = true;
+          toast("OSM is unavailable. You can free-drive on the imagery; retry road data in Data & help.", 8500);
+        }
+        return false;
+      });
+      return cell.promise;
+    }
+    ensureCounty(force = false) {
+      if ((this.countyStatus === "loading" || this.countyStatus === "ready") && !force) return;
+      this.countyStatus = "loading";
+      const query = `[out:json][timeout:20];way["highway"~"${MAIN_RE}"](${bboxString(countyBox)});out body geom;`;
+      fetchOSM(query, "county-major-roads-v3:49053", 5, "county highways").then(data => {
+        this.add(data); this.countyStatus = "ready"; overviewDirty = true;
+      }).catch(() => { this.countyStatus = "error"; });
+    }
+    retry() {
+      for (const cell of this.cells.values()) if (cell.status === "error") cell.retryAt = 0;
+      this.errorNotified = false;
+      this.ensureAt(car.x, car.z, 0);
+      if (state.countyView && this.countyStatus === "error") this.ensureCounty(true);
+    }
+  }
+  const roads = new RoadNetwork();
+
+  class Buildings {
+    constructor() {
+      this.items = new Map(); this.cells = new Map(); this.hash = new Map();
+      this.cellSize = 1400; this.hashSize = 150;
+      this.group = new THREE.Group(); scene.add(this.group);
+      this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .96, side: THREE.DoubleSide });
+    }
+    add(data) {
+      for (const e of data.elements || []) {
+        if (e.type !== "way" || !e.tags?.building || !e.geometry || this.items.has(e.id)) continue;
+        const points = e.geometry.filter(g => g && Number.isFinite(g.lat)).map(g => project(g.lon, g.lat));
+        if (points.length < 4 || points.length > 180) continue;
+        if (Math.hypot(points[0].x - points.at(-1).x, points[0].z - points.at(-1).z) < 1) points.pop();
+        else continue;
+        if (points.length < 3) continue;
+        const box = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
+        let x = 0, z = 0;
+        for (const p of points) {
+          x += p.x; z += p.z;
+          box.minX = Math.min(box.minX, p.x); box.maxX = Math.max(box.maxX, p.x);
+          box.minZ = Math.min(box.minZ, p.z); box.maxZ = Math.max(box.maxZ, p.z);
+        }
+        if (!boxesIntersect(box, terrain.bounds)) continue;
+        let height = parseMeters(e.tags.height);
+        if (!Number.isFinite(height)) {
+          const levels = parseFloat(e.tags["building:levels"]);
+          height = Number.isFinite(levels) ? levels * 3.1 : /apartments|commercial|hotel|office|retail/.test(e.tags.building) ? 7 : 4;
+        }
+        const b = { id: e.id, points, box, x: x / points.length, z: z / points.length, height: clamp(height, 2, 120), polygon: points.map(p => [p.x, p.z]) };
+        this.items.set(e.id, b);
+        for (let iz = Math.floor(box.minZ / this.hashSize); iz <= Math.floor(box.maxZ / this.hashSize); iz++) {
+          for (let ix = Math.floor(box.minX / this.hashSize); ix <= Math.floor(box.maxX / this.hashSize); ix++) {
+            const key = `${ix},${iz}`;
+            if (!this.hash.has(key)) this.hash.set(key, []);
+            this.hash.get(key).push(b);
+          }
+        }
+      }
+      geometryDirty = true;
+    }
+    ensureAt(x, z, force = false) {
+      if (!state.buildings) return;
+      const ix = Math.floor(x / this.cellSize), iz = Math.floor(z / this.cellSize), key = `${ix},${iz}`;
+      const old = this.cells.get(key);
+      if (old && old.status !== "error") return;
+      if (old && performance.now() < old.retryAt && !force) return;
+      const b = {
+        minX: ix * this.cellSize - 50, minZ: iz * this.cellSize - 50,
+        maxX: (ix + 1) * this.cellSize + 50, maxZ: (iz + 1) * this.cellSize + 50
+      };
+      const cell = { status: "loading", retryAt: 0 };
+      this.cells.set(key, cell);
+      fetchOSM(`[out:json][timeout:20];way["building"]["building"!="no"](${bboxString(b)});out body geom;`,
+        `buildings-v3:${key}`, 10, "building footprints").then(data => {
+        this.add(data); cell.status = "ready";
+      }).catch(() => { cell.status = "error"; cell.retryAt = performance.now() + 120000; });
+    }
+    contains(x, z) {
+      if (!state.buildings) return false;
+      const list = this.hash.get(`${Math.floor(x / this.hashSize)},${Math.floor(z / this.hashSize)}`);
+      if (!list) return false;
+      return list.some(b => x >= b.box.minX && x <= b.box.maxX && z >= b.box.minZ && z <= b.box.maxZ && insideRing(x, z, b.polygon));
+    }
+    rebuild(focus) {
+      clearGeometryGroup(this.group);
+      this.group.visible = state.buildings;
+      if (!state.buildings) return;
+      const ox = Math.round(focus.x / 500) * 500, oz = Math.round(focus.z / 500) * 500;
+      this.group.position.set(ox, 0, oz);
+      const positions = [], colors = [];
+      const candidates = [...this.items.values()].filter(b => Math.hypot(b.x - focus.x, b.z - focus.z) < 2100)
+        .sort((a, b) => Math.hypot(a.x - focus.x, a.z - focus.z) - Math.hypot(b.x - focus.x, b.z - focus.z)).slice(0, mobile ? 1300 : 2400);
+      const wall = new THREE.Color(), roof = new THREE.Color();
+      const vertex = (p, y, color) => {
+        positions.push(p.x - ox, y, p.z - oz); colors.push(color.r, color.g, color.b);
+      };
+      for (const b of candidates) {
+        if (!terrain.surfaceTile(b.x, b.z)) continue;
+        const heights = b.points.map(p => terrain.heightAt(p.x, p.z));
+        const bottom = Math.min(...heights) - .7, top = Math.max(...heights) + b.height;
+        wall.setHSL(.095 + (b.id % 11) * .002, .12, .57 + (b.id % 7) * .025);
+        roof.copy(wall).multiplyScalar(.84);
+        for (let i = 0; i < b.points.length; i++) {
+          const a = b.points[i], c = b.points[(i + 1) % b.points.length];
+          vertex(a, bottom, wall); vertex(c, bottom, wall); vertex(a, top, wall);
+          vertex(c, bottom, wall); vertex(c, top, wall); vertex(a, top, wall);
+        }
+        const shape = b.points.map(p => new THREE.Vector2(p.x - b.x, -(p.z - b.z)));
+        const triangles = THREE.ShapeUtils.triangulateShape(shape, []);
+        for (const face of triangles) {
+          let a = b.points[face[0]], c = b.points[face[1]], d = b.points[face[2]];
+          if ((c.z - a.z) * (d.x - a.x) - (c.x - a.x) * (d.z - a.z) < 0) [c, d] = [d, c];
+          vertex(a, top, roof); vertex(c, top, roof); vertex(d, top, roof);
+        }
+      }
+      if (!positions.length) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      g.computeVertexNormals(); g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(g, this.material);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      this.group.add(mesh);
+    }
+  }
+
+  function clearGeometryGroup(group) {
+    while (group.children.length) {
+      const child = group.children[0];
+      group.remove(child);
+      child.geometry?.dispose();
+    }
+  }
+  const buildings = new Buildings();
+  const roadGroup = new THREE.Group(), overviewGroup = new THREE.Group(), boundaryGroup = new THREE.Group();
+  scene.add(roadGroup, overviewGroup, boundaryGroup);
+  const roadMaterials = [
+    new THREE.MeshStandardMaterial({ color: "#9d9280", roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+    new THREE.MeshStandardMaterial({ color: "#4a4e4b", roughness: .98, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    new THREE.MeshStandardMaterial({ color: "#aa9579", roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    new THREE.MeshStandardMaterial({ color: "#dfded0", roughness: .95, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
+    new THREE.MeshStandardMaterial({ color: "#edbd5e", roughness: .95, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 })
+  ];
+  const overviewMaterials = [
+    new THREE.LineBasicMaterial({ color: "#bac9c4", transparent: true, opacity: .35, depthTest: false, depthWrite: false }),
+    new THREE.LineBasicMaterial({ color: "#ffe0a5", transparent: true, opacity: .8, depthTest: false, depthWrite: false })
+  ];
+  const boundaryMaterial = new THREE.LineBasicMaterial({ color: "#9bffe0", transparent: true, opacity: .9, depthTest: false, depthWrite: false });
+
+  function localFocus() {
+    if (state.mode === "explore" && camera.position.distanceTo(controls.target) < 6000) {
+      return { x: controls.target.x, z: controls.target.z };
+    }
+    return { x: car.x, z: car.z };
+  }
+
+  function rebuildRoadMeshes(focus) {
+    clearGeometryGroup(roadGroup);
+    const ox = Math.round(focus.x / 500) * 500, oz = Math.round(focus.z / 500) * 500;
+    roadGroup.position.set(ox, 0, oz);
+    const arrays = [[], [], [], [], []];
+    let pieces = 0;
+    const ribbon = (arr, x0, z0, x1, z1, nx, nz, width, offset, raise) => {
+      const h = width / 2;
+      const ax = x0 + nx * (offset + h), az = z0 + nz * (offset + h);
+      const bx = x0 + nx * (offset - h), bz = z0 + nz * (offset - h);
+      const cx = x1 + nx * (offset + h), cz = z1 + nz * (offset + h);
+      const dx = x1 + nx * (offset - h), dz = z1 + nz * (offset - h);
+      const ay = terrain.heightAt(ax, az) + raise, by = terrain.heightAt(bx, bz) + raise;
+      const cy = terrain.heightAt(cx, cz) + raise, dy = terrain.heightAt(dx, dz) + raise;
+      arr.push(
+        ax-ox, ay, az-oz, cx-ox, cy, cz-oz, bx-ox, by, bz-oz,
+        bx-ox, by, bz-oz, cx-ox, cy, cz-oz, dx-ox, dy, dz-oz
+      );
+    };
+    const nearby = [...roads.candidates(focus.x, focus.z, 2700)].sort((a, b) =>
+      distanceToBox(focus.x, focus.z, a.box) - distanceToBox(focus.x, focus.z, b.box));
+    for (const edge of nearby) {
+      if (pieces > (mobile ? 18000 : 32000)) break;
+      const distance = distanceToBox(focus.x, focus.z, edge.box);
+      if (distance > 2600) continue;
+      const way = edge.way, width = way.width;
+      const step = distance < 650 ? 7 : distance < 1600 ? 12 : 23;
+      const count = Math.ceil(edge.length / step);
+      const dx = (edge.b.x - edge.a.x) / edge.length, dz = (edge.b.z - edge.a.z) / edge.length;
+      const nx = -dz, nz = dx;
+      for (let i = 0; i < count; i++) {
+        const s0 = edge.length * i / count, s1 = edge.length * (i + 1) / count;
+        const x0 = edge.a.x + dx * s0, z0 = edge.a.z + dz * s0;
+        const x1 = edge.a.x + dx * s1, z1 = edge.a.z + dz * s1;
+        if (Math.hypot((x0+x1)/2-focus.x, (z0+z1)/2-focus.z) > 2800 || !terrain.surfaceTile(x0, z0)) continue;
+        if (!way.dirt) ribbon(arrays[0], x0, z0, x1, z1, nx, nz, width + .8, 0, .17);
+        ribbon(arrays[way.dirt ? 2 : 1], x0, z0, x1, z1, nx, nz, width, 0, .24);
+        if (!way.dirt && way.major && distance < 1800) {
+          if (!way.oneway && width >= 6) {
+            ribbon(arrays[4], x0, z0, x1, z1, nx, nz, .115, -.13, .285);
+            ribbon(arrays[4], x0, z0, x1, z1, nx, nz, .115, .13, .285);
+          } else if (width > 6 && Math.floor((edge.start + s0) / 9) % 2 === 0) {
+            ribbon(arrays[3], x0, z0, x1, z1, nx, nz, .12, 0, .285);
+          }
+          ribbon(arrays[3], x0, z0, x1, z1, nx, nz, .11, width / 2 - .25, .285);
+          ribbon(arrays[3], x0, z0, x1, z1, nx, nz, .11, -width / 2 + .25, .285);
+        }
+        pieces++;
+      }
+    }
+    for (let i = 0; i < arrays.length; i++) {
+      if (!arrays[i].length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(arrays[i], 3));
+      g.computeVertexNormals(); g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(g, roadMaterials[i]);
+      mesh.receiveShadow = true; mesh.renderOrder = i + 1;
+      roadGroup.add(mesh);
+    }
+  }
+
+  function rebuildOverview() {
+    clearGeometryGroup(overviewGroup);
+    const buffers = [[], []];
+    for (const e of roads.edges) {
+      const arr = buffers[e.way.major ? 1 : 0];
+      arr.push(e.a.x, terrain.heightAt(e.a.x, e.a.z) + 14, e.a.z,
+        e.b.x, terrain.heightAt(e.b.x, e.b.z) + 14, e.b.z);
+    }
+    buffers.forEach((p, i) => {
+      if (!p.length) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+      const lines = new THREE.LineSegments(g, overviewMaterials[i]);
+      lines.renderOrder = 8 + i; overviewGroup.add(lines);
+    });
+    rebuildBoundary();
+    overviewDirty = false;
+  }
+
+  function geometryPolygons(geometry) {
+    return geometry.type === "Polygon" ? [geometry.coordinates] :
+      geometry.type === "MultiPolygon" ? geometry.coordinates : [];
+  }
+  function pointInCounty(lon, lat) {
+    if (!countyGeometry) {
+      const p = project(lon, lat);
+      return p.x >= countyBox.minX && p.x <= countyBox.maxX && p.z >= countyBox.minZ && p.z <= countyBox.maxZ;
+    }
+    return geometryPolygons(countyGeometry).some(poly =>
+      insideRing(lon, lat, poly[0]) && !poly.slice(1).some(hole => insideRing(lon, lat, hole)));
+  }
+  function rebuildBoundary() {
+    clearGeometryGroup(boundaryGroup);
+    if (!countyGeometry) return;
+    for (const polygon of geometryPolygons(countyGeometry)) {
+      const ring = polygon[0], positions = [];
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = project(ring[i][0], ring[i][1]), b = project(ring[i + 1][0], ring[i + 1][1]);
+        const n = Math.max(1, Math.ceil(Math.hypot(b.x-a.x, b.z-a.z) / 600));
+        for (let j = 0; j < n; j++) {
+          const x = mix(a.x, b.x, j/n), z = mix(a.z, b.z, j/n);
+          positions.push(x, terrain.heightAt(x, z) + 35, z);
+        }
+      }
+      if (positions.length) positions.push(positions[0], positions[1], positions[2]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      const line = new THREE.Line(g, boundaryMaterial);
+      line.renderOrder = 12;
+      boundaryGroup.add(line);
+    }
+  }
+  function applyCounty(data) {
+    countyGeometry = data.geometry; countySource = data.source; boundaryFailed = false;
+    const b = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity };
+    for (const polygon of geometryPolygons(countyGeometry)) for (const coordinate of polygon[0]) {
+      const p = project(coordinate[0], coordinate[1]);
+      b.minX = Math.min(b.minX, p.x); b.maxX = Math.max(b.maxX, p.x);
+      b.minZ = Math.min(b.minZ, p.z); b.maxZ = Math.max(b.maxZ, p.z);
+    }
+    countyBox = b; terrain.setBounds(b); terrain.updateLOD(true);
+    overviewDirty = true; rebuildBoundary();
+  }
+  async function loadCounty() {
+    if (boundaryPromise) return boundaryPromise;
+    boundaryFailed = false;
+    boundaryPromise = (async () => {
+      const saved = await cache.get("county-outline-49053-v3", 30 * 86400000);
+      if (saved?.geometry) { applyCounty(saved); return; }
+      let result;
+      try {
+        const url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?" +
+          new URLSearchParams({
+            where: "GEOID='49053'", outFields: "NAME,GEOID", returnGeometry: "true",
+            outSR: "4326", maxAllowableOffset: "0.0004", f: "geojson"
+          });
+        const data = await fetchJSON(url, {}, 12000);
+        const f = data.features?.find(f => f.properties?.GEOID === "49053") || (data.features?.length === 1 ? data.features[0] : null);
+        if (!f?.geometry || !geometryPolygons(f.geometry).length) throw new Error("County boundary not returned");
+        result = { geometry: f.geometry, source: "U.S. Census TIGERweb · FIPS 49053" };
+      } catch {
+        const data = await fetchJSON("https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json", {}, 20000);
+        const f = data.features?.find(f => String(f.id) === "49053" || f.properties?.GEOID === "49053");
+        if (!f?.geometry) throw new Error("County boundary unavailable");
+        result = { geometry: f.geometry, source: "Census-derived generalized outline · Plotly dataset" };
+      }
+      applyCounty(result); cache.put("county-outline-49053-v3", result);
+    })().catch(() => { boundaryFailed = true; }).finally(() => { boundaryPromise = null; });
+    return boundaryPromise;
+  }
+
+  // A 4.1 m long, meter-scale hatchback. Its local forward direction is +Z.
+  const carModel = new THREE.Group();
+  carModel.rotation.order = "YXZ";
+  const paint = new THREE.MeshStandardMaterial({ color: "#f6b946", roughness: .35, metalness: .28 });
+  const trim = new THREE.MeshStandardMaterial({ color: "#263335", roughness: .65 });
+  const glass = new THREE.MeshStandardMaterial({ color: "#233d47", roughness: .18, metalness: .48 });
+  const rubber = new THREE.MeshStandardMaterial({ color: "#182024", roughness: .91 });
+  const metal = new THREE.MeshStandardMaterial({ color: "#acbab8", roughness: .3, metalness: .8 });
+  const roofPaint = new THREE.MeshStandardMaterial({ color: "#f1ecd9", roughness: .42, metalness: .1 });
+  const frontLight = new THREE.MeshStandardMaterial({ color: "#fff6d5", emissive: "#ffe2a5", emissiveIntensity: .8 });
+  const brakeLight = new THREE.MeshStandardMaterial({ color: "#c62f25", emissive: "#ff3922", emissiveIntensity: .35 });
+  const plateMaterial = new THREE.MeshStandardMaterial({ color: "#e2e9df", roughness: .7 });
+  function box(parent, material, w, h, d, x, y, z, radius = 0) {
+    const geometry = radius ? new RoundedBoxGeometry(w, h, d, 3, radius) : new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
+    return mesh;
+  }
+  box(carModel, trim, 1.6, .23, 3.53, 0, .43, 0, .06);
+  box(carModel, paint, 1.84, .58, 3.94, 0, .77, 0, .17);
+  box(carModel, glass, 1.51, .63, 1.94, 0, 1.27, -.28, .18);
+  box(carModel, roofPaint, 1.48, .105, 1.68, 0, 1.59, -.31, .05);
+  box(carModel, paint, 1.72, .17, 1.27, 0, 1.00, 1.15, .06);
+  box(carModel, paint, 1.67, .17, .5, 0, 1.02, -1.52, .07);
+  for (const x of [-.755, .755]) {
+    box(carModel, paint, .065, .52, .08, x, 1.30, -.27, .015);
+    box(carModel, paint, .065, .42, .085, x, 1.25, .50, .015);
+    box(carModel, paint, .07, .42, .10, x, 1.24, -1.02, .02);
+    box(carModel, metal, .03, .035, .20, x * 1.235, .99, -.14, .01);
+  }
+  for (const x of [-.55, .55]) {
+    box(carModel, frontLight, .48, .15, .06, x, .82, 1.968, .035);
+    box(carModel, brakeLight, .40, .16, .06, x, .82, -1.968, .025);
+  }
+  for (const z of [-2.0, 2.0]) box(carModel, trim, 1.62, .12, .075, 0, .54, z, .025);
+  box(carModel, trim, .65, .13, .07, 0, .68, 1.99, .025);
+  box(carModel, plateMaterial, .42, .13, .025, 0, .68, -2.013, .012);
+  for (const x of [-1, 1]) {
+    box(carModel, trim, .21, .08, .07, x * .91, 1.10, .50, .02);
+    box(carModel, paint, .18, .13, .23, x * 1.04, 1.13, .49, .055);
+  }
+  const wheelPivots = [];
+  const tireGeometry = new THREE.CylinderGeometry(.335, .335, .23, 20);
+  const rimGeometry = new THREE.CylinderGeometry(.185, .185, .24, 12);
+  tireGeometry.rotateZ(Math.PI / 2); rimGeometry.rotateZ(Math.PI / 2);
+  for (const x of [-.93, .93]) for (const z of [-1.24, 1.24]) {
+    const pivot = new THREE.Group(); pivot.position.set(x, .34, z);
+    const spin = new THREE.Group(); pivot.add(spin);
+    const tire = new THREE.Mesh(tireGeometry, rubber), rim = new THREE.Mesh(rimGeometry, metal);
+    tire.castShadow = true; rim.castShadow = true;
+    spin.add(tire, rim);
+    carModel.add(pivot);
+    wheelPivots.push({ pivot, spin, front: z > 0 });
+  }
+  scene.add(carModel);
+
+  const shadowCanvas = document.createElement("canvas");
+  shadowCanvas.width = shadowCanvas.height = 128;
+  const sc = shadowCanvas.getContext("2d");
+  const gradient = sc.createRadialGradient(64,64,12,64,64,64);
+  gradient.addColorStop(0,"rgba(0,0,0,.62)"); gradient.addColorStop(.6,"rgba(0,0,0,.32)"); gradient.addColorStop(1,"rgba(0,0,0,0)");
+  sc.fillStyle = gradient; sc.fillRect(0,0,128,128);
+  const shadowGroup = new THREE.Group();
+  const blob = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 5.15), new THREE.MeshBasicMaterial({
+    map: new THREE.CanvasTexture(shadowCanvas), transparent: true, opacity: .58,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4
+  }));
+  blob.rotation.x = -Math.PI / 2; blob.position.y = .025;
+  shadowGroup.add(blob); scene.add(shadowGroup);
+
+  function orientedHeading(track) { return wrap(track.edge.heading + (track.dir === 1 ? 0 : Math.PI)); }
+  function fromNode(track) { return track.dir === 1 ? track.edge.a : track.edge.b; }
+  function toNode(track) { return track.dir === 1 ? track.edge.b : track.edge.a; }
+  function setTurn(dir) {
+    if (!state.guide) return;
+    state.turn = dir; state.turnExpiry = performance.now() + 60000;
+    syncUI();
+  }
+  function snapToRoad(radius = 850, preserveHeading = true) {
+    const found = roads.nearest(car.x, car.z, radius);
+    if (!found) return false;
+    const edge = found.edge;
+    let dir = edge.way.oneway || (Math.cos(edge.heading - car.heading) >= 0 ? 1 : -1);
+    if (!preserveHeading && !edge.way.oneway) dir = 1;
+    car.track = { edge, dir, t: dir === 1 ? found.t : 1 - found.t };
+    car.x = found.x; car.z = found.z; car.heading = orientedHeading(car.track);
+    car.history = []; car.nearest = found; car.road = edge.way;
+    car.lastSafe = { x: car.x, z: car.z, heading: car.heading };
+    state.turn = 0; car.steer = 0;
+    markGeometryDirty();
+    return found;
+  }
+  function pickNext(track) {
+    const node = toNode(track), heading = orientedHeading(track);
+    const all = roads.outgoing(node);
+    let choices = all.filter(c => c.edge !== track.edge).map(c => ({
+      ...c, delta: wrap(orientedHeading(c) - heading)
+    }));
+    const notUTurn = choices.filter(c => Math.abs(c.delta) < 2.8);
+    if (notUTurn.length) choices = notUTurn;
+    if (!choices.length) {
+      const reverse = all.find(c => c.edge === track.edge);
+      if (reverse) {
+        car.speed = Math.min(car.speed, 3);
+        state.turn = 0;
+        return { ...reverse, t: 0 };
+      }
+      roads.ensureAt(node.x + Math.sin(heading) * 450, node.z - Math.cos(heading) * 450, 0);
+      return null;
+    }
+    const score = c => Math.abs(c.delta) - (c.edge.way.id === track.edge.way.id ? .1 : 0) + (c.edge.way.highway === "service" ? .1 : 0);
+    choices.sort((a,b) => score(a) - score(b));
+    let selected = choices[0];
+    if (state.turn && choices.length > 1) {
+      const turning = choices.filter(c => state.turn < 0 ? c.delta < -.25 : c.delta > .25);
+      if (turning.length) {
+        const goal = state.turn * Math.PI / 2;
+        turning.sort((a,b) => Math.abs(a.delta-goal) - Math.abs(b.delta-goal));
+        selected = turning[0];
+        state.turn = 0;
+      }
+    }
+    return { edge: selected.edge, dir: selected.dir, t: 0 };
+  }
+  function pickPrevious(track) {
+    const node = fromNode(track);
+    const previous = car.history.at(-1);
+    if (previous && toNode(previous).id === node.id) {
+      car.history.pop();
+      return { ...previous, t: 1 };
+    }
+    car.history.length = 0;
+    const backwardsHeading = wrap(orientedHeading(track) + Math.PI);
+    const choices = roads.outgoing(node, false).filter(c => c.edge !== track.edge);
+    choices.sort((a,b) => Math.abs(wrap(orientedHeading(a)-backwardsHeading)) - Math.abs(wrap(orientedHeading(b)-backwardsHeading)));
+    return choices.length ? { edge: choices[0].edge, dir: -choices[0].dir, t: 1 } : null;
+  }
+  function advanceTrack(distance) {
+    let remaining = distance, travelled = 0;
+    for (let iteration = 0; iteration < 24 && Math.abs(remaining) > .00001; iteration++) {
+      const track = car.track;
+      if (!track) break;
+      const forward = remaining > 0;
+      const room = (forward ? 1-track.t : track.t) * track.edge.length;
+      const amount = Math.min(Math.abs(remaining), room);
+      track.t += (forward ? amount : -amount) / track.edge.length;
+      travelled += amount;
+      remaining += forward ? -amount : amount;
+      if (Math.abs(remaining) < .00001) break;
+      const next = forward ? pickNext(track) : pickPrevious(track);
+      if (!next) { car.speed = 0; break; }
+      if (forward) {
+        car.history.push({ edge: track.edge, dir: track.dir, t: 1 });
+        if (car.history.length > 250) car.history.shift();
+      }
+      car.track = next;
+    }
+    if (car.track) {
+      const a = fromNode(car.track), b = toNode(car.track);
+      car.x = mix(a.x, b.x, car.track.t); car.z = mix(a.z, b.z, car.track.t);
+      car.road = car.track.edge.way;
+    }
+    return travelled;
+  }
+
+  function toggleGuide() {
+    if (state.guide) {
+      state.guide = false; state.cruise = false; car.track = null; state.turn = 0;
+      toast("Free steering: hold A/D to steer. R rejoins the nearest road.");
+    } else {
+      const found = snapToRoad(650);
+      if (!found) {
+        toast("No public road loaded nearby. Choose a place, wait for OSM, or retry data.");
+        syncUI(); return;
+      }
+      state.guide = true;
+      terrain.focus(car.x, car.z);
+      toast("Road guide: W/S controls speed. Tap A/D to choose the next junction.");
+    }
+    savePreferences(); syncUI();
+  }
+  function resetCar() {
+    if (state.spawnPending) return;
+    car.speed = 0; state.cruise = false; state.turn = 0;
+    let found = snapToRoad(1000);
+    if (!found && car.lastSafe) {
+      Object.assign(car, car.lastSafe);
+      found = snapToRoad(100);
+    }
+    if (found) {
+      if (!state.guide) car.track = null;
+      terrain.focus(car.x, car.z);
+      resetChaseCamera();
+      toast("Back on " + found.edge.way.name);
+    } else {
+      roads.ensureAt(car.x, car.z, 0, true);
+      toast("No road available here yet. Retrying OpenStreetMap…");
+    }
+  }
+  function toggleCruise() {
+    if (!state.guide || !car.track) {
+      toast("Cruise needs Road guide and a loaded road."); return;
+    }
+    state.cruise = !state.cruise;
+    state.paused = false;
+    syncUI();
+  }
+  function setPaused(value) {
+    state.paused = value; keys.clear(); syncUI();
+    if (value) toast("Paused. Press P or the play button to resume.");
+  }
+
+  function simulate(dt, now) {
+    if (state.turn && now > state.turnExpiry) state.turn = 0;
+    if (state.mode !== "drive" || state.paused || state.spawnPending || $("infoDialog").open) return;
+    if (!terrain.surfaceTile(car.x, car.z)) return;
+    const up = keys.has("KeyW") || keys.has("ArrowUp");
+    const down = keys.has("KeyS") || keys.has("ArrowDown");
+    const left = keys.has("KeyA") || keys.has("ArrowLeft");
+    const right = keys.has("KeyD") || keys.has("ArrowRight");
+    const handbrake = keys.has("Space");
+    if (down || handbrake) state.cruise = false;
+    const guided = state.guide && car.track;
+    if (!guided && now > car.nextNearCheck) {
+      car.nearest = roads.nearest(car.x, car.z, 60);
+      car.road = car.nearest && car.nearest.distance < car.nearest.edge.way.width * .7 ? car.nearest.edge.way : null;
+      car.nextNearCheck = now + 120;
+    }
+    const oldSpeed = car.speed;
+    let acceleration;
+    if (up) acceleration = car.speed < -.4 ? 10 : 4.5;
+    else if (down) acceleration = car.speed > .4 ? -10 : -3.1;
+    else if (state.cruise && guided) {
+      let target = Math.min(28, car.track.edge.way.limit * .88);
+      const remaining = (1 - car.track.t) * car.track.edge.length;
+      if (remaining < 30) {
+        const nexts = roads.outgoing(toNode(car.track)).filter(c => c.edge !== car.track.edge);
+        let bend = Math.PI;
+        for (const n of nexts) bend = Math.min(bend, Math.abs(wrap(orientedHeading(n) - orientedHeading(car.track))));
+        if (bend > .65) target = Math.min(target, 6 + remaining * .25);
+      }
+      acceleration = clamp((target-car.speed)*1.7, -5.5, 3.7);
+    } else acceleration = -Math.sign(car.speed) * (.62 + Math.abs(car.speed) * .075);
+    if (handbrake) acceleration = -Math.sign(car.speed) * 17;
+    car.speed += acceleration * dt;
+    if ((!up && !down && !state.cruise || handbrake) && oldSpeed * car.speed < 0) car.speed = 0;
+    car.speed = clamp(car.speed, -7, 44);
+    if (!guided && !car.road) car.speed = clamp(car.speed, -5, 10);
+    brakeLight.emissiveIntensity = down || handbrake ? 2.5 : .35;
+
+    if (guided) {
+      state.trip += advanceTrack(car.speed * dt);
+      const target = orientedHeading(car.track);
+      const delta = wrap(target - car.heading);
+      car.steer = damp(car.steer, clamp(delta * 1.4, -.55, .55), 9, dt);
+      car.heading = wrap(car.heading + delta * (1-Math.exp(-12*dt)));
+    } else {
+      const input = Number(right) - Number(left);
+      const steering = input * .59 / (1 + Math.abs(car.speed) * .043);
+      car.steer = damp(car.steer, steering, 8, dt);
+      car.heading = wrap(car.heading + car.speed / 2.48 * Math.tan(car.steer) * dt * (handbrake ? 1.25 : 1));
+      const x = car.x, z = car.z;
+      const fX = Math.sin(car.heading), fZ = -Math.cos(car.heading);
+      car.x += fX * car.speed * dt; car.z += fZ * car.speed * dt;
+      const rightX = Math.cos(car.heading), rightZ = Math.sin(car.heading);
+      const collision = buildings.contains(car.x, car.z) ||
+        buildings.contains(car.x + fX*1.65, car.z + fZ*1.65) ||
+        buildings.contains(car.x - fX*1.65, car.z - fZ*1.65) ||
+        buildings.contains(car.x + rightX*.8, car.z + rightZ*.8) ||
+        buildings.contains(car.x - rightX*.8, car.z - rightZ*.8);
+      if (collision || !terrain.surfaceTile(car.x, car.z)) {
+        car.x = x; car.z = z; car.speed *= -.1;
+      } else {
+        car.x = clamp(car.x, terrain.bounds.minX+10, terrain.bounds.maxX-10);
+        car.z = clamp(car.z, terrain.bounds.minZ+10, terrain.bounds.maxZ-10);
+        state.trip += Math.hypot(car.x-x, car.z-z);
+      }
+    }
+    car.wheelSpin += car.speed * dt / .335;
+    if (car.road && Math.abs(car.speed) > .2) {
+      car.lastSafe = { x: car.x, z: car.z, heading: car.heading };
+    }
+  }
+
+  function updateVehiclePose(dt) {
+    const onRoad = state.guide && car.track || car.road;
+    const raise = onRoad ? .30 : .06;
+    const targetY = terrain.heightAt(car.x, car.z) + raise;
+    if (Math.abs(targetY - car.y) > 12) {
+      const delta = targetY-car.y;
+      car.y = targetY;
+      if (state.mode === "drive") { camera.position.y += delta; cameraLook.y += delta; }
+    } else car.y = damp(car.y, targetY, 17, dt);
+    const fx = Math.sin(car.heading), fz = -Math.cos(car.heading);
+    const rx = Math.cos(car.heading), rz = Math.sin(car.heading);
+    const front = terrain.heightAt(car.x+fx*1.25, car.z+fz*1.25);
+    const rear = terrain.heightAt(car.x-fx*1.25, car.z-fz*1.25);
+    const left = terrain.heightAt(car.x-rx*.75, car.z-rz*.75);
+    const right = terrain.heightAt(car.x+rx*.75, car.z+rz*.75);
+    car.pitch = damp(car.pitch, clamp(-Math.atan2(front-rear,2.5), -.55,.55), 11,dt);
+    const lean = clamp(car.steer*car.speed*.006,-.07,.07);
+    car.roll = damp(car.roll, clamp(Math.atan2(left-right,1.5)+lean,-.4,.4),10,dt);
+    carModel.position.set(car.x,car.y,car.z);
+    carModel.rotation.set(car.pitch,Math.PI-car.heading,car.roll,"YXZ");
+    carModel.visible = !!terrain.surfaceTile(car.x,car.z);
+    shadowGroup.visible = carModel.visible;
+    shadowGroup.position.copy(carModel.position);
+    shadowGroup.quaternion.copy(carModel.quaternion);
+    for (const w of wheelPivots) {
+      w.pivot.rotation.y = w.front ? -car.steer : 0;
+      w.spin.rotation.x = car.wheelSpin;
+    }
+  }
+
+  const desiredCamera = new THREE.Vector3(), desiredLook = new THREE.Vector3();
+  function resetChaseCamera() {
+    const fx = Math.sin(car.heading), fz = -Math.cos(car.heading);
+    const h = terrain.heightAt(car.x,car.z);
+    camera.position.set(car.x-fx*13,h+6.5,car.z-fz*13);
+    cameraLook.set(car.x+fx*3,h+1.2,car.z+fz*3);
+    camera.lookAt(cameraLook);
+  }
+  function updateCamera(dt) {
+    if (state.mode === "explore") {
+      controls.update();
+      const h = terrain.heightAt(camera.position.x,camera.position.z);
+      if (camera.position.y < h+2) camera.position.y = h+2;
+      return;
+    }
+    const fx = Math.sin(car.heading), fz = -Math.cos(car.heading);
+    if (state.cameraStyle === "driver") {
+      desiredCamera.set(car.x+fx*.72,car.y+1.5,car.z+fz*.72);
+      const slope = -Math.tan(car.pitch);
+      desiredLook.set(car.x+fx*32,car.y+1.45+slope*32,car.z+fz*32);
+      camera.position.lerp(desiredCamera,1-Math.exp(-22*dt));
+      cameraLook.lerp(desiredLook,1-Math.exp(-18*dt));
+    } else {
+      const distance = 12.5+Math.abs(car.speed)*.14;
+      desiredCamera.set(car.x-fx*distance,car.y+5.7+Math.abs(car.speed)*.035,car.z-fz*distance);
+      desiredCamera.y = Math.max(desiredCamera.y,terrain.heightAt(desiredCamera.x,desiredCamera.z)+2.2);
+      desiredLook.set(car.x+fx*3.5,car.y+1.2,car.z+fz*3.5);
+      camera.position.lerp(desiredCamera,1-Math.exp(-5.5*dt));
+      cameraLook.lerp(desiredLook,1-Math.exp(-7.5*dt));
+    }
+    camera.position.y = Math.max(camera.position.y,terrain.heightAt(camera.position.x,camera.position.z)+.8);
+    camera.lookAt(cameraLook);
+  }
+
+  function setView(mode, county = false) {
+    keys.clear();
+    const old = state.mode;
+    state.mode = mode; state.countyView = county;
+    controls.enabled = mode === "explore";
+    if (mode === "explore") {
+      car.speed = 0; state.cruise = false;
+      if (old === "drive" && !county) {
+        const h = terrain.heightAt(car.x,car.z);
+        controls.target.set(car.x,h,car.z);
+        camera.position.set(car.x+230,h+450,car.z+400);
+      }
+      controls.update();
+    } else {
+      state.paused = false;
+      resetChaseCamera();
+    }
+    markGeometryDirty(); terrain.updateLOD(true); syncUI();
+  }
+  function frameCounty() {
+    setView("explore",true);
+    const width = countyBox.maxX-countyBox.minX, depth = countyBox.maxZ-countyBox.minZ;
+    const x = (countyBox.minX+countyBox.maxX)/2, z = (countyBox.minZ+countyBox.maxZ)/2;
+    const radius = Math.hypot(width,depth)/2;
+    const distance = Math.min(400000,radius/Math.sin(camera.fov*DEG/2)/Math.min(1,camera.aspect)*1.03);
+    const direction = new THREE.Vector3(.12,.83,.55).normalize();
+    controls.target.set(x,1300,z);
+    camera.position.copy(controls.target).addScaledVector(direction,distance);
+    controls.update(); terrain.updateLOD(true); roads.ensureCounty(); overviewDirty = true; syncUI();
+  }
+
+  async function travelTo(lon,lat,label = "Selected location") {
+    if (!pointInCounty(lon,lat)) { toast("Choose a point inside Washington County’s outline."); return; }
+    const token = ++state.spawnToken, p = project(lon,lat);
+    car.speed = 0; state.cruise = false; state.paused = false; state.turn = 0;
+    state.spawnPending = true;
+    car.track = null; car.nearest = null; car.road = null; car.history = [];
+    car.x = p.x; car.z = p.z; car.y = terrain.heightAt(p.x,p.z);
+    car.heading = Math.PI/2;
+    $("placesPanel").classList.add("hidden");
+    $("roadLoadingText").textContent = `Finding a road near ${label}…`;
+    setView("drive");
+    terrain.focus(p.x,p.z,state.detail === "fast" ? 14 : 15);
+    markGeometryDirty(); syncUI();
+    const ok = await roads.ensureAt(p.x,p.z,0);
+    if (token !== state.spawnToken) return;
+    let found = ok && snapToRoad(1300);
+    if (!found && ok) {
+      // A location can fall near a query-cell corner. Try the adjacent cell once.
+      const cx = Math.floor(p.x/roads.cellSize)*roads.cellSize+roads.cellSize/2;
+      const cz = Math.floor(p.z/roads.cellSize)*roads.cellSize+roads.cellSize/2;
+      const dx = p.x-cx, dz = p.z-cz;
+      await roads.ensureAt(p.x+(Math.abs(dx)>Math.abs(dz)?Math.sign(dx)*900:0),
+        p.z+(Math.abs(dx)<=Math.abs(dz)?Math.sign(dz)*900:0),0);
+      if (token !== state.spawnToken) return;
+      found = snapToRoad(1600);
+    }
+    state.spawnPending = false;
+    if (found) {
+      if (!state.guide) car.track = null;
+      terrain.focus(car.x,car.z);
+      if (state.mode === "drive") resetChaseCamera();
+      toast(`${label} · ${found.edge.way.name}. ${state.guide ? "W to drive; A/D chooses a junction." : "WASD to drive."}`,5000);
+    } else {
+      state.guide = false; car.track = null;
+      toast(ok ? "No public drivable road was found nearby. Free steering is enabled; choose another place to rejoin." :
+        "Road data could not be reached. Free steering is enabled; retry the source in Data & help.",8000);
+    }
+    syncUI(); markGeometryDirty();
+  }
+
+  const mapLabels = [];
+  PLACES.forEach((place,index) => {
+    const button = document.createElement("button");
+    button.className = "place-button";
+    button.innerHTML = `<span class="place-index">${String(index+1).padStart(2,"0")}</span><span><strong>${place.name}</strong><small>${place.note}</small></span>`;
+    button.onclick = () => travelTo(place.lon,place.lat,place.name);
+    $("placesList").appendChild(button);
+    const label = document.createElement("button");
+    label.className = "map-label hidden"; label.textContent = place.name;
+    label.title = "Start driving here";
+    label.onclick = () => travelTo(place.lon,place.lat,place.name);
+    $("labels").appendChild(label);
+    mapLabels.push({ element:label, ...project(place.lon,place.lat), place });
+  });
+  const carLabel = document.createElement("button");
+  carLabel.className = "map-label car-label hidden";
+  carLabel.textContent = "YOUR CAR"; carLabel.onclick = () => setView("drive");
+  $("labels").appendChild(carLabel);
+  const labelVector = new THREE.Vector3();
+  function updateLabels() {
+    const visible = state.mode === "explore";
+    const placeLabel = (element,x,z,raise) => {
+      if (!visible) { element.classList.add("hidden"); return; }
+      labelVector.set(x,terrain.heightAt(x,z)+raise,z).project(camera);
+      const show = labelVector.z > -1 && labelVector.z < 1 && Math.abs(labelVector.x)<1.06 && Math.abs(labelVector.y)<.94;
+      element.classList.toggle("hidden",!show);
+      if (show) element.style.transform = `translate(${(labelVector.x*.5+.5)*innerWidth}px,${(-labelVector.y*.5+.5)*innerHeight}px) translate(-50%,-100%)`;
+    };
+    for (const label of mapLabels) placeLabel(label.element,label.x,label.z,60);
+    placeLabel(carLabel,car.x,car.z,8);
+  }
+
+  const miniCanvas = $("minimapCanvas");
+  const miniCtx = miniCanvas.getContext("2d");
+  let miniSpan = 1850;
+  function resizeMini() {
+    const rect = miniCanvas.getBoundingClientRect(), dpr = Math.min(devicePixelRatio,2);
+    miniCanvas.width = Math.max(1,Math.round(rect.width*dpr));
+    miniCanvas.height = Math.max(1,Math.round(rect.height*dpr));
+  }
+  resizeMini();
+  function drawMinimap() {
+    if ($("minimap").offsetParent === null) return;
+    const w = miniCanvas.width, h = miniCanvas.height;
+    const scale = w/miniSpan, cx = car.x, cz = car.z;
+    const spanZ = h/scale;
+    const bounds = { minX:cx-miniSpan/2,maxX:cx+miniSpan/2,minZ:cz-spanZ/2,maxZ:cz+spanZ/2 };
+    miniCtx.fillStyle = "#263d3e"; miniCtx.fillRect(0,0,w,h);
+    const tiles = [...terrain.tiles.values()].filter(t => (t.image||t.preview)&&boxesIntersect(t,bounds)).sort((a,b)=>a.zoom-b.zoom);
+    for (const tile of tiles) {
+      miniCtx.drawImage(state.imagery&&tile.image?tile.image:tile.preview||tile.image,
+        (tile.minX-bounds.minX)*scale,(tile.minZ-bounds.minZ)*scale,tile.size*scale+.5,tile.size*scale+.5);
+    }
+    miniCtx.fillStyle = "rgba(5,22,26,.28)"; miniCtx.fillRect(0,0,w,h);
+    const edges = roads.candidates(cx,cz,miniSpan*.75);
+    for (const major of [false,true]) {
+      miniCtx.beginPath();
+      for (const e of edges) {
+        if (e.way.major!==major || !boxesIntersect(e.box,bounds)) continue;
+        miniCtx.moveTo((e.a.x-bounds.minX)*scale,(e.a.z-bounds.minZ)*scale);
+        miniCtx.lineTo((e.b.x-bounds.minX)*scale,(e.b.z-bounds.minZ)*scale);
+      }
+      miniCtx.strokeStyle = major ? "rgba(255,225,165,.95)" : "rgba(230,239,218,.76)";
+      miniCtx.lineWidth = major ? Math.max(1.5,w/180) : Math.max(1,w/260);
+      miniCtx.stroke();
+    }
+    if (countyGeometry) {
+      miniCtx.strokeStyle = "#98f2d6"; miniCtx.lineWidth = 2; miniCtx.beginPath();
+      for (const poly of geometryPolygons(countyGeometry)) {
+        poly[0].forEach((g,i) => {
+          const p=project(g[0],g[1]), x=(p.x-bounds.minX)*scale, z=(p.z-bounds.minZ)*scale;
+          if (i===0) miniCtx.moveTo(x,z); else miniCtx.lineTo(x,z);
+        });
+      }
+      miniCtx.stroke();
+    }
+    const ratio = w / (miniCanvas.clientWidth || 217);
+    miniCtx.save(); miniCtx.translate(w/2,h/2); miniCtx.rotate(car.heading);
+    miniCtx.shadowColor = "#000"; miniCtx.shadowBlur = 5*ratio;
+    miniCtx.beginPath(); miniCtx.moveTo(0,-10*ratio); miniCtx.lineTo(6.5*ratio,7*ratio);
+    miniCtx.lineTo(0,4*ratio); miniCtx.lineTo(-6.5*ratio,7*ratio); miniCtx.closePath();
+    miniCtx.fillStyle = "#ffc768"; miniCtx.fill(); miniCtx.strokeStyle = "#102329";
+    miniCtx.lineWidth = 1.4*ratio; miniCtx.stroke(); miniCtx.restore();
+    miniCtx.fillStyle = "rgba(8,25,29,.8)"; miniCtx.fillRect(w-28*ratio,7*ratio,21*ratio,23*ratio);
+    miniCtx.fillStyle = "#e7f4e7"; miniCtx.font = `bold ${11*ratio}px sans-serif`; miniCtx.textAlign="center";
+    miniCtx.fillText("N",w-17.5*ratio,23*ratio);
+    const scaleMeters = miniSpan<1100?100:miniSpan<2600?250:miniSpan<5500?500:1000;
+    const bar = scaleMeters*scale;
+    miniCtx.fillStyle="rgba(8,25,29,.78)"; miniCtx.fillRect(6*ratio,h-29*ratio,bar+16*ratio,24*ratio);
+    miniCtx.strokeStyle="#e6f3e4"; miniCtx.lineWidth=1.2*ratio;
+    miniCtx.beginPath(); miniCtx.moveTo(13*ratio,h-12*ratio); miniCtx.lineTo(13*ratio+bar,h-12*ratio); miniCtx.stroke();
+    miniCtx.font=`${8*ratio}px sans-serif`; miniCtx.textAlign="left"; miniCtx.fillStyle="#e6f3e4";
+    miniCtx.fillText(scaleMeters===1000?"1 km":`${scaleMeters} m`,13*ratio,h-17*ratio);
+  }
+  miniCanvas.addEventListener("click",() => {
+    setView("explore");
+    const h=terrain.heightAt(car.x,car.z);
+    controls.target.set(car.x,h,car.z);
+    camera.position.set(car.x,h+1150,car.z+700);
+    controls.update(); terrain.updateLOD(true);
+  });
+  miniCanvas.addEventListener("wheel",event => {
+    event.preventDefault(); event.stopPropagation();
+    miniSpan=clamp(miniSpan*Math.exp(event.deltaY*.001),500,10000); drawMinimap();
+  },{passive:false});
+
+  function syncUI() {
+    $("driveView").classList.toggle("active",state.mode==="drive");
+    $("exploreView").classList.toggle("active",state.mode==="explore"&&!state.countyView);
+    $("countyView").classList.toggle("active",state.countyView);
+    $("drivingHud").classList.toggle("hidden",state.mode!=="drive");
+    $("controlsHint").classList.toggle("hidden",state.mode!=="drive");
+    $("exploreHelp").classList.toggle("hidden",state.mode!=="explore");
+    $("touchControls").classList.toggle("hidden",state.mode!=="drive");
+    $("roadLoading").classList.toggle("hidden",!state.spawnPending);
+    $("guideButton").setAttribute("aria-pressed",String(state.guide));
+    $("guideButton").textContent=state.guide?"Road guide":"Free steer";
+    $("cruiseButton").setAttribute("aria-pressed",String(state.cruise));
+    $("cameraButton").textContent=state.cameraStyle==="chase"?"Chase":"Driver";
+    $("pauseButton").textContent=state.paused?"▶":"Ⅱ";
+    $("pauseButton").setAttribute("aria-label",state.paused?"Resume":"Pause");
+    $("turnButton").classList.toggle("hidden",!state.turn||!state.guide);
+    $("turnButton").textContent=state.turn<0?"← Next available left · X clears":"Next available right → · X clears";
+    $("styleSelect").value=state.imagery?"satellite":"elevation";
+    $("detailSelect").value=state.detail;
+    $("buildingsCheck").checked=state.buildings;
+    $("guideCheck").checked=state.guide;
+    const hint=$("controlsHint").querySelectorAll(".keyrow")[1].lastElementChild;
+    hint.textContent=state.guide?"Choose next junction turn":"Hold to steer";
+  }
+
+  function updateHUD() {
+    const way=car.track&&state.guide?car.track.edge.way:car.road;
+    $("speed").textContent=Math.round(Math.abs(car.speed)*2.236936);
+    $("elevation").textContent=terrain.surfaceTile(car.x,car.z)?`${Math.round(terrain.heightAt(car.x,car.z)*3.28084).toLocaleString()} ft`:"loading";
+    const heading=(car.heading/DEG+360)%360;
+    const direction=["N","NE","E","SE","S","SW","W","NW"][Math.round(heading/45)%8];
+    $("compass").textContent=`${direction} · ${String(Math.round(heading)%360).padStart(3,"0")}°`;
+    $("trip").textContent=`${(state.trip/1609.344).toFixed(2)} mi`;
+    $("limit").textContent=way?Math.round(way.limit*2.236936):"—";
+    $("roadName").textContent=state.spawnPending?"Finding a real road…":way?way.name:"Off road · press R to rejoin";
+    $("roadMeta").textContent=state.paused?"PAUSED · P resumes":
+      state.spawnPending?"Terrain is explorable while OpenStreetMap loads":
+      (state.guide?"GUIDED":"FREE STEERING")+
+      (state.cruise?" · CRUISE":"")+
+      (way?" · "+(way.actualLimit?"OSM speed limit":"Estimated speed limit"):" · terrain driving");
+    syncUI();
+  }
+
+  let loaderHidden=false;
+  function hideLoader() {
+    if (loaderHidden) return;
+    loaderHidden=true; $("loader").classList.add("hidden"); resizeMini();
+  }
+  let startedAt=performance.now();
+  function updateDataUI() {
+    const m=terrain.metrics();
+    const pending=demQueue.active+demQueue.jobs.length+imageQueue.active+imageQueue.jobs.length;
+    const busy=pending>0||osmQueue.active>0||osmQueue.jobs.length>0;
+    const error=m.failed>0||(!roads.edges.length&&roads.errorNotified);
+    $("dataDot").className="dot"+(error?" error":busy?" busy":"");
+    $("dataSummary").textContent=`${m.loaded} terrain tiles · ${roads.ways.size.toLocaleString()} road ways${busy?" · loading":""}`;
+    $("loaderTerrain").textContent=m.loaded?`${m.loaded} elevation tiles · ${m.images} images`:m.failed?"Source unavailable · retry in Data & help":"Loading elevation tiles…";
+    $("loaderRoads").textContent=roads.ways.size?`${roads.ways.size.toLocaleString()} mapped road ways`:roads.errorNotified?"Unavailable · free steering possible":"Requesting nearby streets…";
+    $("loaderBoundary").textContent=countyGeometry?"Census outline verified":boundaryFailed?"Unavailable · no invented outline":"Verifying FIPS 49053…";
+    $("statTerrain").textContent=`${m.loaded} cached / ${terrain.active.length} visible / ${m.images} imagery / ${m.failed} unavailable`;
+    $("statRoads").textContent=`${roads.ways.size.toLocaleString()} ways, ${(roads.totalLength/1000).toFixed(1)} km loaded`;
+    $("statBuildings").textContent=`${buildings.items.size.toLocaleString()} footprints${state.buildings?"":" (hidden)"}`;
+    $("statBoundary").textContent=countySource||(boundaryFailed?"Unavailable; retry below":"Loading Census outline");
+    $("statNetwork").textContent=`${pending} tile requests; ${osmRequestLabel||"OSM idle"}${osmQueue.jobs.length?`; ${osmQueue.jobs.length} OSM queued`:""}${osmLastError?"; last OSM error: "+osmLastError:""}`;
+    const t=terrain.surfaceTile(car.x,car.z);
+    if (!loaderHidden&&!state.spawnPending&&t&&(t.zoom>=12||performance.now()-startedAt>15000)) hideLoader();
+  }
+
+  function openInfo() {
+    keys.clear();
+    $("infoDialog").showModal();
+    updateDataUI();
+  }
+  $("driveView").onclick=()=>setView("drive");
+  $("exploreView").onclick=()=>setView("explore");
+  $("countyView").onclick=frameCounty;
+  $("placesToggle").onclick=()=>$("placesPanel").classList.toggle("hidden");
+  $("placesClose").onclick=()=>$("placesPanel").classList.add("hidden");
+  $("helpButton").onclick=$("dataBadge").onclick=openInfo;
+  $("closeInfo").onclick=()=>$("infoDialog").close();
+  $("infoDialog").addEventListener("click",event=>{
+    if (event.target===$("infoDialog")) {
+      const rect=$("infoDialog").getBoundingClientRect();
+      if (event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom) $("infoDialog").close();
+    }
+  });
+  $("guideButton").onclick=toggleGuide;
+  $("guideCheck").onchange=()=>{ if ($("guideCheck").checked!==state.guide) toggleGuide(); };
+  $("cruiseButton").onclick=toggleCruise;
+  $("turnButton").onclick=()=>{state.turn=0;syncUI();};
+  $("cameraButton").onclick=()=>{state.cameraStyle=state.cameraStyle==="chase"?"driver":"chase";syncUI();};
+  $("pauseButton").onclick=()=>setPaused(!state.paused);
+  $("styleSelect").onchange=()=>{
+    state.imagery=$("styleSelect").value==="satellite";terrain.setStyle();savePreferences();
+    if (!state.imagery) toast("Elevation colors show real DEM heights; vertical scale remains 1×.");
+  };
+  $("detailSelect").onchange=()=>{
+    state.detail=$("detailSelect").value;
+    renderer.setPixelRatio(Math.min(devicePixelRatio,state.detail==="fast"?1.25:1.8));
+    renderer.setSize(innerWidth,innerHeight);
+    terrain.updateLOD(true);savePreferences();
+  };
+  $("buildingsCheck").onchange=()=>{
+    state.buildings=$("buildingsCheck").checked;buildings.group.visible=state.buildings;
+    geometryDirty=true;savePreferences();
+    if (state.buildings) { const f=localFocus();buildings.ensureAt(f.x,f.z); }
+  };
+  $("retryButton").onclick=()=>{
+    terrain.retry();roads.retry();
+    for (const c of buildings.cells.values()) if (c.status==="error") c.retryAt=0;
+    if (!countyGeometry) loadCounty();
+    const f=localFocus();buildings.ensureAt(f.x,f.z,true);
+    toast("Retrying unavailable public data sources…");
+  };
+  $("enterButton").onclick=()=>{
+    hideLoader();
+    if (state.spawnPending) setView("explore");
+    toast("Explore freely. Roads and higher-resolution terrain continue loading.",5000);
+  };
+  $("freeDrive").onclick=()=>{
+    ++state.spawnToken;state.spawnPending=false;state.guide=false;state.cruise=false;car.track=null;
+    hideLoader();setView("drive");syncUI();
+    toast("Free steering enabled. Once roads load, press G or R to join one.",6000);
+  };
+
+  function keyPressed(code) {
+    keys.add(code);
+    if (code==="KeyA"||code==="ArrowLeft") setTurn(-1);
+    if (code==="KeyD"||code==="ArrowRight") setTurn(1);
+    if (code==="KeyS"||code==="ArrowDown"||code==="Space") state.cruise=false;
+  }
+  const driveKeys=new Set(["KeyW","KeyA","KeyS","KeyD","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"]);
+  window.addEventListener("keydown",event=>{
+    if ($("infoDialog").open||/INPUT|SELECT|TEXTAREA/.test(event.target.tagName)||event.ctrlKey||event.metaKey||event.altKey) return;
+    if (driveKeys.has(event.code)) {
+      event.preventDefault();
+      if (!event.repeat) keyPressed(event.code);
+      else keys.add(event.code);
+      return;
+    }
+    if (event.repeat) return;
+    switch(event.code) {
+      case "KeyR":resetCar();break;
+      case "KeyG":toggleGuide();break;
+      case "KeyE":toggleCruise();break;
+      case "KeyX":state.turn=0;syncUI();break;
+      case "KeyC":$("cameraButton").click();break;
+      case "KeyF":setView(state.mode==="drive"?"explore":"drive");break;
+      case "KeyM":frameCounty();break;
+      case "KeyP":setPaused(!state.paused);break;
+      case "Escape":
+        if (!$("placesPanel").classList.contains("hidden")) $("placesPanel").classList.add("hidden");
+        else setPaused(!state.paused);
+        break;
+    }
+  });
+  window.addEventListener("keyup",event=>keys.delete(event.code));
+  window.addEventListener("blur",()=>{
+    keys.clear();
+    document.querySelectorAll("[data-code]").forEach(b=>b.classList.remove("pressed"));
+    if (Math.abs(car.speed)>1&&state.mode==="drive") setPaused(true);
+  });
+  document.addEventListener("visibilitychange",()=>{
+    if (document.hidden) { keys.clear();if (Math.abs(car.speed)>1) setPaused(true); }
+  });
+  document.querySelectorAll("[data-code]").forEach(button=>{
+    button.addEventListener("pointerdown",event=>{
+      event.preventDefault();event.stopPropagation();
+      button.setPointerCapture(event.pointerId);button.classList.add("pressed");
+      keyPressed(button.dataset.code);
+    });
+    const release=event=>{
+      event.preventDefault();keys.delete(button.dataset.code);button.classList.remove("pressed");
+    };
+    button.addEventListener("pointerup",release);
+    button.addEventListener("pointercancel",release);
+    button.addEventListener("lostpointercapture",release);
+    button.addEventListener("contextmenu",event=>event.preventDefault());
+  });
+  renderer.domElement.addEventListener("contextmenu",event=>event.preventDefault());
+  const raycaster=new THREE.Raycaster();
+  renderer.domElement.addEventListener("dblclick",event=>{
+    if (state.mode!=="explore") return;
+    const rect=renderer.domElement.getBoundingClientRect();
+    const ndc=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);
+    raycaster.setFromCamera(ndc,camera);
+    const hit=raycaster.intersectObjects(terrain.active.map(t=>t.mesh),false)[0];
+    if (!hit) { toast("Wait for terrain to load, then double-click the ground.");return; }
+    const p=unproject(hit.point.x,hit.point.z);
+    if (!pointInCounty(p.lon,p.lat)) { toast("Choose terrain inside the mint-colored Washington County outline.");return; }
+    travelTo(p.lon,p.lat,"your map point");
+  });
+  controls.addEventListener("start",()=>{
+    if (state.countyView) { state.countyView=false;syncUI(); }
+  });
+  window.addEventListener("resize",()=>{
+    camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);resizeMini();terrain.updateLOD(true);
+  });
+  renderer.domElement.addEventListener("webglcontextlost",event=>{
+    event.preventDefault();state.paused=true;
+    toast("The graphics context was lost. Reload the page, or choose Lighter detail after recovery.",15000);
+  });
+  renderer.domElement.addEventListener("webglcontextrestored",()=>{
+    geometryDirty=true;overviewDirty=true;toast("Graphics restored. Press P to resume.");syncUI();
+  });
+
+  let lastStream=0,lastBuild=0,lastUI=0,lastDataUI=0,lastMap=0,lastFrame=performance.now();
+  let builtFocus={x:Infinity,z:Infinity}, frameNumber=0;
+  function streaming(now) {
+    if (now-lastStream<1500) return;
+    lastStream=now;
+    roads.ensureAt(car.x,car.z,0);
+    if (Math.abs(car.speed)>2&&state.mode==="drive") {
+      const sign=Math.sign(car.speed);
+      roads.ensureAt(car.x+Math.sin(car.heading)*1400*sign,car.z-Math.cos(car.heading)*1400*sign,1);
+    }
+    const focus=localFocus();
+    if (state.mode==="explore"&&camera.position.distanceTo(controls.target)<4500) {
+      const ll=unproject(focus.x,focus.z);
+      if (pointInCounty(ll.lon,ll.lat)) roads.ensureAt(focus.x,focus.z,2);
+    }
+    if (!state.spawnPending&&state.buildings&&
+        (state.mode==="drive"||camera.position.distanceTo(controls.target)<5000)) buildings.ensureAt(focus.x,focus.z);
+  }
+
+  function animate(now) {
+    requestAnimationFrame(animate);
+    const dt=Math.min(.045,Math.max(.001,(now-lastFrame)/1000));
+    lastFrame=now;frameNumber++;
+    simulate(dt,now);
+    updateVehiclePose(dt);
+    updateCamera(dt);
+    terrain.updateLOD();
+    streaming(now);
+    const focus=localFocus();
+    if (Math.hypot(focus.x-builtFocus.x,focus.z-builtFocus.z)>400) geometryDirty=true;
+    if (geometryDirty&&now-lastBuild>1300) {
+      rebuildRoadMeshes(focus);buildings.rebuild(focus);
+      geometryDirty=false;lastBuild=now;builtFocus={...focus};
+    }
+    const exploring=state.mode==="explore";
+    overviewGroup.visible=exploring;
+    boundaryGroup.visible=exploring;
+    if (exploring&&overviewDirty&&now-lastBuild>250) rebuildOverview();
+    // Keep street-scale shadows centered on the vehicle instead of wasting
+    // a huge county-wide shadow map on a four-meter car.
+    sun.target.position.set(car.x,car.y,car.z);
+    sun.position.copy(sun.target.position).addScaledVector(sunVector,4300);
+    if (frameNumber%2===0&&(state.mode==="drive"||camera.position.distanceTo(controls.target)<2200)) renderer.shadowMap.needsUpdate=true;
+    scene.fog.density=exploring?.000008:.000014;
+    if (now-lastUI>140) {updateHUD();updateLabels();lastUI=now;}
+    if (now-lastMap>220) {drawMinimap();lastMap=now;}
+    if (now-lastDataUI>1000) {updateDataUI();lastDataUI=now;}
+    renderer.render(scene,camera);
+  }
+
+  syncUI();resetChaseCamera();terrain.updateLOD(true);
+  requestAnimationFrame(animate);
+  loadCounty();
+  travelTo(initialPlace.lon,initialPlace.lat,initialPlace.name);
+  setTimeout(()=>{
+    if (!loaderHidden) $("loaderDetail").textContent="Public map services can take a moment. You can enter now to explore the terrain while the road network catches up.";
+  },12000);
+}
+main().catch(error=>{
+  console.error(error);
+  document.getElementById("loaderTitle").textContent="Unable to start the 3D viewer";
+  document.getElementById("loaderDetail").textContent=
+    `${error.message || error} — Please use a modern WebGL2 browser with an internet connection. If local-file requests are blocked, serve this HTML from a local web server.`;
+  document.getElementById("loaderTerrain").textContent="Three.js / WebGL initialization failed";
+  const button=document.getElementById("enterButton");
+  button.textContent="Reload viewer";
+  button.onclick=()=>location.reload();
+});
+</script>
+</body>
+</html>
