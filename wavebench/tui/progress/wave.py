@@ -401,8 +401,8 @@ def _surface_fill_mask(surface: list[float], row: int, col: int) -> int:
 # Every layer is the same colour scaled down, so depth reads as lightness only.
 # Both rear layers stay below the foreground surface highlight, preserving the
 # front-to-back depth cue even where deep foreground water is darker.
-_FAR_DEPTH = 0.42
-_MIDDLE_DEPTH = 0.66
+_FAR_DEPTH = 0.38
+_MIDDLE_DEPTH = 0.62
 # The foreground gradient combines distance below its local surface with a
 # smaller absolute top-to-bottom falloff. Broad color bands keep each frame
 # compact for a PTY; the dot geometry supplies the finer texture.
@@ -446,11 +446,15 @@ _CausticEdge = tuple[float, float, float]
 _CAUSTIC_FALLOFF_DOTS = 1.0
 # Low-contrast shades let refracted light blend into the surrounding water.
 _CAUSTIC_LIGHTING = (0.62, 0.67, 0.72, 0.77, 0.82)
-_BACKGROUND_LIGHTING = (0.62, 0.72, 0.82)
+_LAYER_LIGHTING = (
+    _CAUSTIC_LIGHTING,
+    (0.62, 0.70, 0.78),
+    (0.64, 0.69, 0.74),
+)
 
 
 def _caustic_grid(
-    width: int, height: int, phase: float
+    width: int, height: int, phase: float, layer_index: int = 0
 ) -> tuple[float, int, list[tuple[_CausticSite, ...]]]:
     """Build an undulating Voronoi tessellation in braille-dot coordinates.
 
@@ -459,7 +463,12 @@ def _caustic_grid(
     their slow deformation is driven by the same accumulated phase as the
     surface. Cache each tile's neighbors once, outside the rendering loop.
     """
-    cell_size = max(8.0, width / 10.0)
+    # Distant facets look smaller and catch less light. Lower dot coverage
+    # keeps the layers distinct even when a 256-color terminal maps their
+    # brightness to the same palette entry. The nearest material is unchanged.
+    cell_size = max(8.0, width / 10.0 * (1.0 - 0.14 * layer_index))
+    ambient = 0.28 - 0.04 * layer_index
+    caustic_gain = 0.40 - 0.08 * layer_index
     columns = math.ceil(width / cell_size) + 1
     rows = math.ceil(height / cell_size) + 1
     time = phase * 0.026
@@ -471,8 +480,9 @@ def _caustic_grid(
                 x + 0.5 + 0.34 * math.sin(seed + time),
                 y + 0.5 + 0.34 * math.sin(seed * 1.37 - time * 0.83),
                 _phosphor_limits(
-                    0.28 + 0.04 * math.sin(seed * 0.7 + time * 0.4),
+                    ambient + 0.04 * math.sin(seed * 0.7 + time * 0.4),
                     _CAUSTIC_FALLOFF_DOTS / cell_size,
+                    caustic_gain,
                 ),
             )
     neighbors = [
@@ -524,7 +534,7 @@ _PHOSPHOR = (
 )
 
 
-def _phosphor_limits(ambient: float, falloff: float) -> _PhosphorLimits:
+def _phosphor_limits(ambient: float, falloff: float, caustic_gain: float = 0.40) -> _PhosphorLimits:
     """Precompute how close each dot must be to a caustic to light up.
 
     Invert the highlight falloff once per facet instead of evaluating it at
@@ -535,7 +545,7 @@ def _phosphor_limits(ambient: float, falloff: float) -> _PhosphorLimits:
         scanline = 0.86 if row == 3 else 1.0
         distances: list[float] = []
         for threshold in thresholds:
-            light = (threshold / scanline - ambient) / 0.40
+            light = (threshold / scanline - ambient) / caustic_gain
             if light < 0:
                 distances.append(math.inf)
             else:
@@ -630,8 +640,10 @@ def render_idle_wave(
         (far_surface, far_occluding_surface, far_depth, phase * 0.44 + 31.0),
     )
     fields = []
-    for _surface, _occluder, _depth, material_phase in layers:
-        scale, columns, neighbors = _caustic_grid(width * 2, height * 4, material_phase)
+    for layer_index, (_surface, _occluder, _depth, material_phase) in enumerate(layers):
+        scale, columns, neighbors = _caustic_grid(
+            width * 2, height * 4, material_phase, layer_index
+        )
         xs = [(col * 2 + 1) * scale for col in range(width)]
         y_offsets = [0.10 * math.sin(x * 3.1 - material_phase * 0.018) for x in xs]
         fields.append((scale, columns, neighbors, xs, y_offsets))
@@ -684,7 +696,7 @@ def render_idle_wave(
             # Distant water uses a shorter ramp across its visible depth.
             # Coarser bands keep narrow strips economical to send over a PTY.
             bands = _DEPTH_BANDS if occluder is None else 3
-            lighting_levels = _CAUSTIC_LIGHTING if occluder is None else _BACKGROUND_LIGHTING
+            lighting_levels = _LAYER_LIGHTING[layer_index]
             depth_band = _surface_depth_band(surface, row, col, height * 4, occluder, bands)
             codes = depth_codes.get((layer_index, depth_band))
             if codes is None:
