@@ -284,12 +284,6 @@ def test_surface_fill_mask_samples_both_braille_columns() -> None:
     assert mask == 0xC7
 
 
-def test_surface_contour_mask_follows_true_braille_geometry() -> None:
-    mask = wave_mod._surface_contour_mask([0.2, 2.8], row=0, col=0)
-
-    assert mask == 0x21
-
-
 def test_foreground_gradient_tracks_depth_below_local_surface(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
@@ -346,7 +340,7 @@ def test_foreground_gradient_also_darkens_lower_cells(monkeypatch) -> None:
     assert sum(upper_colors[0]) > sum(lower_colors[1]) > sum(lower_colors[0])
 
 
-def test_background_contour_does_not_leak_across_foreground_edge(monkeypatch) -> None:
+def test_background_water_does_not_leak_across_foreground_edge(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
     monkeypatch.setattr(
@@ -365,7 +359,7 @@ def test_background_contour_does_not_leak_across_foreground_edge(monkeypatch) ->
     assert visible == " "
 
 
-def test_far_contour_is_occluded_below_middle_surface(monkeypatch) -> None:
+def test_far_water_is_occluded_below_middle_surface(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
     monkeypatch.setattr(
@@ -381,10 +375,17 @@ def test_far_contour_is_occluded_below_middle_surface(monkeypatch) -> None:
     rows = wave_mod.render_idle_wave(tick=0, width=1, height=2, intensity=0.5)
     visible = [re.sub(r"\033\[[0-9;]*m", "", row) for row in rows]
 
-    assert visible == ["⠤", " "]
+    assert visible[0] == "⠤"
+    assert visible[1] != " ", "the middle wave should have water beneath its crest"
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args, **_kwargs: ([100.0, 100.0], [2.2, 2.2], [9.0, 9.0]),
+    )
+    assert rows == wave_mod.render_idle_wave(tick=0, width=1, height=2, intensity=0.5)
 
 
-def test_render_idle_wave_uses_contours_behind_the_surface_rim(monkeypatch) -> None:
+def test_render_idle_wave_renders_distinct_water_layers(monkeypatch) -> None:
     monkeypatch.setattr(wave_mod, "_NO_COLOR", False)
     monkeypatch.setattr(wave_mod.S, "RST", "\033[0m")
 
@@ -401,7 +402,9 @@ def test_render_idle_wave_uses_contours_behind_the_surface_rim(monkeypatch) -> N
     visible = re.sub(r"\033\[[0-9;]*m", "", row)
     colors = re.findall(r"\033\[38;2;(\d+);(\d+);(\d+)m", row)
 
-    assert visible == "⠉⠒⠤"
+    assert len(visible) == 3
+    for glyph, rim in zip(visible, (0x09, 0x12, 0x24), strict=True):
+        assert (ord(glyph) - 0x2800) & rim == rim
     assert len(set(colors)) == 3
 
 
@@ -462,19 +465,20 @@ def test_water_has_a_continuous_crest_and_a_connected_body(
             assert 0.28 < lit_dots / water_dots < 0.60
 
 
-def test_distant_contours_cannot_shine_through_water_texture(colored, monkeypatch) -> None:
-    """A gap in the foreground's dot texture is still in front of distant water."""
+@pytest.mark.parametrize("near_layer", (1, 2))
+def test_distant_water_cannot_shine_through_nearer_texture(
+    colored, monkeypatch, near_layer
+) -> None:
+    """Neither foreground nor middle-water texture gaps expose farther water."""
+    surfaces = [[7.2] * 12, [100.0] * 12, [100.0] * 12]
+    surfaces[near_layer] = [0.2] * 12
     monkeypatch.setattr(
         wave_mod,
         "_idle_wave_surfaces",
-        lambda *_args: ([7.2] * 12, [5.4] * 12, [0.2] * 12),
+        lambda *_args: tuple(surfaces),
     )
     with_background = wave_mod.render_idle_wave(40, 6, 6, 0.5)
-    monkeypatch.setattr(
-        wave_mod,
-        "_idle_wave_surfaces",
-        lambda *_args: ([100.0] * 12, [100.0] * 12, [0.2] * 12),
-    )
+    surfaces[0] = [100.0] * 12
     without_background = wave_mod.render_idle_wave(40, 6, 6, 0.5)
 
     assert with_background == without_background
@@ -492,13 +496,18 @@ def test_main_wave_fits_small_and_resized_terminals(colored, width: int, height:
             assert "\033[" not in row or row.endswith("\033[0m")
 
 
-def test_caustics_light_local_patches_instead_of_horizontal_bands(colored, monkeypatch) -> None:
+@pytest.mark.parametrize("layer", (0, 1, 2))
+def test_caustics_light_local_patches_instead_of_horizontal_bands(
+    colored, monkeypatch, layer
+) -> None:
     """Even flat water has local shimmer, blended gently into its base color."""
     width, height = 100, 18
+    surfaces = [[100.0] * (width * 2) for _ in range(3)]
+    surfaces[layer] = [4.0] * (width * 2)
     monkeypatch.setattr(
         wave_mod,
         "_idle_wave_surfaces",
-        lambda *_args: ([100.0] * (width * 2), [100.0] * (width * 2), [4.0] * (width * 2)),
+        lambda *_args: tuple(surfaces),
     )
     for phase in (0.0, 30.0, 75.0):
         rows = wave_mod.render_idle_wave(40, width, height, 0.8, wave_phase=phase)
@@ -510,13 +519,16 @@ def test_caustics_light_local_patches_instead_of_horizontal_bands(colored, monke
             assert transitions >= 4, "light should gather around separate caustic cells"
 
 
-def test_caustics_deform_smoothly_with_the_accumulated_phase(colored, monkeypatch) -> None:
+@pytest.mark.parametrize("layer", (0, 1, 2))
+def test_caustics_deform_smoothly_with_the_accumulated_phase(colored, monkeypatch, layer) -> None:
     """The texture flows independently of the silhouette, without random frame noise."""
     width, height = 100, 18
+    surfaces = [[100.0] * (width * 2) for _ in range(3)]
+    surfaces[layer] = [4.0] * (width * 2)
     monkeypatch.setattr(
         wave_mod,
         "_idle_wave_surfaces",
-        lambda *_args: ([100.0] * (width * 2), [100.0] * (width * 2), [4.0] * (width * 2)),
+        lambda *_args: tuple(surfaces),
     )
     frames = []
     for phase in (30.0, 31.0, 60.0):
@@ -528,6 +540,43 @@ def test_caustics_deform_smoothly_with_the_accumulated_phase(colored, monkeypatc
     ]
     assert 0 < changes[0] < width * height * 8 * 0.06
     assert changes[1] > changes[0] * 3
+
+
+def test_background_caustics_leave_a_quiet_inset_at_both_edges(colored, monkeypatch) -> None:
+    width, height = 12, 8
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * 24, [4.0] * 24, [20.0] * 24),
+    )
+    frames = []
+    for distance in (100.0, 0.0):
+        monkeypatch.setattr(
+            wave_mod,
+            "_caustic_edges",
+            lambda *_args, d=distance: (
+                (0.0, 0.0, d),
+                (0.0, 0.0, d),
+                wave_mod._phosphor_limits(0.28, 1.0),
+            ),
+        )
+        frames.append(
+            [
+                re.sub(r"\033\[[0-9;]*m", "", row)
+                for row in wave_mod.render_idle_wave(40, width, height, 0.8)
+            ]
+        )
+
+    changed = 0
+    for row in range(5):  # The foreground owns every row from its surface at y=20.
+        for before, after in zip(frames[0][row], frames[1][row], strict=True):
+            difference = ord(before) ^ ord(after)
+            for subrow, bits in enumerate(wave_mod._BRAILLE_DOT_BITS):
+                if difference & (bits[0] | bits[1]):
+                    y = row * 4 + subrow + 0.5
+                    assert 6.5 <= y <= 18.5, "focused light must stay away from both rims"
+                    changed += 1
+    assert changed, "the inset should still leave room for caustics inside the layer"
 
 
 # ── Hue lock ──────────────────────────────────────────────────────────────
@@ -632,16 +681,12 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
         far, middle, foreground = wave_mod._idle_wave_surfaces(
             tick, width * 2, height, intensity, phase
         )
-        far_occluding = [
-            min(middle_y, foreground_y)
-            for middle_y, foreground_y in zip(middle, foreground, strict=True)
-        ]
         rows = wave_mod.render_idle_wave(tick, width, height, intensity, wave_phase=phase)
 
         surface_bodies: list[int] = []
         deep_bodies: list[int] = []
-        middle_contours: list[int] = []
-        far_contours: list[int] = []
+        middle_rims: list[int] = []
+        far_rims: list[int] = []
         for row_index, row in enumerate(rows):
             colors = _cell_colors(row)
             assert len(colors) == width
@@ -658,24 +703,18 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
                         surface_bodies.append(sum(color))
                     elif band == wave_mod._DEPTH_BANDS - 1:
                         deep_bodies.append(sum(color))
-                elif wave_mod._surface_contour_mask(
-                    middle,
-                    row_index,
-                    col,
-                    occluding_surface=foreground,
-                ):
-                    middle_contours.append(sum(color))
-                elif wave_mod._surface_contour_mask(
-                    far,
-                    row_index,
-                    col,
-                    occluding_surface=far_occluding,
-                ):
-                    far_contours.append(sum(color))
+                elif wave_mod._surface_fill_mask(middle, row_index, col):
+                    surface_y = (middle[col * 2] + middle[col * 2 + 1]) * 0.5
+                    if row_index * 4 + 2 - surface_y < 1.0:
+                        middle_rims.append(sum(color))
+                elif wave_mod._surface_fill_mask(far, row_index, col):
+                    surface_y = (far[col * 2] + far[col * 2 + 1]) * 0.5
+                    if row_index * 4 + 2 - surface_y < 1.0:
+                        far_rims.append(sum(color))
 
-        assert surface_bodies and deep_bodies and middle_contours and far_contours, intensity
-        assert max(far_contours) < min(middle_contours), intensity
-        assert max(middle_contours) < min(surface_bodies), intensity
+        assert surface_bodies and deep_bodies and middle_rims and far_rims, intensity
+        assert max(far_rims) < min(middle_rims), intensity
+        assert max(middle_rims) < min(surface_bodies), intensity
         assert max(deep_bodies) < min(surface_bodies), intensity
 
 
