@@ -1,6 +1,6 @@
 """Braille wave math — pure rendering functions.
 
-Three kinds of animated braille waves are produced here:
+Four kinds of animated braille waves are produced here:
 
   - ``_title_wave`` — short compact wave for the "Generating" box title.
   - ``_render_pulse_bar`` — token-progress bar that fills as output streams;
@@ -8,10 +8,10 @@ Three kinds of animated braille waves are produced here:
     throughput. Falls back to ``_render_pre_wave_bar`` for empty space.
   - ``_render_pre_wave_bar`` — short reasoning-state wave (1–3 dots high)
     shown before the first completion token arrives.
-  - ``render_idle_wave`` — layered full-width ocean used on the idle menu
+  - ``render_idle_wave`` — sculpted full-width ocean used on the idle menu
     background; *intensity* (0.0–1.0) controls amplitude, speed, and color.
-    A filled foreground and two parallax contours provide depth without
-    overlapping differently colored braille fills.
+    A luminous surface falls away into flowing, stippled currents, with two
+    distant contours moving at their own pace.
 
 Every wave here is hue-locked: a single theme color varied in lightness only.
 Wave height is carried by the braille glyph, depth and progress by brightness,
@@ -269,10 +269,10 @@ def _idle_wave_surfaces(
     amp_breath = 0.025 + 0.085 * intensity
     amp = total_sp * amp_scale * aspect_damping * (1.0 + amp_breath * math.sin(tick * 0.019 + 1.0))
 
-    center_norm = 0.80 - 0.22 * intensity
+    center_norm = 0.72 - 0.16 * intensity
     center_sway = 0.045 + 0.130 * intensity
     center = total_sp * center_norm + amp * center_sway * math.sin(tick * 0.024)
-    depth_gap = total_sp * (0.055 + 0.025 * intensity)
+    depth_gap = total_sp * (0.075 + 0.025 * intensity)
 
     if wave_phase is None:
         wave_phase = tick * _wave_phase_step(intensity)
@@ -344,6 +344,13 @@ _BRAILLE_FILL_MASKS = (
 def _surface_fill_mask(surface: list[float], row: int, col: int) -> int:
     """Return the foreground-water mask for one 2×4 braille cell."""
     cell_top = row * 4
+    left, right = surface[col * 2], surface[col * 2 + 1]
+    # Most cells are wholly above or below the surface. Only the edge needs
+    # per-dot rounding, which matters on a large terminal redrawn every frame.
+    if left <= cell_top + 0.5 and right <= cell_top + 0.5:
+        return 0xFF
+    if left > cell_top + 3.5 and right > cell_top + 3.5:
+        return 0
     mask = 0
     for subcol in range(2):
         first_wet_dot = math.ceil(surface[col * 2 + subcol] - 0.5) - cell_top
@@ -377,11 +384,11 @@ def _surface_contour_mask(
 _FAR_DEPTH = 0.42
 _MIDDLE_DEPTH = 0.66
 # The foreground gradient combines distance below its local surface with a
-# smaller absolute top-to-bottom falloff. Six local bands are enough to read as
-# water depth at braille resolution while keeping each frame compact for a PTY.
-_DEPTH_BANDS = 6
-_SURFACE_SHADE = 1.15
-_DEEP_SHADE = 0.55
+# smaller absolute top-to-bottom falloff. Broad color bands keep each frame
+# compact for a PTY; the dot geometry supplies the finer texture.
+_DEPTH_BANDS = 8
+_SURFACE_SHADE = 1.12
+_DEEP_SHADE = 0.20
 _SCREEN_DEPTH_FALLOFF = 0.16
 
 
@@ -403,15 +410,77 @@ def _surface_depth_band(
     return min(_DEPTH_BANDS - 1, round(depth_t * (_DEPTH_BANDS - 1)))
 
 
+def _current_profiles(
+    surface: list[float], total_height: int, phase: float
+) -> list[tuple[float, float, float]]:
+    """Precompute the spacing and drift of submerged ribbons per dot column.
+
+    The bands follow their local crest, then open out toward the foreground.
+    Long, slowly travelling variations keep the water from looking like a
+    stack of identical sine waves. Nothing is random or keyed to frame parity.
+    """
+    profiles: list[tuple[float, float, float]] = []
+    for col, surface_y in enumerate(surface):
+        nx = col / max(len(surface) - 1, 1)
+        spacing = max(3.5, (total_height - surface_y) / 4.0)
+        drift = 0.32 * math.sin(nx * 9.0 - phase * 0.035)
+        drift += 0.16 * math.sin(nx * 17.0 - phase * 0.021 + 1.4)
+        # Store reciprocals once per column instead of dividing at every dot.
+        profiles.append((1.0 / spacing, drift, 1.0 / max(total_height - surface_y, 4.0)))
+    return profiles
+
+
+def _surface_current_mask(
+    surface: list[float],
+    profiles: list[tuple[float, float, float]],
+    row: int,
+    col: int,
+) -> int:
+    """Sample a continuous crest and textured current ribbons at 2×4 dots.
+
+    The top two dots of water form a solid rim. Below it, curved bands become
+    narrower and sparser with depth. A fixed spatial stipple softens their
+    edges without flicker or a different ANSI color for every little dot.
+    """
+    mask = 0
+    for subcol in range(2):
+        index = col * 2 + subcol
+        surface_y = surface[index]
+        inverse_spacing, drift, inverse_depth = profiles[index]
+        for subrow in range(4):
+            y = row * 4 + subrow
+            depth = y + 0.5 - surface_y
+            if depth < 0:
+                continue
+            if depth < 1.8:
+                mask |= _BRAILLE_DOT_BITS[subrow][subcol]
+                continue
+            # Samples are inside the screen, so their normalized depth cannot
+            # exceed one; the whole water column ends at the screen's bottom.
+            depth_t = depth * inverse_depth
+            # Expand the gaps below each crest, as in a receding wake. The
+            # drift is eased in so every ribbon attaches to its own surface.
+            flow = depth * inverse_spacing
+            flow += drift * (flow if flow < 1.0 else 1.0)
+            distance = abs((flow + 0.5) % 1.0 - 0.5)
+            ribbon_width = 0.34 - 0.17 * depth_t
+            stipple = (index + y * 3) % 4
+            in_ribbon = distance < ribbon_width
+            feather = distance < ribbon_width + 0.12 and stipple == 0
+            if (in_ribbon and (depth_t < 0.55 or stipple != 0)) or feather:
+                mask |= _BRAILLE_DOT_BITS[subrow][subcol]
+    return mask
+
+
 def render_idle_wave(
     tick: int, width: int, height: int, intensity: float = 0.0, wave_phase: float | None = None
 ) -> list[str]:
-    """Render a filled foreground wave with two parallax depth contours.
+    """Render luminous crests, flowing current ribbons, and distant swells.
 
     Returns *height* ANSI-colored strings, each *width* visible characters
     wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
-    Rear surfaces are contours rather than overlapping fills because a terminal
-    cell cannot assign separate colors to different dots in one braille glyph.
+    Rear contours are clipped by the entire foreground water column, including
+    gaps in its texture: a terminal cell has only one foreground color.
     """
     if _NO_COLOR or height <= 0 or width <= 0:
         return [" " * width] * max(height, 0)
@@ -420,6 +489,8 @@ def render_idle_wave(
     far_surface, middle_surface, foreground_surface = _idle_wave_surfaces(
         tick, width * 2, height, intensity, wave_phase
     )
+    phase = tick * _wave_phase_step(intensity) if wave_phase is None else wave_phase
+    current_profiles = _current_profiles(foreground_surface, height * 4, phase)
     far_occluding_surface = [
         min(middle_y, foreground_y)
         for middle_y, foreground_y in zip(
@@ -429,7 +500,9 @@ def render_idle_wave(
         )
     ]
 
-    color_t = max(0.0, min(1.0, intensity + 0.03 * math.sin(tick * 0.03)))
+    # Idle water is visible enough to carry the screen; generation lifts it
+    # steadily to the theme's brightest shade without changing hue.
+    color_t = max(0.0, min(1.0, 0.24 + 0.76 * intensity + 0.02 * math.sin(tick * 0.03)))
     low, middle, high = _styles.IDLE_WAVE_COLORS
     if color_t < 0.5:
         active_color = _blend_color(low, middle, color_t * 2.0)
@@ -465,7 +538,7 @@ def render_idle_wave(
         for col in range(width):
             foreground_mask = _surface_fill_mask(foreground_surface, row, col)
             if foreground_mask:
-                mask = foreground_mask
+                mask = _surface_current_mask(foreground_surface, current_profiles, row, col)
                 depth_band = _surface_depth_band(
                     foreground_surface,
                     row,
@@ -493,9 +566,8 @@ def render_idle_wave(
                     color = far_contour_code
 
             if not mask:
-                if current_color is not None:
-                    parts.append(S.RST)
-                    current_color = None
+                # Foreground color does not affect spaces. Keep the color run
+                # open through ribbon gaps to avoid flooding the PTY with SGR.
                 parts.append(" ")
                 continue
 
