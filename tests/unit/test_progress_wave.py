@@ -458,7 +458,7 @@ def test_water_has_a_continuous_crest_and_a_connected_body(
                             if 0 <= depth < 1.5:
                                 assert mask & wave_mod._BRAILLE_DOT_BITS[subrow][subcol]
 
-            assert 0.35 < lit_dots / water_dots < 0.75
+            assert 0.28 < lit_dots / water_dots < 0.60
 
 
 def test_distant_contours_cannot_shine_through_water_texture(colored, monkeypatch) -> None:
