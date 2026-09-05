@@ -548,6 +548,52 @@ def test_three_waves_share_a_cell_without_revealing_submerged_crests(colored, mo
     assert visible == chr(0x2800 + 0x5D)
 
 
+@pytest.mark.parametrize(("rear_layer", "near_layer"), [(0, 1), (0, 2), (1, 2)])
+@pytest.mark.parametrize("crest", [(3.2, 3.2), (3.2, 3.6)])
+def test_partial_crests_do_not_relight_background_dots(
+    colored, monkeypatch, rear_layer, near_layer, crest
+) -> None:
+    """One or two front rim dots must not recolor the whole shared character."""
+    surfaces = [[100.0, 100.0] for _ in range(3)]
+    monkeypatch.setattr(wave_mod, "_idle_wave_surfaces", lambda *_args: tuple(surfaces))
+    monkeypatch.setattr(
+        wave_mod,
+        "_caustic_edges",
+        lambda *_args: (
+            (0.0, 0.0, 100.0),
+            (0.0, 0.0, 100.0),
+            wave_mod._phosphor_limits(0.28, 1.0),
+        ),
+    )
+
+    def brightness():
+        return sum(_cell_colors(wave_mod.render_idle_wave(0, 1, 1, 0.7)[0])[0])
+
+    surfaces[rear_layer] = [0.2, 0.2]
+    rear = brightness()
+    surfaces[rear_layer] = [100.0, 100.0]
+    surfaces[near_layer] = list(crest)
+    near = brightness()
+    surfaces[rear_layer] = [0.2, 0.2]
+    overlap = brightness()
+
+    assert rear < overlap < rear + (near - rear) * 0.75
+
+
+def test_shared_edge_color_does_not_flicker_with_the_phosphor(colored, monkeypatch) -> None:
+    """Changing rear texture coverage cannot make a shared rim flash brighter."""
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * 24, [0.2] * 24, [3.2] * 24),
+    )
+    colors = set()
+    for phase in (0.0, 30.0, 75.0):
+        row = wave_mod.render_idle_wave(40, 12, 1, 0.7, wave_phase=phase)[0]
+        colors.update(_cell_colors(row))
+    assert len(colors) == 1
+
+
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (10, 3), (40, 60), (300, 60)])
 def test_main_wave_fits_small_and_resized_terminals(colored, width: int, height: int) -> None:
     for intensity in (0.0, 1.0):
@@ -777,8 +823,10 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
                         far_rims.append(sum(color))
 
         assert surface_bodies and deep_bodies and middle_rims and far_rims, intensity
-        assert max(far_rims) < min(middle_rims), intensity
-        assert max(middle_rims) < min(surface_bodies), intensity
+        # A shared crest blends toward the rear water instead of inheriting
+        # the front rim's full brightness. Typical crests still show depth;
+        # the partial-crest tests separately bound those blended edge colors.
+        assert median(far_rims) < median(middle_rims) < median(surface_bodies), intensity
         assert max(deep_bodies) < min(surface_bodies), intensity
 
 
