@@ -10,8 +10,8 @@ Four kinds of animated braille waves are produced here:
     shown before the first completion token arrives.
   - ``render_idle_wave`` — sculpted full-width ocean used on the idle menu
     background; *intensity* (0.0–1.0) controls amplitude, speed, and color.
-    A luminous surface falls away into flowing, stippled currents, with two
-    distant contours moving at their own pace.
+    A continuous body of water carries a deforming caustic tessellation and
+    fine CRT phosphor texture, with distant swells moving at their own pace.
 
 Every wave here is hue-locked: a single theme color varied in lightness only.
 Wave height is carried by the braille glyph, depth and progress by brightness,
@@ -63,7 +63,9 @@ def _blend_color(
 
 
 def _scale_color(color: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
-    return tuple(max(0, min(255, round(channel * amount))) for channel in color)
+    """Change brightness with one shared gain so bright caustics retain their hue."""
+    amount = max(0.0, min(amount, 255 / max(max(color), 1)))
+    return tuple(round(channel * amount) for channel in color)
 
 
 def _color_code(color: tuple[int, int, int]) -> str:
@@ -386,9 +388,9 @@ _MIDDLE_DEPTH = 0.66
 # The foreground gradient combines distance below its local surface with a
 # smaller absolute top-to-bottom falloff. Broad color bands keep each frame
 # compact for a PTY; the dot geometry supplies the finer texture.
-_DEPTH_BANDS = 8
-_SURFACE_SHADE = 1.12
-_DEEP_SHADE = 0.20
+_DEPTH_BANDS = 12
+_SURFACE_SHADE = 1.08
+_DEEP_SHADE = 0.38
 _SCREEN_DEPTH_FALLOFF = 0.16
 
 
@@ -410,64 +412,129 @@ def _surface_depth_band(
     return min(_DEPTH_BANDS - 1, round(depth_t * (_DEPTH_BANDS - 1)))
 
 
-def _current_profiles(
-    surface: list[float], total_height: int, phase: float
-) -> list[tuple[float, float, float]]:
-    """Precompute the spacing and drift of submerged ribbons per dot column.
+_PhosphorLimits = tuple[tuple[float, ...], ...]
+_CausticSite = tuple[float, float, _PhosphorLimits]
+_CausticEdge = tuple[float, float, float]
 
-    The bands follow their local crest, then open out toward the foreground.
-    Long, slowly travelling variations keep the water from looking like a
-    stack of identical sine waves. Nothing is random or keyed to frame parity.
+
+def _caustic_grid(
+    width: int, height: int, phase: float
+) -> tuple[float, int, list[tuple[_CausticSite, ...]]]:
+    """Build an undulating Voronoi tessellation in braille-dot coordinates.
+
+    Light gathers along the boundaries of these irregular cells, like the
+    network of caustics on a pool floor. Sites move continuously in two axes;
+    their slow deformation is driven by the same accumulated phase as the
+    surface. Cache each tile's neighbors once, outside the rendering loop.
     """
-    profiles: list[tuple[float, float, float]] = []
-    for col, surface_y in enumerate(surface):
-        nx = col / max(len(surface) - 1, 1)
-        spacing = max(3.5, (total_height - surface_y) / 4.0)
-        drift = 0.32 * math.sin(nx * 9.0 - phase * 0.035)
-        drift += 0.16 * math.sin(nx * 17.0 - phase * 0.021 + 1.4)
-        # Store reciprocals once per column instead of dividing at every dot.
-        profiles.append((1.0 / spacing, drift, 1.0 / max(total_height - surface_y, 4.0)))
-    return profiles
+    cell_size = max(8.0, width / 10.0)
+    columns = math.ceil(width / cell_size) + 1
+    rows = math.ceil(height / cell_size) + 1
+    time = phase * 0.026
+    sites: dict[tuple[int, int], _CausticSite] = {}
+    for y in range(-1, rows + 1):
+        for x in range(-1, columns + 1):
+            seed = x * 127.1 + y * 311.7
+            sites[x, y] = (
+                x + 0.5 + 0.34 * math.sin(seed + time),
+                y + 0.5 + 0.34 * math.sin(seed * 1.37 - time * 0.83),
+                _phosphor_limits(0.28 + 0.04 * math.sin(seed * 0.7 + time * 0.4)),
+            )
+    neighbors = [
+        tuple(sites[x + dx, y + dy] for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+        for y in range(rows)
+        for x in range(columns)
+    ]
+    return 1.0 / cell_size, columns, neighbors
 
 
-def _surface_current_mask(
+def _caustic_edges(
+    sites: tuple[_CausticSite, ...], x: float, y: float, scale: float
+) -> tuple[_CausticEdge, _CausticEdge, _PhosphorLimits]:
+    """Find the two closest cell boundaries and their per-dot distance steps.
+
+    A boundary is the bisector between two sites. Computing its equation once
+    per character lets all eight dots share the expensive neighbor search,
+    while still sampling thin highlights at the terminal's full resolution.
+    """
+    first = second = third = sites[0]
+    d1 = d2 = d3 = math.inf
+    for site in sites:
+        dx, dy = x - site[0], y - site[1]
+        distance = dx * dx + dy * dy
+        if distance < d1:
+            first, second, third = site, first, second
+            d1, d2, d3 = distance, d1, d2
+        elif distance < d2:
+            second, third = site, second
+            d2, d3 = distance, d2
+        elif distance < d3:
+            third, d3 = site, distance
+
+    edges: list[_CausticEdge] = []
+    for neighbor, distance in ((second, d2), (third, d3)):
+        dx, dy = first[0] - neighbor[0], first[1] - neighbor[1]
+        length = math.hypot(dx, dy)
+        edges.append((dx * scale / length, dy * scale / length, (distance - d1) / (2 * length)))
+    return edges[0], edges[1], first[2]
+
+
+# Ordered phosphor coverage. The texture stays anchored to the screen, while
+# the caustic field moves through it; changing the dither each frame flickers.
+_PHOSPHOR = (
+    (0.03, 0.53, 0.16, 0.66),
+    (0.78, 0.28, 0.91, 0.41),
+    (0.22, 0.72, 0.09, 0.59),
+    (0.97, 0.47, 0.84, 0.34),
+)
+
+
+def _phosphor_limits(ambient: float) -> _PhosphorLimits:
+    """Precompute how close each dot must be to a caustic to light up.
+
+    Invert the highlight falloff once per facet instead of evaluating it at
+    every dot. The last dot row carries a faint, stationary CRT scanline.
+    """
+    limits: list[tuple[float, ...]] = []
+    for row, thresholds in enumerate(_PHOSPHOR):
+        scanline = 0.86 if row == 3 else 1.0
+        distances: list[float] = []
+        for threshold in thresholds:
+            light = (threshold / scanline - ambient) / 0.90
+            if light < 0:
+                distances.append(math.inf)
+            else:
+                distances.append(0.25 * (1.0 - math.sqrt(light)))
+        limits.append(tuple(distances))
+    return tuple(limits)
+
+
+def _surface_water_mask(
     surface: list[float],
-    profiles: list[tuple[float, float, float]],
+    edges: tuple[_CausticEdge, _CausticEdge, _PhosphorLimits],
     row: int,
     col: int,
 ) -> int:
-    """Sample a continuous crest and textured current ribbons at 2×4 dots.
-
-    The top two dots of water form a solid rim. Below it, curved bands become
-    narrower and sparser with depth. A fixed spatial stipple softens their
-    edges without flicker or a different ANSI color for every little dot.
-    """
+    """Sample a solid surface rim, caustic highlights, and fine CRT scanlines."""
+    (ax, ay, a), (bx, by, b), limits = edges
     mask = 0
     for subcol in range(2):
         index = col * 2 + subcol
         surface_y = surface[index]
-        inverse_spacing, drift, inverse_depth = profiles[index]
+        edge_a = a + ax * (subcol - 0.5) - ay * 1.5
+        edge_b = b + bx * (subcol - 0.5) - by * 1.5
         for subrow in range(4):
-            y = row * 4 + subrow
-            depth = y + 0.5 - surface_y
+            depth = row * 4 + subrow + 0.5 - surface_y
+            limit = limits[subrow][index % 4]
+            lit = abs(edge_a) < limit or abs(edge_b) < limit
+            edge_a += ay
+            edge_b += by
             if depth < 0:
                 continue
             if depth < 1.8:
                 mask |= _BRAILLE_DOT_BITS[subrow][subcol]
                 continue
-            # Samples are inside the screen, so their normalized depth cannot
-            # exceed one; the whole water column ends at the screen's bottom.
-            depth_t = depth * inverse_depth
-            # Expand the gaps below each crest, as in a receding wake. The
-            # drift is eased in so every ribbon attaches to its own surface.
-            flow = depth * inverse_spacing
-            flow += drift * (flow if flow < 1.0 else 1.0)
-            distance = abs((flow + 0.5) % 1.0 - 0.5)
-            ribbon_width = 0.34 - 0.17 * depth_t
-            stipple = (index + y * 3) % 4
-            in_ribbon = distance < ribbon_width
-            feather = distance < ribbon_width + 0.12 and stipple == 0
-            if (in_ribbon and (depth_t < 0.55 or stipple != 0)) or feather:
+            if lit:
                 mask |= _BRAILLE_DOT_BITS[subrow][subcol]
     return mask
 
@@ -475,7 +542,7 @@ def _surface_current_mask(
 def render_idle_wave(
     tick: int, width: int, height: int, intensity: float = 0.0, wave_phase: float | None = None
 ) -> list[str]:
-    """Render luminous crests, flowing current ribbons, and distant swells.
+    """Render rolling water with a caustic tessellation and subtle CRT texture.
 
     Returns *height* ANSI-colored strings, each *width* visible characters
     wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
@@ -490,7 +557,9 @@ def render_idle_wave(
         tick, width * 2, height, intensity, wave_phase
     )
     phase = tick * _wave_phase_step(intensity) if wave_phase is None else wave_phase
-    current_profiles = _current_profiles(foreground_surface, height * 4, phase)
+    caustic_scale, caustic_columns, caustic_neighbors = _caustic_grid(width * 2, height * 4, phase)
+    caustic_xs = [(col * 2 + 1) * caustic_scale for col in range(width)]
+    caustic_y_offsets = [0.10 * math.sin(x * 3.1 - phase * 0.018) for x in caustic_xs]
     far_occluding_surface = [
         min(middle_y, foreground_y)
         for middle_y, foreground_y in zip(
@@ -514,17 +583,28 @@ def render_idle_wave(
     far_depth = _FAR_DEPTH + 0.06 * intensity
     middle_depth = _MIDDLE_DEPTH + 0.04 * intensity
 
-    rows: list[str] = []
-    for row in range(height):
+    # Empty sky still has to be cleared, but needs no material or contour work.
+    # Skipping its samples keeps large-terminal input responsive.
+    top = min(min(far_surface), min(middle_surface), min(foreground_surface))
+    first_row = max(0, min(height, math.floor(top) // 4))
+    rows: list[str] = [" " * width] * first_row
+    for row in range(first_row, height):
         screen_depth = (row + 0.5) / height
         screen_shade = 1.0 - _SCREEN_DEPTH_FALLOFF * screen_depth
         foreground_depth_codes = tuple(
-            _color_code(
-                _scale_color(
-                    active_color,
-                    (_SURFACE_SHADE + (_DEEP_SHADE - _SURFACE_SHADE) * band / (_DEPTH_BANDS - 1))
-                    * screen_shade,
+            tuple(
+                _color_code(
+                    _scale_color(
+                        active_color,
+                        (
+                            _SURFACE_SHADE
+                            + (_DEEP_SHADE - _SURFACE_SHADE) * band / (_DEPTH_BANDS - 1)
+                        )
+                        * screen_shade
+                        * lighting,
+                    )
                 )
+                for lighting in (0.46, 1.08)
             )
             for band in range(_DEPTH_BANDS)
         )
@@ -534,18 +614,27 @@ def render_idle_wave(
         far_contour_code = _color_code(_scale_color(active_color, far_depth * screen_shade))
         parts: list[str] = []
         current_color: str | None = None
+        caustic_y = (row * 4 + 2) * caustic_scale
+        caustic_x_offset = 0.10 * math.sin(caustic_y * 3.7 + phase * 0.013)
 
         for col in range(width):
             foreground_mask = _surface_fill_mask(foreground_surface, row, col)
             if foreground_mask:
-                mask = _surface_current_mask(foreground_surface, current_profiles, row, col)
+                caustic_x = caustic_xs[col] + caustic_x_offset
+                warped_y = caustic_y + caustic_y_offsets[col]
+                neighbors = caustic_neighbors[int(warped_y) * caustic_columns + int(caustic_x)]
+                edges = _caustic_edges(neighbors, caustic_x, warped_y, caustic_scale)
+                mask = _surface_water_mask(foreground_surface, edges, row, col)
                 depth_band = _surface_depth_band(
                     foreground_surface,
                     row,
                     col,
                     height * 4,
                 )
-                color = foreground_depth_codes[depth_band]
+                surface_y = (foreground_surface[col * 2] + foreground_surface[col * 2 + 1]) * 0.5
+                rim = row * 4 + 2 - surface_y < 2.5
+                focused_light = min(edges[0][2], edges[1][2]) < 0.12
+                color = foreground_depth_codes[depth_band][rim or focused_light]
             else:
                 middle_mask = _surface_contour_mask(
                     middle_surface,
@@ -567,7 +656,7 @@ def render_idle_wave(
 
             if not mask:
                 # Foreground color does not affect spaces. Keep the color run
-                # open through ribbon gaps to avoid flooding the PTY with SGR.
+                # open through texture gaps to avoid flooding the PTY with SGR.
                 parts.append(" ")
                 continue
 
