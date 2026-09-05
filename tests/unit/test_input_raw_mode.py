@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import pty
 import select
+import sys
 import termios
 import time
 import tty
@@ -27,6 +28,7 @@ import tty
 import pytest
 
 from wavebench.tui.input import _read_key_timeout, hold_raw
+from wavebench.tui.line_editor import _read_line
 
 # Generous margin for master→slave data to traverse the kernel's tty buffers.
 _SETTLE = 0.05
@@ -166,4 +168,27 @@ def test_read_key_timeout_restores_cooked_mode_when_not_held(pty_stdin) -> None:
 
     assert _read_key_timeout(0.01) is None
 
+    assert termios.tcgetattr(slave) == before
+
+
+def test_editor_restores_text_and_cursor_after_an_idle_screen_redraw(pty_stdin, capsys) -> None:
+    """Resizing the wave must preserve a partially edited prompt on screen."""
+    master, slave = pty_stdin
+    before = termios.tcgetattr(slave)
+    os.write(master, b"wave\033[D")
+
+    def redraw_screen() -> bool:
+        sys.stdout.write("\033[2J\033[9;1H")
+        os.write(master, b"!\r")
+        return True
+
+    result = _read_line(
+        "> ",
+        on_idle=redraw_screen,
+        idle_timeout=0.01,
+    )
+
+    assert result == "wav!e"
+    # Repaint the existing text, then move left to the original edit position.
+    assert "\033[2J\033[9;1H\r> wave\033[K\033[1D" in capsys.readouterr().out
     assert termios.tcgetattr(slave) == before

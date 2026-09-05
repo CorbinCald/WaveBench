@@ -267,7 +267,7 @@ def main() -> None:
     if not args.prompt:
         mode_from_cli = args.mode is not None or args.text
 
-        def _print_mode_menu() -> None:
+        def _mode_menu_rows() -> list[str]:
             active = selected_models if selected_models is not None else MODEL_MAPPING
             w = _tw() - 4
             row = (
@@ -279,9 +279,18 @@ def main() -> None:
                 f"{S.DIM}{len(active)} models{S.RST}  "
                 f"{_styles.ACCENT}[c]{S.RST} config"
             )
-            print(_box_top("Select Mode", w))
-            print(_box_row(row, w))
-            print(_box_bot(w))
+            return [_box_top("Select Mode", w), _box_row(row, w), _box_bot(w)]
+
+        def _print_mode_menu() -> None:
+            print("\n".join(_mode_menu_rows()))
+
+        def _model_summary_rows() -> list[str]:
+            w = _tw() - 4
+            return [
+                _box_top(f"{len(active)} Models", w),
+                _box_row(_styles._truncate(summary, max(1, w - 4)), w),
+                _box_bot(w),
+            ]
 
         def _refresh_header() -> None:
             sys.stdout.write("\033[2J\033[H")
@@ -292,10 +301,28 @@ def main() -> None:
 
         _PROMPT_ROW = 9
         _wave_tick = 0
+        _idle_size = shutil.get_terminal_size((80, 24))
+        _selecting_mode = not mode_from_cli
 
-        def _wave_idle() -> None:
-            nonlocal _wave_tick
+        def _wave_idle() -> bool:
+            nonlocal _wave_tick, _idle_size
             term = shutil.get_terminal_size((80, 24))
+            resized = term != _idle_size
+            if resized:
+                # Resizing can reflow old wave rows above the drawing region
+                # and move the prompt cursor. Rebuild the screen at its fixed
+                # coordinates before saving a cursor for the next overlay.
+                panel = _mode_menu_rows() if _selecting_mode else _model_summary_rows()
+                header = ["", *_banner("WAVEBENCH").split("\n"), "", *panel]
+                body = "\033[2J\033[H" + "\r\n".join(header)
+                body += f"\033[{_PROMPT_ROW};1H"
+                if _selecting_mode:
+                    body += mode_prompt
+                sys.stdout.write(
+                    _styles.SYNC_BEGIN + _styles.CURSOR_HIDE + body + CURSOR_SHOW + _styles.SYNC_END
+                )
+                sys.stdout.flush()
+                _idle_size = term
             _wt = _PROMPT_ROW + 1
             _wh = term.lines - _wt
             _ww = term.columns - 2
@@ -308,6 +335,9 @@ def main() -> None:
                 sys.stdout.write(overlay_frame("".join(_buf)))
                 sys.stdout.flush()
             _wave_tick += 1
+            # The editor owns the text buffer and can restore it after a full
+            # redraw, including a cursor positioned in the middle of the text.
+            return resized
 
         def _restore_cursor() -> None:
             """Undo a wave frame's cursor hide if we die between hide and show.
@@ -329,6 +359,7 @@ def main() -> None:
 
             # ── Mode selection (skip if --mode/--text was passed on CLI) ────
             if not mode_from_cli:
+                _selecting_mode = True
                 _print_mode_menu()
                 mode_prompt = f"  {S.DIM}mode{S.RST} {_styles.ACCENT_HI}›{S.RST} "
                 sys.stdout.write(mode_prompt)
@@ -440,10 +471,8 @@ def main() -> None:
             summary = ", ".join(names[:6])
             if len(names) > 6:
                 summary += f", … (+{len(names) - 6})"
-            w = _tw() - 4
-            print(_box_top(f"{len(active)} Models", w))
-            print(_box_row(summary, w))
-            print(_box_bot(w))
+            _selecting_mode = False
+            print("\n".join(_model_summary_rows()))
 
             # ── Prompt input ──────────────────────────────────────────
             try:

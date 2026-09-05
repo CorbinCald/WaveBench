@@ -77,7 +77,8 @@ def _read_line(
 
     Supports left/right, home/end, backspace/delete, Ctrl+A/E/K/U/W,
     up/down for history, and raises *_TabEscape* on Tab or Escape.
-    If *on_idle* is provided, it is called while waiting for input.
+    If *on_idle* is provided, it is called while waiting for input. Returning
+    True asks the editor to repaint its text and cursor after a screen redraw.
     """
     if not _HAS_TTY:
         return input(re.sub(r"\033\[[0-9;]*m", "", prompt))
@@ -103,8 +104,8 @@ def _read_line(
         while True:
             ready, _, _ = select.select([fd], [], [], _idle_timeout)
             if not ready:
-                if on_idle:
-                    on_idle()
+                if on_idle and on_idle() is True:
+                    _redraw_input(prompt, buf, cursor)
                 continue
             raw = os.read(fd, 1)
             if not raw:
