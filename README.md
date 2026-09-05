@@ -42,6 +42,8 @@ python -m wavebench
 
 Interactive startup shows a **Code / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific readline-style history. Type `c` at the mode prompt to open the configuration menu.
 
+[Watch a preview of the animated progress display.](docs/wave-animation.md)
+
 ### CLI Flags
 
 | Flag | Description |
