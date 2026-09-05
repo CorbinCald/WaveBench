@@ -441,7 +441,9 @@ def test_water_has_a_continuous_crest_and_a_connected_body(
     """Caustics leave fine texture, but never cut empty bands through the water."""
     for intensity in (0.0, 0.5, 1.0):
         for tick in (0, 40, 100):
-            foreground = wave_mod._idle_wave_surfaces(tick, width * 2, height, intensity, None)[-1]
+            surfaces = wave_mod._idle_wave_surfaces(tick, width * 2, height, intensity, None)
+            foreground = surfaces[-1]
+            skyline = [min(ys) for ys in zip(*surfaces, strict=True)]
             rows = wave_mod.render_idle_wave(tick, width, height, intensity)
             water_dots = lit_dots = 0
             for row_index, rendered in enumerate(rows):
@@ -452,8 +454,8 @@ def test_water_has_a_continuous_crest_and_a_connected_body(
                         continue
                     mask = ord(glyph) - 0x2800 if glyph != " " else 0
                     water_dots += water.bit_count()
-                    lit_dots += mask.bit_count()
-                    assert mask & ~water == 0
+                    lit_dots += (mask & water).bit_count()
+                    assert mask & ~wave_mod._surface_fill_mask(skyline, row_index, col) == 0
                     if water == 0xFF:
                         assert mask, "submerged cells must retain some water between highlights"
                     for subcol in range(2):
@@ -482,6 +484,68 @@ def test_distant_water_cannot_shine_through_nearer_texture(
     without_background = wave_mod.render_idle_wave(40, 6, 6, 0.5)
 
     assert with_background == without_background
+
+
+@pytest.mark.parametrize(("rear_layer", "near_layer"), [(0, 1), (0, 2), (1, 2)])
+@pytest.mark.parametrize("crest", [(1.2, 1.2), (2.2, 2.2), (3.2, 3.2), (1.2, 3.2), (3.2, 1.2)])
+def test_overlapping_crests_preserve_exposed_background_dots(
+    colored, monkeypatch, rear_layer, near_layer, crest
+) -> None:
+    """A partial crest must not clear the rear water in the rest of its character."""
+    surfaces = [[100.0] * 4 for _ in range(3)]
+    surfaces[rear_layer] = [-4.0] * 4
+    surfaces[near_layer] = list(crest) * 2
+    monkeypatch.setattr(wave_mod, "_idle_wave_surfaces", lambda *_args: tuple(surfaces))
+    # Quiet water makes the expected dots independent of moving highlights.
+    monkeypatch.setattr(
+        wave_mod,
+        "_caustic_edges",
+        lambda *_args: (
+            (0.0, 0.0, 100.0),
+            (0.0, 0.0, 100.0),
+            wave_mod._phosphor_limits(0.28, 1.0),
+        ),
+    )
+
+    rendered = wave_mod.render_idle_wave(0, 2, 1, 0.5)[0]
+    visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
+    for col, glyph in enumerate(visible):
+        mask = ord(glyph) - 0x2800
+        # Both character columns have an ambient dot at their upper left,
+        # above the nearer crest. Previously the whole upper cell was erased.
+        assert mask & 0x01, "exposed background water must survive inside a shared cell"
+        for subcol, surface_y in enumerate(crest):
+            for subrow, bits in enumerate(wave_mod._BRAILLE_DOT_BITS):
+                depth = subrow + 0.5 - surface_y
+                ambient = wave_mod._PHOSPHOR[subrow][(col * 2 + subcol) % 4] < 0.28 * (
+                    0.86 if subrow == 3 else 1.0
+                )
+                expected = 0 <= depth < 1.0 or ambient
+                assert bool(mask & bits[subcol]) == expected
+
+
+def test_three_waves_share_a_cell_without_revealing_submerged_crests(colored, monkeypatch) -> None:
+    """Crossing surfaces keep every exposed rim, but hide rims under nearer texture."""
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([0.2, 0.2], [2.2, 2.2], [3.2, 1.2]),
+    )
+    monkeypatch.setattr(
+        wave_mod,
+        "_caustic_edges",
+        lambda *_args: (
+            (0.0, 0.0, 100.0),
+            (0.0, 0.0, 100.0),
+            wave_mod._phosphor_limits(0.28, 1.0),
+        ),
+    )
+
+    rendered = wave_mod.render_idle_wave(0, 1, 1, 0.5)[0]
+    visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
+    # Left column: far rim, blank, middle rim, front rim. Right column:
+    # far rim, front rim, then blank texture that must hide the middle rim.
+    assert visible == chr(0x2800 + 0x5D)
 
 
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (10, 3), (40, 60), (300, 60)])
