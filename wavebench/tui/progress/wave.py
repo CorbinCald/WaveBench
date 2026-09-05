@@ -247,6 +247,22 @@ def _wave_phase_step(intensity: float) -> float:
     return _IDLE_PHASE_STEP + (_ACTIVE_PHASE_STEP - _IDLE_PHASE_STEP) * intensity
 
 
+def _crest_harmonics(phase: float, intensity: float) -> float:
+    """Narrow each peak and lean its leading face over a broad trough."""
+    return -(0.075 + 0.040 * intensity) * math.cos(phase * 2.0) - (
+        0.030 + 0.015 * intensity
+    ) * math.sin(phase * 2.0)
+
+
+def _crest_ripple(nx: float, crest_phase: float, phase: float, amp: float, damping: float) -> float:
+    """Carry small crossing ripples along a crest at its layer's travel speed."""
+    crest = 0.5 + 0.5 * math.sin(crest_phase)
+    ripple = 0.65 * math.sin(nx * 57.3 - phase * 0.39 + 1.2) + 0.35 * math.sin(
+        nx * 91.7 - phase * 0.61 + 2.8
+    )
+    return ripple * min(1.2, amp * 0.14) * damping * (0.30 + 0.70 * crest * crest)
+
+
 def _idle_wave_surfaces(
     tick: int,
     width: int,
@@ -289,8 +305,10 @@ def _idle_wave_surfaces(
     for col in range(width):
         nx = col / max(width - 1, 1)
 
+        far_phase = nx * 12.2 - wave_phase * 0.038 + 0.8
         far_height = (
-            0.72 * math.sin(nx * 12.2 - wave_phase * 0.038 + 0.8)
+            0.72 * math.sin(far_phase)
+            + _crest_harmonics(far_phase, intensity)
             + (0.065 + 0.025 * intensity) * math.sin(nx * 22.0 - wave_phase * 0.052 + 2.4)
             + (0.010 + 0.020 * intensity) * math.sin(nx * 34.0 - wave_phase * 0.068 + 0.3)
         )
@@ -300,10 +318,17 @@ def _idle_wave_surfaces(
             1.015 + 0.050 * intensity,
             limiter + 0.16,
         )
-        far.append(center - depth_gap * 2.0 - far_height * amp * 0.34)
+        far.append(
+            center
+            - depth_gap * 2.0
+            - far_height * amp * 0.34
+            - _crest_ripple(nx, far_phase, wave_phase * 0.44 + 12.0, amp * 0.34, aspect_damping)
+        )
 
+        middle_phase = nx * 11.2 - wave_phase * 0.061 + 0.3
         middle_height = (
-            0.68 * math.sin(nx * 11.2 - wave_phase * 0.061 + 0.3)
+            0.68 * math.sin(middle_phase)
+            + _crest_harmonics(middle_phase, intensity)
             + (0.045 + 0.070 * intensity) * math.sin(nx * 20.4 - wave_phase * 0.084 + 2.0)
             + (0.010 + 0.035 * intensity) * math.sin(nx * 32.0 - wave_phase * 0.108 + 3.4)
         )
@@ -313,15 +338,17 @@ def _idle_wave_surfaces(
             1.025 + 0.090 * intensity,
             limiter + 0.08,
         )
-        middle.append(center - depth_gap - middle_height * amp * 0.62)
+        middle.append(
+            center
+            - depth_gap
+            - middle_height * amp * 0.62
+            - _crest_ripple(nx, middle_phase, wave_phase * 0.71 + 6.0, amp * 0.62, aspect_damping)
+        )
 
         foreground_phase = nx * 10.2 - wave_phase * 0.086
         foreground_height = (
             0.64 * math.sin(foreground_phase)
-            # Bound harmonics narrow the peaks and lean their leading faces,
-            # while leaving room for broad, rounded troughs.
-            - (0.075 + 0.040 * intensity) * math.cos(foreground_phase * 2.0)
-            - (0.030 + 0.015 * intensity) * math.sin(foreground_phase * 2.0)
+            + _crest_harmonics(foreground_phase, intensity)
             + (0.050 + 0.080 * intensity) * math.sin(nx * 18.8 - wave_phase * 0.116 + 1.7)
             + (0.012 + 0.040 * intensity) * math.sin(nx * 29.0 - wave_phase * 0.148 + 3.1)
         )
@@ -331,14 +358,11 @@ def _idle_wave_surfaces(
             crest_exp,
             limiter,
         )
-        # Small crossing ripples roughen the crests continuously, with less
-        # detail in the troughs and a dot-sized cap at large terminal sizes.
-        crest = 0.5 + 0.5 * math.sin(foreground_phase)
-        ripple = 0.65 * math.sin(nx * 57.3 - wave_phase * 0.39 + 1.2) + 0.35 * math.sin(
-            nx * 91.7 - wave_phase * 0.61 + 2.8
+        foreground.append(
+            center
+            - foreground_height * amp
+            - _crest_ripple(nx, foreground_phase, wave_phase, amp, aspect_damping)
         )
-        ripple *= min(1.2, amp * 0.14) * aspect_damping * (0.30 + 0.70 * crest * crest)
-        foreground.append(center - foreground_height * amp - ripple)
 
     return far, middle, foreground
 
@@ -373,24 +397,6 @@ def _surface_fill_mask(surface: list[float], row: int, col: int) -> int:
     return mask
 
 
-def _surface_contour_mask(
-    surface: list[float],
-    row: int,
-    col: int,
-    occluding_surface: list[float] | None = None,
-) -> int:
-    """Return a two-dot-wide contour, clipped behind a nearer surface."""
-    mask = 0
-    for subcol in range(2):
-        index = col * 2 + subcol
-        if occluding_surface is not None and surface[index] >= occluding_surface[index]:
-            continue
-        dot_y = math.floor(surface[index])
-        if dot_y >= 0 and dot_y // 4 == row:
-            mask |= _BRAILLE_DOT_BITS[dot_y % 4][subcol]
-    return mask
-
-
 # Depth ramp for the three ocean layers, as a fraction of the active colour.
 # Every layer is the same colour scaled down, so depth reads as lightness only.
 # Both rear layers stay below the foreground surface highlight, preserving the
@@ -405,6 +411,7 @@ _SURFACE_SHADE = 1.08
 _DEEP_SHADE = 0.38
 _SCREEN_DEPTH_FALLOFF = 0.16
 _SURFACE_RIM_DOTS = 1.0
+_BACKGROUND_EFFECT_PADDING = 1.5
 
 
 def _surface_depth_band(
@@ -412,17 +419,24 @@ def _surface_depth_band(
     row: int,
     col: int,
     total_height: int,
+    occluding_surface: list[float] | None = None,
+    bands: int = _DEPTH_BANDS,
 ) -> int:
     """Map one water cell to a lightness band below its local surface."""
     surface_y = (surface[col * 2] + surface[col * 2 + 1]) * 0.5
     cell_midpoint = row * 4 + 1.5
     depth = max(0.0, cell_midpoint - surface_y)
-    water_column = max(total_height - surface_y, 4.0)
+    bottom = (
+        total_height
+        if occluding_surface is None
+        else min(total_height, (occluding_surface[col * 2] + occluding_surface[col * 2 + 1]) * 0.5)
+    )
+    water_column = max(bottom - surface_y, 4.0)
     depth_t = min(1.0, depth / water_column)
     # Smoothstep holds a soft highlight near the surface and avoids crowding
     # most of the available colors into the shallowest cells.
     depth_t = depth_t * depth_t * (3.0 - 2.0 * depth_t)
-    return min(_DEPTH_BANDS - 1, round(depth_t * (_DEPTH_BANDS - 1)))
+    return min(bands - 1, round(depth_t * (bands - 1)))
 
 
 _PhosphorLimits = tuple[tuple[float, ...], ...]
@@ -432,6 +446,7 @@ _CausticEdge = tuple[float, float, float]
 _CAUSTIC_FALLOFF_DOTS = 1.0
 # Low-contrast shades let refracted light blend into the surrounding water.
 _CAUSTIC_LIGHTING = (0.62, 0.67, 0.72, 0.77, 0.82)
+_BACKGROUND_LIGHTING = (0.62, 0.72, 0.82)
 
 
 def _caustic_grid(
@@ -534,6 +549,7 @@ def _surface_water_mask(
     edges: tuple[_CausticEdge, _CausticEdge, _PhosphorLimits],
     row: int,
     col: int,
+    occluding_surface: list[float] | None = None,
 ) -> int:
     """Sample a solid surface rim, caustic highlights, and fine CRT scanlines."""
     (ax, ay, a), (bx, by, b), limits = edges
@@ -541,6 +557,7 @@ def _surface_water_mask(
     for subcol in range(2):
         index = col * 2 + subcol
         surface_y = surface[index]
+        near_y = math.inf if occluding_surface is None else occluding_surface[index]
         edge_a = a + ax * (subcol - 0.5) - ay * 1.5
         edge_b = b + bx * (subcol - 0.5) - by * 1.5
         for subrow in range(4):
@@ -549,12 +566,18 @@ def _surface_water_mask(
             lit = abs(edge_a) < limit or abs(edge_b) < limit
             edge_a += ay
             edge_b += by
-            if depth < 0:
+            if depth < 0 or row * 4 + subrow + 0.5 >= near_y:
                 continue
             if depth < _SURFACE_RIM_DOTS:
                 mask |= _BRAILLE_DOT_BITS[subrow][subcol]
                 continue
-            if lit:
+            # Preserve quiet water around both silhouettes. Ambient phosphor
+            # remains, but focused caustics stay inside the visible layer.
+            inset = occluding_surface is None or (
+                depth >= _SURFACE_RIM_DOTS + _BACKGROUND_EFFECT_PADDING
+                and near_y - (row * 4 + subrow + 0.5) >= _BACKGROUND_EFFECT_PADDING
+            )
+            if lit and (inset or math.isinf(limit)):
                 mask |= _BRAILLE_DOT_BITS[subrow][subcol]
     return mask
 
@@ -566,8 +589,9 @@ def render_idle_wave(
 
     Returns *height* ANSI-colored strings, each *width* visible characters
     wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
-    Rear contours are clipped by the entire foreground water column, including
-    gaps in its texture: a terminal cell has only one foreground color.
+    Each layer carries its own moving material. A nearer water column owns
+    the entire terminal cell, including gaps in its phosphor texture, since
+    a braille character can only carry one foreground color.
     """
     if _NO_COLOR or height <= 0 or width <= 0:
         return [" " * width] * max(height, 0)
@@ -577,9 +601,6 @@ def render_idle_wave(
         tick, width * 2, height, intensity, wave_phase
     )
     phase = tick * _wave_phase_step(intensity) if wave_phase is None else wave_phase
-    caustic_scale, caustic_columns, caustic_neighbors = _caustic_grid(width * 2, height * 4, phase)
-    caustic_xs = [(col * 2 + 1) * caustic_scale for col in range(width)]
-    caustic_y_offsets = [0.10 * math.sin(x * 3.1 - phase * 0.018) for x in caustic_xs]
     far_occluding_surface = [
         min(middle_y, foreground_y)
         for middle_y, foreground_y in zip(
@@ -602,6 +623,18 @@ def render_idle_wave(
     # the layer in front of it.
     far_depth = _FAR_DEPTH + 0.06 * intensity
     middle_depth = _MIDDLE_DEPTH + 0.04 * intensity
+    # Front to back: surface, occluder, brightness, material phase.
+    layers = (
+        (foreground_surface, None, 1.0, phase),
+        (middle_surface, foreground_surface, middle_depth, phase * 0.71 + 17.0),
+        (far_surface, far_occluding_surface, far_depth, phase * 0.44 + 31.0),
+    )
+    fields = []
+    for _surface, _occluder, _depth, material_phase in layers:
+        scale, columns, neighbors = _caustic_grid(width * 2, height * 4, material_phase)
+        xs = [(col * 2 + 1) * scale for col in range(width)]
+        y_offsets = [0.10 * math.sin(x * 3.1 - material_phase * 0.018) for x in xs]
+        fields.append((scale, columns, neighbors, xs, y_offsets))
 
     # Empty sky still has to be cleared, but needs no material or contour work.
     # Skipping its samples keeps large-terminal input responsive.
@@ -611,85 +644,75 @@ def render_idle_wave(
     for row in range(first_row, height):
         screen_depth = (row + 0.5) / height
         screen_shade = 1.0 - _SCREEN_DEPTH_FALLOFF * screen_depth
-        foreground_depth_codes = tuple(
-            tuple(
-                _color_code(
-                    _scale_color(
-                        active_color,
-                        (
-                            _SURFACE_SHADE
-                            + (_DEEP_SHADE - _SURFACE_SHADE) * band / (_DEPTH_BANDS - 1)
-                        )
-                        * screen_shade
-                        * lighting,
-                    )
-                )
-                for lighting in (*_CAUSTIC_LIGHTING, 0.96)
-            )
-            for band in range(_DEPTH_BANDS)
-        )
-        # Rear contours retain their distance cue while sharing the gentle
-        # screen-depth attenuation applied to the foreground water.
-        middle_contour_code = _color_code(_scale_color(active_color, middle_depth * screen_shade))
-        far_contour_code = _color_code(_scale_color(active_color, far_depth * screen_shade))
+        # Only build shades for visible layers and depth bands in this row.
+        depth_codes: dict[tuple[int, int], tuple[str, ...]] = {}
         parts: list[str] = []
         current_color: str | None = None
-        caustic_y = (row * 4 + 2) * caustic_scale
-        caustic_x_offset = 0.10 * math.sin(caustic_y * 3.7 + phase * 0.013)
+        caustic_ys = [(row * 4 + 2) * field[0] for field in fields]
+        caustic_x_offsets = [
+            0.10 * math.sin(y * 3.7 + layer[3] * 0.013)
+            for y, layer in zip(caustic_ys, layers, strict=True)
+        ]
 
         for col in range(width):
-            foreground_mask = _surface_fill_mask(foreground_surface, row, col)
-            if foreground_mask:
-                caustic_x = caustic_xs[col] + caustic_x_offset
-                warped_y = caustic_y + caustic_y_offsets[col]
-                neighbors = caustic_neighbors[int(warped_y) * caustic_columns + int(caustic_x)]
-                edges = _caustic_edges(neighbors, caustic_x, warped_y, caustic_scale)
-                mask = _surface_water_mask(foreground_surface, edges, row, col)
-                depth_band = _surface_depth_band(
-                    foreground_surface,
-                    row,
-                    col,
-                    height * 4,
-                )
-                surface_y = (foreground_surface[col * 2] + foreground_surface[col * 2 + 1]) * 0.5
-                rim = row * 4 + 2 - surface_y < _SURFACE_RIM_DOTS
-                # Ease the shimmer in and out as an edge crosses the cell.
-                # A faint shoulder softens the light without widening its dots.
-                light = max(
-                    0.0,
-                    1.0
-                    - min(edges[0][2], edges[1][2]) / (1.5 * _CAUSTIC_FALLOFF_DOTS * caustic_scale),
-                )
-                light = light * light * (3.0 - 2.0 * light)
-                lighting_band = (
-                    len(_CAUSTIC_LIGHTING) if rim else round(light * (len(_CAUSTIC_LIGHTING) - 1))
-                )
-                color = foreground_depth_codes[depth_band][lighting_band]
+            for layer_index, (surface, occluder, layer_depth, _phase) in enumerate(layers):
+                if _surface_fill_mask(surface, row, col):
+                    break
             else:
-                middle_mask = _surface_contour_mask(
-                    middle_surface,
-                    row,
-                    col,
-                    occluding_surface=foreground_surface,
-                )
-                if middle_mask:
-                    mask = middle_mask
-                    color = middle_contour_code
-                else:
-                    mask = _surface_contour_mask(
-                        far_surface,
-                        row,
-                        col,
-                        occluding_surface=far_occluding_surface,
-                    )
-                    color = far_contour_code
-
-            if not mask:
-                # Foreground color does not affect spaces. Keep the color run
-                # open through texture gaps to avoid flooding the PTY with SGR.
                 parts.append(" ")
                 continue
 
+            scale, columns, caustic_neighbors, xs, y_offsets = fields[layer_index]
+            cx = xs[col] + caustic_x_offsets[layer_index]
+            cy = caustic_ys[layer_index] + y_offsets[col]
+            neighbors = caustic_neighbors[int(cy) * columns + int(cx)]
+            edges = _caustic_edges(neighbors, cx, cy, scale)
+            mask = _surface_water_mask(surface, edges, row, col, occluder)
+            if not mask:
+                parts.append(" ")
+                continue
+
+            # Distant water uses a shorter ramp across its visible depth.
+            # Coarser bands keep narrow strips economical to send over a PTY.
+            bands = _DEPTH_BANDS if occluder is None else 3
+            lighting_levels = _CAUSTIC_LIGHTING if occluder is None else _BACKGROUND_LIGHTING
+            depth_band = _surface_depth_band(surface, row, col, height * 4, occluder, bands)
+            codes = depth_codes.get((layer_index, depth_band))
+            if codes is None:
+                deep_shade = _DEEP_SHADE if occluder is None else 0.60
+                shade = (
+                    (_SURFACE_SHADE + (deep_shade - _SURFACE_SHADE) * depth_band / (bands - 1))
+                    * screen_shade
+                    * layer_depth
+                )
+                codes = tuple(
+                    _color_code(_scale_color(active_color, shade * lighting))
+                    for lighting in (*lighting_levels, 0.96)
+                )
+                depth_codes[layer_index, depth_band] = codes
+
+            surface_y = (surface[col * 2] + surface[col * 2 + 1]) * 0.5
+            cell_depth = row * 4 + 2 - surface_y
+            rim = cell_depth < _SURFACE_RIM_DOTS
+            light = max(
+                0.0, 1.0 - min(edges[0][2], edges[1][2]) / (1.5 * _CAUSTIC_FALLOFF_DOTS * scale)
+            )
+            light = light * light * (3.0 - 2.0 * light)
+            if occluder is not None:
+                clearance = (occluder[col * 2] + occluder[col * 2 + 1]) * 0.5 - (row * 4 + 2)
+                light *= max(
+                    0.0,
+                    min(
+                        1.0,
+                        (cell_depth - _SURFACE_RIM_DOTS) / _BACKGROUND_EFFECT_PADDING,
+                        clearance / _BACKGROUND_EFFECT_PADDING,
+                    ),
+                )
+            lighting_band = (
+                len(lighting_levels) if rim else round(light * (len(lighting_levels) - 1))
+            )
+            color = codes[lighting_band]
+            # Keep color runs open across blank texture to avoid excess SGR.
             if color != current_color:
                 parts.append(color)
                 current_color = color
