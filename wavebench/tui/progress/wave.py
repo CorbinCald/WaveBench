@@ -380,7 +380,7 @@ _BRAILLE_FILL_MASKS = (
 
 
 def _surface_fill_mask(surface: list[float], row: int, col: int) -> int:
-    """Return the foreground-water mask for one 2×4 braille cell."""
+    """Return the occupied water dots for one 2×4 braille cell."""
     cell_top = row * 4
     left, right = surface[col * 2], surface[col * 2 + 1]
     # Most cells are wholly above or below the surface. Only the edge needs
@@ -589,9 +589,9 @@ def render_idle_wave(
 
     Returns *height* ANSI-colored strings, each *width* visible characters
     wide.  Each surface is sampled at the braille cell's true 2×4 resolution.
-    Each layer carries its own moving material. A nearer water column owns
-    the entire terminal cell, including gaps in its phosphor texture, since
-    a braille character can only carry one foreground color.
+    Each layer carries its own moving material. Nearer water hides rear dots
+    only below its surface, including gaps in its phosphor texture. Shared
+    cells combine exposed dots using the nearest visible layer's color.
     """
     if _NO_COLOR or height <= 0 or width <= 0:
         return [" " * width] * max(height, 0)
@@ -655,23 +655,32 @@ def render_idle_wave(
         ]
 
         for col in range(width):
+            mask = covered = 0
+            color_layer = None
             for layer_index, (surface, occluder, layer_depth, _phase) in enumerate(layers):
-                if _surface_fill_mask(surface, row, col):
+                fill = _surface_fill_mask(surface, row, col)
+                exposed = fill & ~covered
+                covered |= fill
+                if exposed:
+                    scale, columns, caustic_neighbors, xs, y_offsets = fields[layer_index]
+                    cx = xs[col] + caustic_x_offsets[layer_index]
+                    cy = caustic_ys[layer_index] + y_offsets[col]
+                    neighbors = caustic_neighbors[int(cy) * columns + int(cx)]
+                    edges = _caustic_edges(neighbors, cx, cy, scale)
+                    visible = _surface_water_mask(surface, edges, row, col, occluder) & exposed
+                    mask |= visible
+                    if visible and color_layer is None:
+                        color_layer = layer_index, surface, occluder, layer_depth, edges, scale
+                # Stop only once water covers every dot. Stopping at the first
+                # partial crest erased the exposed rear water above it, leaving
+                # rectangular gaps along overlaps. Texture holes still occlude.
+                if covered == 0xFF:
                     break
-            else:
+            if color_layer is None:
                 parts.append(" ")
                 continue
 
-            scale, columns, caustic_neighbors, xs, y_offsets = fields[layer_index]
-            cx = xs[col] + caustic_x_offsets[layer_index]
-            cy = caustic_ys[layer_index] + y_offsets[col]
-            neighbors = caustic_neighbors[int(cy) * columns + int(cx)]
-            edges = _caustic_edges(neighbors, cx, cy, scale)
-            mask = _surface_water_mask(surface, edges, row, col, occluder)
-            if not mask:
-                parts.append(" ")
-                continue
-
+            layer_index, surface, occluder, layer_depth, edges, scale = color_layer
             # Distant water uses a shorter ramp across its visible depth.
             # Coarser bands keep narrow strips economical to send over a PTY.
             bands = _DEPTH_BANDS if occluder is None else 3
