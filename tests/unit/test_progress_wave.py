@@ -818,6 +818,49 @@ def test_reduced_color_waves_never_render_grey(colored, palette) -> None:
     styles.apply_theme("default")
 
 
+def test_reduced_color_acai_idle_crest_does_not_flash_cyan(colored, palette) -> None:
+    """Idle Acai's crest must not switch hue as it moves through character rows."""
+    styles.apply_theme("acai")
+    try:
+        for tick, phase in ((0, 0.0), (40, 26.0), (120, 90.0)):
+            rows = wave_mod.render_idle_wave(tick, 150, 22, 0.0, wave_phase=phase)
+            colors = [color for row in rows for color in _lit_cell_colors(row)]
+            assert colors
+            assert _hue_drift(colors) < 0.08, (tick, set(colors))
+    finally:
+        styles.apply_theme("default")
+
+
+@pytest.mark.parametrize("theme", styles.THEME_NAMES)
+def test_reduced_color_crests_keep_soft_lighting(colored, palette, monkeypatch, theme) -> None:
+    """A small rim highlight cannot make water several times brighter."""
+    # Alternate a rim and shallow water within one row, at the same depth band.
+    # This reproduces the broken bright segments as a crest crosses cell rows.
+    monkeypatch.setattr(
+        wave_mod,
+        "_idle_wave_surfaces",
+        lambda *_args: ([100.0] * 20, [100.0] * 20, [7.2, 7.2, 9.2, 9.2] * 5),
+    )
+    monkeypatch.setattr(
+        wave_mod,
+        "_caustic_edges",
+        lambda *_args: (
+            (0.0, 0.0, 100.0),
+            (0.0, 0.0, 100.0),
+            wave_mod._phosphor_limits(0.28, 1.0),
+        ),
+    )
+    styles.apply_theme(theme)
+    try:
+        for intensity in (0.0, 0.25, 0.5, 0.75, 1.0):
+            row = wave_mod.render_idle_wave(40, 10, 22, intensity, wave_phase=26.0)[2]
+            brightness = [styles._luma(color) for color in _lit_cell_colors(row)]
+            assert brightness
+            assert max(brightness) < min(brightness) * 2, (theme, intensity, brightness)
+    finally:
+        styles.apply_theme("default")
+
+
 def test_reduced_color_ramp_only_fades_toward_its_dominant_channel() -> None:
     """Plain index scaling walks lime through green, *yellow*, then back to
     yellow-green. A ramp that doubles back reads as a color change, not depth."""
