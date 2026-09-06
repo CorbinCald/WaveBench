@@ -861,6 +861,34 @@ def test_reduced_color_acai_idle_crest_does_not_flash_cyan(colored, palette) -> 
 
 
 @pytest.mark.parametrize("theme", styles.THEME_NAMES)
+@pytest.mark.parametrize(("width", "height"), [(150, 22), (300, 60)])
+def test_reduced_color_water_has_no_horizontal_shade_cutoff(
+    colored, palette, theme, width, height
+) -> None:
+    """A rolling layer must not switch palette colors partway down its body."""
+    styles.apply_theme(theme)
+    try:
+        for tick, intensity, phase in ((0, 0.0, 0.0), (40, 0.5, 26.0), (120, 1.0, 90.0)):
+            foreground = wave_mod._idle_wave_surfaces(tick, width * 2, height, intensity, phase)[-1]
+            rows = wave_mod.render_idle_wave(tick, width, height, intensity, phase)
+            body_colors = set()
+            for row_index, row in enumerate(rows):
+                glyphs = re.sub(r"\033\[[0-9;]*m", "", row)
+                colors = iter(_lit_cell_colors(row))
+                for col, glyph in enumerate(glyphs):
+                    if glyph == " ":
+                        continue
+                    color = next(colors)
+                    # These characters sit entirely below the nearest surface,
+                    # so their dots all belong to the foreground water.
+                    if row_index * 4 + 0.5 >= max(foreground[col * 2 : col * 2 + 2]):
+                        body_colors.add(color)
+            assert len(body_colors) == 1, (theme, tick, intensity, body_colors)
+    finally:
+        styles.apply_theme("default")
+
+
+@pytest.mark.parametrize("theme", styles.THEME_NAMES)
 def test_reduced_color_crests_keep_soft_lighting(colored, palette, monkeypatch, theme) -> None:
     """A small rim highlight cannot make water several times brighter."""
     # Alternate a rim and shallow water within one row, at the same depth band.
