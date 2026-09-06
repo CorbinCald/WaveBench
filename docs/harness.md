@@ -155,10 +155,16 @@ hooks. HTML checks are structural parsing, not full HTML/CSS validation.
 Defaults are configured in `wavebench/harness/config.py`. Override them under
 `"harness"` in `.benchmark_config.json`; all values must be positive integers.
 To change the preview review timeout interactively, open `wavebench --config`,
-go to **Settings → Preview timeout (s)**, and press Space. Enter a positive
+go to **Settings → Preview review timeout (s)**, and press Space. Enter a positive
 whole number of seconds (Ctrl-A clears the field), press Enter to apply, then
 Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
 (10 minutes); the saved value is `harness.review_seconds`.
+The same Settings page exposes **Build time limit (s)**, **Repair time limit (s)**,
+**Total token budget**, and **Output tokens per turn**. These save to
+`harness.build_seconds`, `repair_seconds`, `total_tokens`, and `turn_tokens`.
+Time limits count active model requests and tools; scheduler waiting and preview
+review are separate. The total token budget is per model across every build and
+repair request, including repeated conversation input and generated output.
 
 | Limit | Default |
 |---|---:|
@@ -175,9 +181,11 @@ Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
 | Total source, runtime and dependency storage | 512 MiB, monitored during subprocesses |
 | Project execution attempts | **One initial run, plus one retry only after failure** |
 
-The token budget uses provider usage where available and a conservative UTF-8
-byte bound otherwise. Context admission includes the whole conversation and
-schema plus a reserve; provider context/output caps and reasoning adjustments
+The token budget uses provider usage where available. The next input estimate
+reuses the last provider-reported prompt count for the unchanged conversation
+prefix and conservatively counts UTF-8 bytes only for newly appended messages.
+Until a provider prompt count is available, the whole request uses the byte
+estimate. Context admission uses this same estimate plus a reserve; provider context/output caps and reasoning adjustments
 are recorded per turn. Missing usage and cost are persisted as unknown, never
 invented as zero. HTTP retries are bounded separately and never replay completed
 tool effects. Truncated or malformed streamed arguments do not execute.

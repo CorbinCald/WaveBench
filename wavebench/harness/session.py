@@ -102,6 +102,8 @@ class HarnessSession:
         self.descriptor = None
         self.preview = None
         self.budget_tokens = 0
+        self._known_prompt_tokens: int | None = None
+        self._known_prompt_bytes = 0
         self.api_seconds = 0.0
         self.tool_seconds = 0.0
         self.build_seconds = 0.0
@@ -215,14 +217,29 @@ class HarnessSession:
         try:
             for _ in range(max_turns):
                 self.phase(phase)
-                input_bound = len(
+                input_bytes = len(
                     json.dumps(
                         {"messages": self.messages, "tools": TOOL_SCHEMA}, ensure_ascii=False
                     ).encode()
                 )
+                # Reuse measured token usage for the unchanged conversation prefix.
+                # Only newly appended messages need the conservative byte estimate.
+                input_bound = (
+                    input_bytes
+                    if self._known_prompt_tokens is None
+                    else self._known_prompt_tokens + max(0, input_bytes - self._known_prompt_bytes)
+                )
                 remaining_tokens = self.limits.total_tokens - self.budget_tokens - input_bound
-                if remaining_tokens <= 0 or active >= max_seconds:
-                    raise BudgetError("active time or total token budget exhausted")
+                if active >= max_seconds:
+                    raise BudgetError(
+                        f"{phase} active time budget exhausted ({active:.1f}s / {max_seconds}s)"
+                    )
+                if remaining_tokens <= 0:
+                    raise BudgetError(
+                        "total token budget cannot fit another request "
+                        f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used; "
+                        f"next input estimate {input_bound:,} tokens)"
+                    )
                 turn = None
                 started = None
                 try:
@@ -236,6 +253,7 @@ class HarnessSession:
                                 self.messages,
                                 TOOL_SCHEMA,
                                 max_tokens=min(self.limits.turn_tokens, remaining_tokens),
+                                input_tokens_bound=input_bound,
                                 reasoning_effort=self.reasoning_effort,
                                 on_progress=(lambda chars: self.tracker.update(self.name, chars))
                                 if self.tracker and self.tracker.is_running
@@ -269,14 +287,23 @@ class HarnessSession:
                         "provider": turn.provider,
                         "finish_reason": turn.finish_reason,
                         "adjustments": turn.adjustments,
+                        "input_tokens_bound": input_bound,
                     }
                 )
+                prompt_tokens = turn.usage.get("prompt_tokens")
+                if type(prompt_tokens) is int and prompt_tokens >= 0:
+                    self._known_prompt_tokens = prompt_tokens
+                    self._known_prompt_bytes = input_bytes
                 self.budget_tokens += turn.usage.get("total_tokens") or (
                     input_bound + len(json.dumps(turn.message).encode())
                 )
                 self.messages.append(turn.message)
                 if self.budget_tokens > self.limits.total_tokens:
-                    raise BudgetError("total token budget exhausted; tool calls skipped")
+                    raise BudgetError(
+                        "total token budget exhausted "
+                        f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used); "
+                        "tool calls skipped"
+                    )
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
                     raise TurnError("project abandoned: model ended without wb done")
@@ -310,6 +337,12 @@ class HarnessSession:
                     self.descriptor = self.dispatcher.submission
                     return
             raise BudgetError(f"{phase} exceeded {max_turns} model turns")
+        except asyncio.TimeoutError as exc:
+            if active >= max_seconds:
+                raise BudgetError(
+                    f"{phase} active time budget exhausted ({active:.1f}s / {max_seconds}s)"
+                ) from exc
+            raise
         finally:
             if repair:
                 self.repair_seconds += active
