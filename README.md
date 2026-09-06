@@ -20,7 +20,7 @@ source .venv/bin/activate   # macOS / Linux
 pip install .
 ```
 
-The only required runtime dependency is `aiohttp`. WaveBench plays TTS outputs natively through the OS audio backend without launching external apps.
+Runtime dependencies are `aiohttp` and `tiktoken` (for context-size estimates). The tokenizer downloads its public vocabulary on first use and caches it locally. WaveBench plays TTS outputs natively through the OS audio backend without launching external apps.
 
 ## Configuration
 
@@ -85,6 +85,8 @@ wavebench --stats
 7. **Results** — History includes all build/repair usage and cost, generation and runtime outcomes, workspace/entry point, lint results, configuration, and separate generation, tool, queue, setup, runtime, and repair times. Missing usage remains unknown. Harness analytics are labeled separately from historical one-shot records.
 
 Text mode still saves Markdown, TTS saves audio and provides native playback, and image mode saves images and its gallery. See [Harness commands, runtimes, limits, and verification](docs/harness.md).
+
+Harness uses explicit prompt caching for Anthropic, GPT-5.6 and later, and Gemini 2.5 and later, with stable routing for other models. Above 240,000 context tokens (earlier for smaller model windows), GPT-5.6 Luna at High effort summarizes older history while preserving the first user message and latest complete assistant response with its tool results. See [cache and compaction behavior](docs/harness.md#prompt-caching-and-context-compaction), including budget accounting.
 
 ## Configuration Menu
 

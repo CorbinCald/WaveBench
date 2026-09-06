@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 
 import aiohttp
@@ -10,6 +11,7 @@ from aiohttp import web
 from wavebench import api
 from wavebench.harness.commands import TOOL_SCHEMA
 from wavebench.harness.transport import StreamAssembly, TurnError, call_conversation
+from wavebench.prompt_cache import CachePolicy
 
 
 def feed(assembly, delta, **extra):
@@ -22,6 +24,104 @@ def feed(assembly, delta, **extra):
             }
         )
     )
+
+
+@pytest.mark.parametrize(
+    "model,field",
+    [
+        ("openai/gpt-5.6-luna", "prompt_cache_breakpoint"),
+        ("anthropic/claude-haiku-4.5", "cache_control"),
+        ("google/gemini-2.5-flash", "cache_control"),
+    ],
+)
+async def test_cache_wire_payload_is_stable_across_http_retry(monkeypatch, model, field):
+    requests = []
+
+    async def handler(request):
+        requests.append(await request.json())
+        if len(requests) == 1:
+            return web.Response(status=503, text="retry", headers={"Retry-After": "0"})
+        return web.Response(
+            text='data: {"model":"'
+            + model
+            + '","choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10000,"completion_tokens":10,"total_tokens":10010,"prompt_tokens_details":{"cached_tokens":9000,"cache_write_tokens":1000}}}\n\ndata: [DONE]\n\n',
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    monkeypatch.setattr(
+        api, "API_URL", f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+    )
+    monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
+    messages = [{"role": "user", "content": "reference data " * 5000}]
+    original = copy.deepcopy(messages)
+    policy = CachePolicy(model)
+    try:
+        async with aiohttp.ClientSession() as client:
+            turn = await call_conversation(
+                client,
+                "offline",
+                model,
+                messages,
+                TOOL_SCHEMA,
+                max_tokens=1024,
+                reasoning_effort=None,
+                input_tokens_bound=11000,
+                cache_policy=policy,
+            )
+        assert requests[0] == requests[1]
+        assert requests[0]["tools"] == TOOL_SCHEMA
+        assert field in requests[0]["messages"][0]["content"][0]
+        assert messages == original
+        assert turn.usage["prompt_tokens_details"]["cached_tokens"] == 9000
+        assert turn.adjustments["cache"]["session_id"] == policy.key
+    finally:
+        await runner.cleanup()
+
+
+async def test_compaction_high_effort_never_negotiates_down(monkeypatch):
+    requests = []
+
+    async def handler(request):
+        requests.append(await request.json())
+        return web.Response(status=400, text="unsupported reasoning effort")
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    monkeypatch.setattr(
+        api, "API_URL", f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+    )
+    monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
+    try:
+        async with aiohttp.ClientSession() as client:
+            with pytest.raises(TurnError, match="reasoning"):
+                await call_conversation(
+                    client,
+                    "offline",
+                    "openai/gpt-5.6-luna",
+                    [{"role": "user", "content": "Summarize"}],
+                    [],
+                    max_tokens=1024,
+                    reasoning_effort="high",
+                    strict_reasoning=True,
+                    cache_reuse=False,
+                )
+        assert len(requests) == 1
+        assert requests[0]["reasoning"] == {"effort": "high"}
+        assert "tools" not in requests[0]
+        assert requests[0]["prompt_cache_options"]["mode"] == "explicit"
+        assert "prompt_cache_breakpoint" not in json.dumps(requests[0]["messages"])
+    finally:
+        await runner.cleanup()
 
 
 def test_fragments_ids_reasoning_signatures_and_provider_fields():

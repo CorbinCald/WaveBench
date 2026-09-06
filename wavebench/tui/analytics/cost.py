@@ -19,6 +19,8 @@ def compute_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None
         return float(usage["cost"])
     if usage.get("usage_complete") is False:
         return None
+    if usage.get("cost_requires_provider"):
+        return None
     if not pricing or not usage:
         return None
     try:
