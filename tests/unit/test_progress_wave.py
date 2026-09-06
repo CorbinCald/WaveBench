@@ -644,6 +644,35 @@ def test_background_caustics_leave_a_quiet_inset_at_both_edges(colored, monkeypa
     assert changed, "the inset should still leave room for caustics inside the layer"
 
 
+@pytest.mark.parametrize("layer", (0, 1, 2))
+def test_crest_highlight_fades_gently_into_quiet_water(colored, monkeypatch, layer) -> None:
+    """Moving down from a crest gives a small gradient, without a bright cutoff."""
+    depths = (-1.0, 0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
+    surfaces = [[100.0] * 2 for _ in range(3)]
+    # Move the crest past one character. The screen gradient and depth band
+    # stay constant, isolating its lighting as it crosses character rows.
+    monkeypatch.setattr(wave_mod, "_idle_wave_surfaces", lambda *_args: tuple(surfaces))
+    monkeypatch.setattr(
+        wave_mod,
+        "_caustic_edges",
+        lambda *_args: ((0.0, 0.0, 100.0), (0.0, 0.0, 100.0), ((float("inf"),) * 4,) * 4),
+    )
+    styles.apply_theme("acai")
+    try:
+        brightness = []
+        for depth in depths:
+            surfaces[layer] = [18.0 - depth] * 2
+            row = wave_mod.render_idle_wave(40, 1, 22, 1.0, 26.0)[4]
+            brightness.append(sum(_cell_colors(row)[0]))
+        assert brightness == sorted(brightness, reverse=True)
+        assert len(set(brightness)) >= 4, "crest light needs intermediate shades"
+        assert brightness[0] <= brightness[-1] * 1.15, "the crest should be barely brighter"
+        span = brightness[0] - brightness[-1]
+        assert max(a - b for a, b in pairwise(brightness)) <= span * 0.4
+    finally:
+        styles.apply_theme("default")
+
+
 # ── Hue lock ──────────────────────────────────────────────────────────────
 #
 # Every wave is one theme color varied in lightness. Regression guards for the
@@ -943,6 +972,26 @@ def test_truecolor_terminals_still_get_the_full_gradient(colored) -> None:
 
     assert not any("38;5;" in row for row in rows)
     assert len(colors) > len(styles.hue_ramp(styles.IDLE_WAVE_COLORS[2]))
+
+
+def test_water_color_runs_keep_the_intended_shading(colored, monkeypatch) -> None:
+    """Fewer terminal writes must not accumulate color error along a wave."""
+    try:
+        for theme in styles.THEME_NAMES:
+            styles.apply_theme(theme)
+            monkeypatch.setattr(wave_mod, "_COLOR_RUN_TOLERANCE", 0)
+            exact = wave_mod.render_idle_wave(40, 118, 26, 0.75, 26.0)
+            monkeypatch.setattr(wave_mod, "_COLOR_RUN_TOLERANCE", 4)
+            compact = wave_mod.render_idle_wave(40, 118, 26, 0.75, 26.0)
+            for expected, actual in zip(exact, compact, strict=True):
+                assert re.sub(r"\033\[[0-9;]*m", "", expected) == re.sub(
+                    r"\033\[[0-9;]*m", "", actual
+                )
+                for a, b in zip(_lit_cell_colors(expected), _lit_cell_colors(actual), strict=True):
+                    assert max(abs(x - y) for x, y in zip(a, b, strict=True)) <= 4
+            assert "".join(compact).count("\033[") < "".join(exact).count("\033[")
+    finally:
+        styles.apply_theme("default")
 
 
 def test_colorterm_is_not_trusted_inside_a_multiplexer(monkeypatch) -> None:

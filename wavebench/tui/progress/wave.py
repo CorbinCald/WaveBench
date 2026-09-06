@@ -467,16 +467,27 @@ _LAYER_LIGHTING = (
     (0.62, 0.70, 0.78),
     (0.64, 0.69, 0.74),
 )
+# A faint crest glow eases into the material over one and a half character
+# rows. Extra shades are only needed in this narrow transition.
+_CREST_LIGHTING_GAIN = 0.06
+_CREST_FADE_DOTS = 6.0
+_LAYER_SHADES = tuple(
+    (*levels, *(levels[0] + _CREST_LIGHTING_GAIN * step / 3 for step in range(1, 4)))
+    for levels in _LAYER_LIGHTING
+)
+# Reuse a color run when its RGB channels are within 4/255 of the next shade.
+# This keeps the fine gradient affordable without discarding visible contrast.
+_COLOR_RUN_TOLERANCE = 4
+_WaterShade = tuple[str, tuple[int, int, int]]
 
 
 def _water_lighting_codes(
-    color: tuple[int, int, int], shade: float, lighting_levels: tuple[float, ...]
-) -> tuple[str, ...]:
+    color: tuple[int, int, int], shade: float, lights: tuple[float, ...]
+) -> tuple[_WaterShade, ...]:
     """Keep local highlights soft in the terminal's available colors."""
-    lights = (*lighting_levels, 0.96)
     colors = tuple(_scale_color(color, shade * light) for light in lights)
     if _styles.TRUECOLOR:
-        return tuple(_color_code(entry) for entry in colors)
+        return tuple((_color_code(entry), entry) for entry in colors)
 
     # A small gain can jump from dark blue to cyan in the sparse 256-color
     # cube. Limit lighting to its intended contrast relative to the rendered
@@ -484,14 +495,12 @@ def _water_lighting_codes(
     ramp = tuple((entry, _styles._luma(entry)) for entry in _styles.hue_ramp(color))
     body_target = _styles._luma(colors[0])
     _, body_luma = min(ramp, key=lambda step: abs(step[1] - body_target))
-    ceiling = body_luma * lights[-1] / lights[0]
+    ceiling = body_luma * max(lights) / lights[0]
     allowed = tuple(step for step in ramp if step[1] <= ceiling)
-    return tuple(
-        _styles._palette_escape(
-            min(allowed, key=lambda step: abs(step[1] - _styles._luma(entry)))[0]
-        )
-        for entry in colors
+    entries = tuple(
+        min(allowed, key=lambda step: abs(step[1] - _styles._luma(entry)))[0] for entry in colors
     )
+    return tuple((_styles._palette_escape(entry), entry) for entry in entries)
 
 
 def _caustic_grid(
@@ -705,9 +714,10 @@ def render_idle_wave(
         screen_depth = (row + 0.5) / height
         screen_shade = 1.0 - _SCREEN_DEPTH_FALLOFF * screen_depth
         # Only build shades for visible layers and depth bands in this row.
-        depth_codes: dict[tuple[int, int], tuple[str, ...]] = {}
+        depth_codes: dict[tuple[int, int], tuple[_WaterShade, ...]] = {}
         parts: list[str] = []
         current_color: str | None = None
+        current_rgb: tuple[int, int, int] | None = None
         caustic_ys = [(row * 4 + 2) * field[0] for field in fields]
         caustic_x_offsets = [
             0.10 * math.sin(y * 3.7 + layer[3] * 0.013)
@@ -750,6 +760,7 @@ def render_idle_wave(
             # Coarser bands keep narrow strips economical to send over a PTY.
             bands = _DEPTH_BANDS if occluder is None else 3
             lighting_levels = _LAYER_LIGHTING[layer_index]
+            shade_levels = _LAYER_SHADES[layer_index]
             depth_band = _surface_depth_band(surface, row, col, height * 4, occluder, bands)
             codes = depth_codes.get((layer_index, depth_band))
             if codes is None:
@@ -759,12 +770,11 @@ def render_idle_wave(
                     * screen_shade
                     * layer_depth
                 )
-                codes = _water_lighting_codes(active_color, shade, lighting_levels)
+                codes = _water_lighting_codes(active_color, shade, shade_levels)
                 depth_codes[layer_index, depth_band] = codes
 
             surface_y = (surface[col * 2] + surface[col * 2 + 1]) * 0.5
             cell_depth = row * 4 + 2 - surface_y
-            rim = cell_depth < _SURFACE_RIM_DOTS
             light = max(
                 0.0, 1.0 - min(edges[0][2], edges[1][2]) / (1.5 * _CAUSTIC_FALLOFF_DOTS * scale)
             )
@@ -779,14 +789,27 @@ def render_idle_wave(
                         clearance / _BACKGROUND_EFFECT_PADDING,
                     ),
                 )
-            lighting_band = (
-                len(lighting_levels) if rim else round(light * (len(lighting_levels) - 1))
-            )
-            color = codes[lighting_band]
+            lighting_band = round(light * (len(lighting_levels) - 1))
+            if cell_depth < _CREST_FADE_DOTS:
+                blend = max(0.0, cell_depth / _CREST_FADE_DOTS)
+                blend = blend * blend * (3.0 - 2.0 * blend)
+                crest_light = lighting_levels[0] + _CREST_LIGHTING_GAIN
+                level = crest_light + (lighting_levels[lighting_band] - crest_light) * blend
+                lighting_band = min(
+                    range(len(shade_levels)), key=lambda index: abs(shade_levels[index] - level)
+                )
+            color, rgb = codes[lighting_band]
             # Keep color runs open across blank texture to avoid excess SGR.
-            if color != current_color:
+            # Dim water needs finer color changes to retain its faint caustics.
+            tolerance = min(_COLOR_RUN_TOLERANCE, 1) if max(rgb) < 64 else _COLOR_RUN_TOLERANCE
+            if color != current_color and (
+                current_rgb is None
+                or not _styles.TRUECOLOR
+                or max(abs(a - b) for a, b in zip(rgb, current_rgb, strict=True)) > tolerance
+            ):
                 parts.append(color)
                 current_color = color
+                current_rgb = rgb
             parts.append(chr(0x2800 + mask))
 
         if current_color is not None:
