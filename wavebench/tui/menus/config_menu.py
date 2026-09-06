@@ -1,6 +1,6 @@
 """Tabbed configuration menu — Models/TTS/Image tabs (catalog browser + manual add)
 and Settings tab (theme, reasoning-effort, analytics sort, directory naming,
-auto-open, auto-install).
+auto-open, preview timeout, auto-install).
 
 ``interactive_config_menu`` is a single function that drives the tabs through
 a shared event loop; further decomposition is deferred per the maintainability
@@ -20,6 +20,7 @@ import sys
 from typing import Any
 
 from wavebench.api import fetch_top_models
+from wavebench.harness.config import Limits
 from wavebench.models import (
     IMAGE_MODEL_MAPPING,
     MODEL_MAPPING,
@@ -276,6 +277,15 @@ def interactive_config_menu(
             "choices": AUTO_OPEN_CHOICES,
         },
         {
+            "key": "review_seconds",
+            "section": "harness",
+            "label": "Preview timeout (s)",
+            "value": (current_config.get("harness") or {}).get(
+                "review_seconds", Limits().review_seconds
+            ),
+            "type": "number",
+        },
+        {
             "key": "tts_voice",
             "label": "TTS voice",
             "value": current_config.get("tts_voice", "alloy"),
@@ -374,6 +384,10 @@ def interactive_config_menu(
     adding_model = False
     adding_model_tab = MODEL_TAB
     add_model_buffer = ""
+    editing_setting = None
+    setting_buffer = ""
+    setting_error = ""
+    initial_settings = [item["value"] for item in settings_items]
 
     if not model_items:
         print(f"  {S.DIM}No models available.{S.RST}")
@@ -488,6 +502,8 @@ def interactive_config_menu(
                 search_label = f"{_styles.ACCENT_HI}search{S.RST}" if query else "search"
                 query_display = query or f"{S.DIM}type to filter{S.RST}"
                 buf.append(_box_row(f"{search_label}: {query_display}", w) + "\033[K\n")
+        elif editing_setting is not None:
+            buf.append(_box_row(f"{editing_setting['label']}: {setting_buffer}_", w) + "\033[K\n")
         else:
             buf.append(_box_row("", w) + "\033[K\n")
 
@@ -526,7 +542,7 @@ def interactive_config_menu(
                 if row < len(visible):
                     _, item = visible[row]
                     is_cur = row == settings_cursor
-                    if item.get("type") == "cycle":
+                    if item.get("type") in ("cycle", "number"):
                         val = item["value"]
                         if item.get("key") == "reasoning_effort":
                             if val == "off":
@@ -590,34 +606,23 @@ def interactive_config_menu(
                 f"{S.DIM}page {model_page[active_tab] + 1}/{pcount}{S.RST}"
             )
         else:
-            defaults = {
-                "reasoning_effort": "high",
-                "analytics_sort": "runs",
-                "theme": "default",
-                "auto_open": "incremental",
-                "auto_install": "off",
-                "directory_naming": "llm",
-                "tts_voice": "alloy",
-                "tts_format": "mp3",
-                "tts_speed": 1.0,
-                "image_settings": "provider defaults",
-                "image_aspect_ratio": "1:1",
-                "image_size": "1K",
-                "image_model_ids": [],
-            }
-            changed = any(
-                it["value"] != current_config.get(it["key"], defaults.get(it["key"]))
-                for it in settings_items
-            )
+            changed = [it["value"] for it in settings_items] != initial_settings
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
             vis_count = len(_visible_settings())
             status = f"{S.DIM}{vis_count} setting(s){S.RST}{tag}"
+            if setting_error:
+                status = f"{S.HRED}{setting_error}{S.RST}"
         buf.append(_box_row(status, w) + "\033[K\n")
 
-        hl_parts = ["←→ tab", "↑↓", "Space", "Enter/Tab"]
-        if _is_model_tab():
-            hl_parts.extend(["^A tab all", "^N tab none", "[ ] page", "+ add"])
-        hl_parts.append("Esc")
+        if editing_setting is not None:
+            hl_parts = ["Digits", "Backspace", "^A clear", "Enter apply", "Esc cancel"]
+        else:
+            hl_parts = ["←→ tab", "↑↓", "Space", "Enter/Tab"]
+            if _is_model_tab():
+                hl_parts.extend(["^A tab all", "^N tab none", "[ ] page", "+ add"])
+            else:
+                hl_parts = ["←→ tab", "↑↓", "Space change", "Enter/Tab save"]
+            hl_parts.append("Esc")
         hl = f"{S.DIM}{' · '.join(hl_parts)}{S.RST}"
         buf.append(_box_row(hl, w) + "\033[K\n")
 
@@ -648,6 +653,32 @@ def interactive_config_menu(
         while True:
             key = _read_key_or_resize(_wr)
             if key == "resize":
+                render()
+                continue
+            if editing_setting is not None:
+                if key in ("escape", "ctrl-c"):
+                    editing_setting = None
+                    setting_error = ""
+                elif key == "enter":
+                    try:
+                        seconds = int(setting_buffer)
+                    except ValueError:
+                        seconds = 0
+                    if seconds > 0:
+                        editing_setting["value"] = seconds
+                        editing_setting = None
+                        setting_error = ""
+                    else:
+                        setting_error = "Enter a positive whole number of seconds."
+                elif key == "backspace":
+                    setting_buffer = setting_buffer[:-1]
+                    setting_error = ""
+                elif key == "ctrl-a":
+                    setting_buffer = ""
+                    setting_error = ""
+                elif len(key) == 1 and key in "0123456789" and len(setting_buffer) < 12:
+                    setting_buffer += key
+                    setting_error = ""
                 render()
                 continue
             if adding_model:
@@ -728,7 +759,11 @@ def interactive_config_menu(
                     visible = _visible_settings()
                     if visible and settings_cursor < len(visible):
                         _, item = visible[settings_cursor]
-                        if item.get("type") == "cycle":
+                        if item.get("type") == "number":
+                            editing_setting = item
+                            setting_buffer = str(item["value"])
+                            setting_error = ""
+                        elif item.get("type") == "cycle":
                             choices = item["choices"]
                             idx = choices.index(item["value"]) if item["value"] in choices else 0
                             item["value"] = choices[(idx + 1) % len(choices)]
@@ -788,7 +823,13 @@ def interactive_config_menu(
 
     new_config = dict(current_config)
     for item in settings_items:
-        new_config[item["key"]] = item["value"]
+        if section := item.get("section"):
+            new_config[section] = {
+                **(new_config.get(section) or {}),
+                item["key"]: item["value"],
+            }
+        else:
+            new_config[item["key"]] = item["value"]
     new_config["image_model_ids"] = [
         it["id"] for it in model_items if it["selected"] and it.get("category") == "image"
     ]

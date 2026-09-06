@@ -154,6 +154,11 @@ hooks. HTML checks are structural parsing, not full HTML/CSS validation.
 
 Defaults are configured in `wavebench/harness/config.py`. Override them under
 `"harness"` in `.benchmark_config.json`; all values must be positive integers.
+To change the preview review timeout interactively, open `wavebench --config`,
+go to **Settings → Preview timeout (s)**, and press Space. Enter a positive
+whole number of seconds (Ctrl-A clears the field), press Enter to apply, then
+Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
+(10 minutes); the saved value is `harness.review_seconds`.
 
 | Limit | Default |
 |---|---:|
