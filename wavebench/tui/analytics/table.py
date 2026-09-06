@@ -46,6 +46,8 @@ def display_analytics(
     stats: dict[str, Any] = {}
     for run in runs:
         for name, res in run.get("models", {}).items():
+            if res.get("harness"):
+                name = f"{name} [harness]"
             if name not in stats:
                 stats[name] = {
                     "runs": 0,
@@ -58,6 +60,9 @@ def display_analytics(
                 }
             s = stats[name]
             s["runs"] += 1
+            c = res.get("cost")
+            if c is not None:
+                s["costs"].append(c)
             status = res.get("status", "failed")
             if status == "success":
                 s["ok"] += 1
@@ -68,9 +73,6 @@ def display_analytics(
                 tkns = usage.get("total_tokens")
                 if tkns is not None:
                     s["tokens"].append(tkns)
-                c = res.get("cost")
-                if c is not None and c > 0:
-                    s["costs"].append(c)
             elif status == "cancelled":
                 s["cancel"] += 1
             else:

@@ -9,6 +9,7 @@ Key entry points:
   - ``load_api_key()``  — env var or ``.env`` file lookup
   - ``call_model_async()``  — non-streaming completion
   - ``call_model_streaming()``  — SSE completion with progress callback
+  - ``call_model_conversation()`` — harness conversation with streamed tool calls
   - ``call_tts_speech()``  — raw audio generation via /audio/speech
   - ``call_image_generation()``  — non-streaming image-output chat completion
   - ``fetch_top_models()``  — sync catalog fetch for the config menu
@@ -35,8 +36,16 @@ _MODEL_CONTEXT_CACHE: dict[str, int] = {}
 # refuse a completion longer than 128k.  Budgeting output from the context
 # window alone over-requests on models with a small output ceiling.
 _MODEL_MAX_COMPLETION_CACHE: dict[str, int] = {}
+_MODEL_TOOL_CACHE: dict[str, bool] = {}
 _MODEL_CONTEXTS_ATTEMPTED = False
 _MODEL_CONTEXT_LOCK = asyncio.Lock()
+
+
+async def call_model_conversation(session, api_key, model_id, messages, tools, **kwargs):
+    """Stream a harness conversation, including tool calls and provider reasoning fields."""
+    from wavebench.harness.transport import call_conversation
+
+    return await call_conversation(session, api_key, model_id, messages, tools, **kwargs)
 
 
 async def _load_model_context_lengths(
@@ -51,8 +60,6 @@ async def _load_model_context_lengths(
     async with _MODEL_CONTEXT_LOCK:
         if _MODEL_CONTEXTS_ATTEMPTED:
             return
-        _MODEL_CONTEXTS_ATTEMPTED = True
-
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -68,6 +75,8 @@ async def _load_model_context_lengths(
                     ctx = m.get("context_length")
                     if not mid:
                         continue
+                    if isinstance(m.get("supported_parameters"), list):
+                        _MODEL_TOOL_CACHE[mid] = "tools" in m["supported_parameters"]
                     max_out = (m.get("top_provider") or {}).get("max_completion_tokens")
                     try:
                         max_out_i = int(max_out)
@@ -84,6 +93,8 @@ async def _load_model_context_lengths(
         except Exception:
             # Fall back to legacy defaults if model metadata cannot be fetched.
             return
+        finally:
+            _MODEL_CONTEXTS_ATTEMPTED = True
 
 
 async def _resolve_max_tokens(

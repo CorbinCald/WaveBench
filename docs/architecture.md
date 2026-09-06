@@ -1,152 +1,82 @@
 # WaveBench Architecture
 
-A current "where does X live" reference for navigating the codebase. Pair this
-with the module-level docstrings in each `.py` file for local details.
+The CLI in `wavebench/__main__.py` loads models, configuration and prompt history,
+then dispatches to `core.orchestrator.main_async`. The orchestrator owns output
+allocation, the progress display, scheduling, final results, and history.
 
-## 10-second picture
+## Harness flow
 
-```text
-user prompt
-  │
-  ▼
-wavebench.__main__
-  ├─ loads config/models/history state from storage.py
-  ├─ optionally opens tui.menus.run_config_menu
-  └─ dispatches to core.main_async
-          │
-          ▼
-    core.orchestrator.main_async
-      ├─ resolves CodeMode/TextMode/TTSMode
-      ├─ asks parsers.get_directory_name for benchmarkResults/<dir>
-      ├─ starts tui.progress.ProgressTracker
-      ├─ fans out concurrent core.runner.run_model tasks
-      ├─ auto-opens / auto-installs when configured
-      └─ records analytics with storage.record_run
-                │
-                ▼
-          core.runner.run_model
-            ├─ mode.frame_prompt(user_prompt)
-            ├─ api.call_model_streaming(...)
-            ├─ mode.parse_response(raw)
-            └─ writes one output artifact per model
+```mermaid
+flowchart LR
+  Build[Files and lint] --> Queue[Submitted / queued]
+  Queue --> Run1[Managed run 1]
+  Run1 -->|Success| Complete[Runtime passed]
+  Run1 -->|Failure| Repair[Same conversation repairs files]
+  Repair --> Run2[Managed run 2]
+  Run2 -->|Success| Complete
+  Run2 -->|Failure| Failed[Runtime failed]
 ```
 
-## Package map
+`HarnessSession` owns the conversation, budgets, phase transitions and attempt
+list in controller memory. `HarnessBatch` coordinates initial builds. In
+`after_all`, every initial build settles before execution tasks begin; failed,
+cancelled, unsupported, and exhausted builds all release the barrier. Other
+settings schedule immediately. API slots are held only for requests, so queued
+projects cannot deadlock the barrier. Repairs do not use a second barrier.
 
-```text
-wavebench/
-├── __init__.py
-├── __main__.py                 CLI args, startup UI, state loading, dispatch
-├── api.py                      OpenRouter client, SSE parser, TTS speech, retries, catalog fetch
-├── models.py                   default text/TTS mappings, catalog scoring, TTS helpers
-├── parsers.py                  code extraction and prompt-derived directory names
-├── storage.py                  JSON persistence for local state and analytics
-│
-├── modes/
-│   ├── __init__.py             Mode protocol, ParsedOutput, MODES registry
-│   ├── code.py                 CodeMode prompt framing + parser wrapper
-│   ├── text.py                 TextMode prompt framing + Markdown pass-through
-│   └── tts.py                  TTSMode prompt framing + audio-byte pass-through
-│
-├── core/
-│   ├── __init__.py             public re-exports for core package users
-│   ├── orchestrator.py         main_async run coordinator and result display
-│   ├── runner.py               per-model run_model + get_unique_filename
-│   ├── auto_open.py            viewer/terminal/tab launching helpers
-│   └── auto_install.py         dependency detection, venv creation, pip install
-│
-└── tui/
-    ├── __init__.py
-    ├── styles.py               themes, ANSI helpers, box drawing, formatting
-    ├── input.py                raw key reads, resize-aware key handling
-    ├── line_editor.py          prompt editor with history/navigation
-    ├── tts_player.py           arrow-key TTS output browser/player
-    ├── progress/
-    │   ├── __init__.py         re-exports ProgressTracker, render_idle_wave
-    │   ├── tracker.py          live multi-model progress UI
-    │   └── wave.py             braille wave / pulse rendering primitives
-    ├── analytics/
-    │   ├── __init__.py         re-exports compute_cost, display_analytics
-    │   ├── cost.py             token-cost calculation helper
-    │   └── table.py            lifetime analytics table renderer
-    └── menus/
-        ├── __init__.py         re-exports menu entry points
-        ├── _shared.py          price/name/filter/layout helpers
-        ├── model_list.py       model catalog browser + selection flow
-        └── config_menu.py      tabbed Models/TTS/Settings config menu
-```
+The only attempt admission site is `HarnessSession.execute`, guarded by an
+execution lock and a once-only flag. Preflight/setup happens before admission;
+a counted attempt includes failed process creation. The loop can admit only
+runs 1 and 2, and it enters repair only after run 1 fails. Lint has no path to
+attempt admission. Duplicate delivery cannot replay completed file effects or
+restart execution. Cancellation settles file operations, stops all managed
+processes, and preserves the workspace and diagnostics.
 
-## Current module sizes
+`transport.py` uses the existing OpenRouter API URL, catalog, reasoning settings,
+and retry policy from `api.py`. It assembles indexed tool calls and reasoning
+fields across complete UTF-8 SSE fragments. Only a finished, valid turn reaches
+`Dispatcher.batch`; results use the OpenRouter assistant/tool-call/tool-result
+conversation format, with the schema on every request. HTTP retries occur before
+side effects. Context and total-token admission include the whole conversation.
+Actual model/provider, usage, reasoning/context adjustments, and transport retry
+events are saved per turn.
 
-Line counts are approximate and useful mostly for spotting oversized files:
+`Dispatcher` is shared with the `wb` CLI and has no shell evaluator. Its bounded
+scheduler overlaps independent calls, serializes conflicting paths, and puts
+lint behind writes. The root is fixed in `Workspace`, whose operations use
+`dir_fd`, `O_NOFOLLOW`, regular-file checks, and atomic replacement. Invocation
+and model directory creation is exclusive, including sanitized-name collisions.
 
-| Module | Lines | Role |
-|---|---:|---|
-| `wavebench/api.py` | 880+ | OpenRouter HTTP/SSE client, TTS speech, reasoning-effort negotiation, model catalog |
-| `wavebench/tui/progress/tracker.py` | 728 | Animated progress tracker and final progress-state rendering |
-| `wavebench/tui/styles.py` | 635 | Theme definitions, ANSI helpers, box drawing, formatting |
-| `wavebench/tui/menus/config_menu.py` | 710 | Interactive tabbed Models/TTS/Settings menu |
-| `wavebench/core/orchestrator.py` | 382 | Top-level benchmark run coordinator |
-| `wavebench/__main__.py` | 371 | CLI parsing, startup mode/prompt UI, config dispatch |
-| `wavebench/core/auto_open.py` | 324 | Viewer, terminal, and tab launching |
-| `wavebench/tui/menus/model_list.py` | 313 | Interactive model list browser |
-| `wavebench/parsers.py` | 302 | Code extraction and directory naming |
-| `wavebench/tui/progress/wave.py` | 274 | Wave animation primitives |
-| `wavebench/core/runner.py` | 272 | Per-model streaming, parsing, file writing, auto-install hook |
-| `wavebench/tui/line_editor.py` | 263 | Prompt input editor |
-| `wavebench/tui/analytics/table.py` | 207 | Lifetime analytics table |
-| `wavebench/tui/input.py` | 161 | Raw keyboard input helpers |
-| `wavebench/storage.py` | 152 | JSON persistence |
-| `wavebench/core/auto_install.py` | 144 | Dependency detection and venv install helpers |
-| `wavebench/models.py` | 105 | Default models and catalog scoring |
-| `wavebench/modes/__init__.py` | 104 | Mode protocol and registry |
+`Runtime` launches Bubblewrap with a minimal filesystem, private PID/network
+namespaces, no host environment or credentials, and read-only system tools.
+`trusted.py` is mounted read-only and provides static checks, Python/Node entry
+launching, static serving, and a Unix-socket HTTP relay. Project and runtime data
+are confined to that model's workspace. Trusted wheel-only pip setup is the only
+sandbox action allowed networking. Dependencies never share writable targets.
+The controller drains bounded stdout/stderr, enforces deadlines, and stops the
+process group and namespace before repair or review completion.
 
-## Data flow: one benchmark run
+Console programs pass on exit 0. HTTP/static projects pass on bounded readiness;
+these are startup checks, separate from quality. The controller presents the
+existing server through a loopback proxy. Preview opening has no launch path.
+Supported environments, CLI syntax, limits and dependency restrictions are in
+[`harness.md`](harness.md).
 
-1. **CLI / startup (`wavebench.__main__`)**
-   - Parses flags such as `--prompt`, `--mode`, `--text`, `--config`,
-     `--open`, `--auto-install`, `--stats`, and `--clear-history`.
-   - Loads `.benchmark_models.json` and `.benchmark_config.json` through
-     `storage.load_models()` / `storage.load_config()`.
-   - Starts a background OpenRouter catalog fetch for the config menu and
-     pricing lookup.
-   - If no prompt was supplied, renders the interactive Code/Text selector
-     and prompt editor.
+## Other modes and persistence
 
-2. **Run setup (`core.orchestrator.main_async`)**
-   - Resolves the active mode: explicit `--mode`, then legacy `--text`, then
-     code mode by default. Code mode is instantiated with `allow_deps=True`
-     when auto-install is enabled; TTS mode is instantiated with configured
-     voice/format/speed.
-   - Determines default output extension (`.md` for text, `.py` for Python-ish
-     prompts, otherwise `.html`).
-   - Creates an async task for `parsers.get_directory_name()` so the output
-     directory can be prepared while model calls are starting. Directory
-     naming uses the configured mode: `llm` or local `slug`.
-   - Starts `tui.progress.ProgressTracker` and builds any reasoning-effort
-     notices for the ticker.
+Text/TTS/image retain `core.runner.run_model`: stream or request the response,
+parse/save its artifacts, then use the existing viewer/audio/gallery behavior.
+`parsers.py` and the compatibility `CodeMode.parse_response` still read old
+single-file code artifacts. Harness is visible in the registry and selector;
+`code` remains a CLI alias.
 
-3. **Per-model work (`core.runner.run_model`)**
-   - Calls `mode.frame_prompt(user_prompt)`.
-   - Streams from OpenRouter through `api.call_model_streaming()` with progress
-     and retry callbacks, or calls `api.call_tts_speech()` for TTS audio bytes.
-   - Passes the raw response to `mode.parse_response()`.
-   - Creates a unique filename with `get_unique_filename()` and writes the
-     parsed content into `benchmarkResults/<prompt_dir>/`.
-   - If code mode + Python output + auto-install + auto-open are enabled,
-     detects packages, ensures a `.venv` in the output directory, and installs
-     packages before opening.
-   - If `auto_open == "incremental"`, opens the artifact as soon as it is saved.
-   - In TTS mode, successful audio artifacts can be browsed with arrow keys and
-     played through WaveBench's native audio backend with Enter/Space in the
-     post-run `tui.tts_player` screen, without launching an external app.
-
-4. **Finish / reporting (`core.orchestrator.main_async`)**
-   - For `auto_open == "after_all"`, opens all successful artifacts after every
-     model has finished.
-   - Stops the progress tracker, prints a fallback run-results table if needed,
-     computes estimated costs, records the run with `storage.record_run()`, and
-     renders compact lifetime analytics.
+`storage.record_run` preserves detailed harness results alongside old records.
+Each model also has controller-owned `metadata/result.json`, conversation and
+tool records, and subprocess logs. Project roots never contain history,
+attempts, or controller configuration. Timing separates build, API/tools,
+scheduler wait, setup, execution and repair. `time_s` measures active build plus
+repair; lifetime analytics distinguish harness rows and include known failed-run
+costs. Unknown usage/cost remains unknown.
 
 ## Public seams and import compatibility
 
@@ -169,7 +99,11 @@ The package intentionally re-exports common entry points from package
 | If you want to change… | Start here |
 |---|---|
 | CLI flags, startup mode selection, prompt history | `wavebench/__main__.py` |
-| OpenRouter request/response behavior, retries, SSE parsing, TTS speech | `wavebench/api.py` |
+| OpenRouter requests, reasoning/catalog, TTS/image | `wavebench/api.py` |
+| Harness conversations, streamed tool arguments, provider fields | `wavebench/harness/transport.py` |
+| Bounded file tools and developer CLI | `wavebench/harness/commands.py`, `workspace.py`, `__main__.py` |
+| Sandbox, manifests, lint, managed previews | `wavebench/harness/runtime.py`, `trusted.py` |
+| Build/repair budgets, scheduling, attempt admission | `wavebench/harness/session.py` |
 | Reasoning-effort payload formats and per-model effort mapping | `wavebench/api.py` (`_reasoning_attempts`, `_supported_efforts`) |
 | Model catalog ranking, default text/TTS mappings, and TTS model/voice/format helpers | `wavebench/models.py` |
 | Code extraction from model responses | `wavebench/parsers.py` and `wavebench/modes/code.py` |
@@ -178,7 +112,7 @@ The package intentionally re-exports common entry points from package
 | Benchmark fan-out, output directory setup, history recording | `wavebench/core/orchestrator.py` |
 | Per-model file writing and parse-failure handling | `wavebench/core/runner.py` |
 | Auto-open terminal/viewer behavior | `wavebench/core/auto_open.py` |
-| Python dependency detection and venv install | `wavebench/core/auto_install.py` |
+| Historical single-file dependency helpers | `wavebench/core/auto_install.py` |
 | Live progress animation and model status display | `wavebench/tui/progress/tracker.py` and `wavebench/tui/progress/wave.py` |
 | Lifetime analytics table | `wavebench/tui/analytics/table.py` |
 | Cost calculation | `wavebench/tui/analytics/cost.py` |
@@ -191,9 +125,10 @@ The package intentionally re-exports common entry points from package
 
 Modes are small value objects implementing `wavebench.modes.Mode`:
 
-- `CodeMode` frames prompts for dependency-free single-file code by default.
-  When auto-install is on, the orchestrator creates `CodeMode(allow_deps=True)`
-  so the prompt permits PyPI packages.
+- `HarnessMode` (also exported as `CodeMode`) supplies the compact project prompt.
+  The orchestrator selects a conversation/session lifecycle instead of response
+  extraction. Its historical parser remains available for existing artifacts.
+  Auto-install permits explicit PyPI wheel manifests in isolated targets.
 - `TextMode` frames prompts for Markdown prose and saves the raw response as
   `.md`.
 - `TTSMode` sends the user text to OpenRouter's `/audio/speech` endpoint,
@@ -211,7 +146,7 @@ def parse_response(self, raw: str) -> ParsedOutput: ...
 ```
 
 Registered modes are available through `wavebench --mode <name>`. The current
-interactive startup selector displays Code/Text explicitly; add key handling in
+interactive startup selector displays Harness/Text/TTS/Image explicitly; add key handling in
 `__main__.py` if a new mode should appear there.
 
 ## Persistent state
@@ -225,9 +160,10 @@ WaveBench stores local state in the current working directory:
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
 | `.benchmark_query_history.<mode>` | mode-specific prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`) |
 
-For backward compatibility, Code mode reads a legacy `.benchmark_query_history`
-file until `.benchmark_query_history.code` is created on the first new Code
-prompt.
+For backward compatibility, Harness uses `.benchmark_query_history.code` and
+also reads the legacy `.benchmark_query_history` fallback. No historical files
+are rewritten. Harness records contain a versioned `harness` object; analytics
+show them in separate model rows from one-shot history.
 
 Persistent-state path helpers call `os.getcwd()` at use time. This keeps
 tests easy to isolate with `monkeypatch.chdir(tmp_path)` and gives each project

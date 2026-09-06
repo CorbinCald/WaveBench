@@ -40,7 +40,9 @@ wavebench
 python -m wavebench
 ```
 
-Interactive startup shows a **Code / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific readline-style history. Type `c` at the mode prompt to open the configuration menu.
+Interactive startup shows a **Harness / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific history. Harness replaces one-shot code generation with isolated, multi-file projects. Type `c` at the mode prompt to open the configuration menu.
+
+Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**. Install `bubblewrap`, `python3`, and `nodejs` with your distribution's package manager. Auto-install also requires system `python3-pip`. The host must permit unprivileged user namespaces. A failed sandbox preflight is reported before model generation; there is no unsandboxed fallback. Text, TTS, and image modes keep their existing platform support.
 
 [Watch a preview of the animated progress display.](docs/wave-animation.md)
 
@@ -49,21 +51,22 @@ Interactive startup shows a **Code / Text / TTS / Image** mode selector, a summa
 | Flag | Description |
 |---|---|
 | `--prompt "…"` | Skip interactive input and run immediately |
-| `--mode code\|text\|tts` | Select the response mode; defaults to `code` |
+| `--mode harness\|text\|tts\|image` | Select the response mode; defaults to `harness`. `--mode code` remains a compatibility alias |
 | `--text` | Alias for `--mode text` |
 | `--tts-voice VOICE` | Voice for TTS mode; defaults to `alloy` for OpenAI models; known non-OpenAI TTS models use provider voices automatically when the default is selected (for example Gemini `Kore`, Zonos `american_female`, Voxtral `en_paul_neutral`) |
 | `--tts-format mp3\|pcm` | Preferred audio format for TTS mode; defaults to `mp3` and is adjusted for providers such as Gemini that require `pcm` |
 | `--tts-speed FLOAT` | TTS playback speed multiplier for providers that support it |
 | `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
-| `--open incremental\|after_all` / `--auto-open …` | Auto-open generated code/text files as they complete or after all models finish; TTS uses the output browser instead |
-| `--auto-install` | In code mode, permit PyPI dependencies and auto-install detected Python packages into a per-run venv before opening files |
+| `--open off\|incremental\|after_all` / `--auto-open …` | Schedule harness validation and present managed previews. `off` still validates, headlessly; `after_all` waits for initial generation. New configurations default to `incremental` |
+| `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
 | `--stats` | Display lifetime analytics and exit |
 | `--clear-history` | Reset all analytics history |
 
 Examples:
 
 ```bash
-wavebench --prompt "Create a snake game in Python"
+wavebench --prompt "Create a multi-file Python CSV summary program"
+wavebench --mode harness --auto-open off --prompt "Build a static counter website with HTML, CSS and JavaScript"
 wavebench --prompt "Explain quantum computing" --mode text
 wavebench --prompt "Explain quantum computing" --text
 wavebench --prompt "Read this aloud in a calm tone" --mode tts --tts-voice nova
@@ -74,12 +77,14 @@ wavebench --stats
 ## How It Works
 
 1. **Prompt** — You enter a description of what you want built or answered.
-2. **Mode framing** — The selected mode (`CodeMode`, `TextMode`, or `TTSMode`) prepares the user prompt for the target API.
-3. **Directory naming** — The configured naming mode creates a short directory name from the prompt: either the LLM fallback chain or a local slug parser.
-4. **Parallel execution** — All selected models are queried concurrently, up to `MAX_CONCURRENCY = 12`, with streaming responses and a live progress display.
-5. **Parsing** — Code mode extracts a single savable artifact from JSON, fenced code blocks, malformed fences, or whole-response fallback. Text mode saves raw Markdown. TTS mode saves raw audio bytes from OpenRouter's `/audio/speech` endpoint.
-6. **Results** — Outputs are saved to `benchmarkResults/<prompt_dir>/`; a leaderboard shows pass/fail status, file names, token counts, timing, and estimated cost.
-7. **Analytics** — Every run is recorded and lifetime stats show success rate, average time, token usage, and cost.
+2. **Build** — Harness allocates a fresh project per model. Models use the same `wb` file and lint tools over an OpenRouter conversation, then submit a runtime and entry point with `done`.
+3. **Schedule** — `incremental` validates submitted projects immediately. `after_all` waits until every model has submitted or reached a terminal generation outcome. `off` validates immediately without opening previews. Waiting projects release API slots.
+4. **Validate** — WaveBench admits one sandboxed project run. Exit code 0 passes console programs; an HTTP readiness check passes web/server startup. These checks measure runtime/startup, not subjective project quality.
+5. **Repair** — Only a failed first run gives the same model/conversation one bounded repair phase, then one final run. Lint never consumes a run. Cancellation never unlocks a retry.
+6. **Inspect** — Successful web previews attach to the already running process. Enter, Ctrl-C, or the review deadline stops it and its children. Projects, diagnostics, and attempts survive failures and cancellation.
+7. **Results** — History includes all build/repair usage and cost, generation and runtime outcomes, workspace/entry point, lint results, configuration, and separate generation, tool, queue, setup, runtime, and repair times. Missing usage remains unknown. Harness analytics are labeled separately from historical one-shot records.
+
+Text mode still saves Markdown, TTS saves audio and provides native playback, and image mode saves images and its gallery. See [Harness commands, runtimes, limits, and verification](docs/harness.md).
 
 ## Configuration Menu
 
@@ -95,23 +100,31 @@ The menu has three tabs:
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
-  - **Auto-install deps** — `off` or `on`; shown only when auto-open is enabled. Applies to Python code-mode outputs.
+  - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
   - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
 
 Selections persist across runs in local JSON files.
 
 ## Output
 
-Results are saved to `benchmarkResults/<prompt_dir>/`:
+Harness results use a modality folder, an exclusive invocation directory, and independent model slots:
 
 ```text
 benchmarkResults/
-└── snake_game/
-    ├── prompt.txt              # The original prompt
-    ├── gemini3_0Pro.html       # Code output from each model
-    ├── claudeOpus4.6.py
-    ├── kimik2_5.html
-    └── ...
+└── harness/<prompt>/<run-id>/
+    ├── prompt.txt
+    ├── 001-model-a-<id>/project/
+    │   ├── main.py
+    │   └── helpers.py
+    ├── 002-model-b-<id>/project/
+    │   ├── index.html
+    │   ├── styles.css
+    │   └── app.js
+    └── metadata/<model-slot>/   # Controller-owned, outside model roots
+        ├── result.json
+        ├── conversation.json
+        ├── tool-0001.json
+        └── run-1-<id>.log
 ```
 
 In text mode, outputs are saved as `.md` files. In TTS mode, outputs are saved as provider-compatible audio files (`.mp3` by default for OpenAI/Voxtral/Zonos and most speech models, `.pcm` for Gemini TTS), then an interactive arrow-key browser lets you move between outputs with ↑/↓ or ←/→ and press Enter/Space to play one through WaveBench's native audio backend.
@@ -128,8 +141,16 @@ wavebench/
 ├── modes/                      # Response modes and registry
 │   ├── __init__.py             # Mode protocol, ParsedOutput, MODES
 │   ├── code.py                 # CodeMode prompt framing + parser wrapper
+│   ├── harness.py              # Harness mode exports (code is a compatibility alias)
 │   ├── text.py                 # TextMode prompt framing + Markdown pass-through
 │   └── tts.py                  # TTSMode prompt framing + audio-byte pass-through
+├── harness/                    # Bounded projects, tools, conversations, managed execution
+│   ├── workspace.py            # Root-bound file operations and exclusive allocation
+│   ├── commands.py             # Shared wb CLI/model dispatcher
+│   ├── transport.py            # OpenRouter streamed conversations/tool arguments
+│   ├── session.py              # Budgets, scheduling, attempts, repair, results
+│   ├── runtime.py              # Sandbox, dependencies, supervision, preview proxy
+│   └── trusted.py              # Read-only sandbox checks and launch helper
 ├── core/                       # Benchmark orchestration and artifact handling
 │   ├── __init__.py             # Public re-exports
 │   ├── orchestrator.py         # main_async run coordinator

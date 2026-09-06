@@ -64,11 +64,9 @@ def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = 
     """Pick the :class:`Mode` for this run based on CLI args and config.
 
     Precedence: explicit ``--mode <name>`` wins; falls back to the
-    legacy ``--text`` flag (→ text mode) or defaults to code mode. When
-    code mode is selected and ``auto_install == "on"``, a fresh
-    ``CodeMode(allow_deps=True)`` is constructed so the system prompt
-    permits third-party packages. TTS mode is constructed with configured
-    voice/format/speed.
+    legacy ``--text`` flag (→ text mode) or defaults to Harness. ``code``
+    remains a registry alias. Auto-install selects an explicit manifest
+    policy for isolated PyPI wheels. TTS mode uses configured voice/format/speed.
     """
     config = config or {}
 
@@ -105,7 +103,7 @@ def _resolve_mode(args: Any, auto_install: str, config: dict[str, Any] | None = 
     if explicit:
         mode = MODES.get(explicit)
         if mode is not None:
-            if mode.name == "code" and auto_install == "on":
+            if mode.name == "harness" and auto_install == "on":
                 return CodeMode(allow_deps=True)
             if mode.name == "tts":
                 return _configured_tts_mode()
@@ -160,6 +158,7 @@ async def main_async(
     text_mode = mode.name == "text"
     tts_mode = mode.name == "tts"
     image_mode = mode.name == "image"
+    harness_mode = mode.name == "harness"
     if tts_mode:
         reasoning_effort = None
         # Avoid launching every generated audio file when a user has auto-open
@@ -202,7 +201,7 @@ async def main_async(
                 and mid not in explicit_image_ids
                 and not is_image_model(mid, (pricing_lookup or {}).get(mid, {}))
             }
-            if not mapping:
+            if not mapping and not harness_mode:
                 mapping = MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 1
 
@@ -270,6 +269,19 @@ async def main_async(
     else:
         print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
     print(_box_row(f"{S.DIM}{'NAMING':>8}{S.RST}  {directory_naming}", w, heavy=True))
+    if harness_mode:
+        print(
+            _box_row(
+                f"{S.DIM}{'EXECUTE':>8}{S.RST}  {auto_open} · one run + one repair on failure",
+                w,
+                heavy=True,
+            )
+        )
+        print(
+            _box_row(
+                f"{S.DIM}{'DEPS':>8}{S.RST}  {auto_install} · isolated PyPI wheels", w, heavy=True
+            )
+        )
     print(_box_bot(w, heavy=True))
     print()
 
@@ -297,6 +309,8 @@ async def main_async(
     results: dict[str, Any] = {}
     output_dir_final = [None]
     t0 = time.monotonic()
+    harness_batch = None
+    run_failure = ("failed", "benchmark did not finish")
 
     # Read-only snapshot for token-average pacing hints; record_run re-reads
     # fresh under a lock at write time, so this stale copy is never written back.
@@ -341,6 +355,18 @@ async def main_async(
                 )
 
                 base_out = os.path.join(os.getcwd(), OUTPUT_DIR)
+                if harness_mode:
+                    from pathlib import Path
+
+                    from wavebench.harness.workspace import allocate_run
+
+                    out = str(allocate_run(Path(base_out), dir_name, user_prompt))
+                    output_dir_final[0] = out
+                    tracker.set_output_dir(out)
+                    return out
+                from wavebench.harness.workspace import safe_name
+
+                dir_name = safe_name(dir_name)
                 out = os.path.join(base_out, dir_name)
                 os.makedirs(out, exist_ok=True)
 
@@ -384,12 +410,47 @@ async def main_async(
                     )
                 )
 
-            tasks = [_run_model_task(name, mid) for name, mid in targets]
-            task_errors = await asyncio.gather(*tasks, return_exceptions=True)
+            if harness_mode:
+                from pathlib import Path
+
+                from wavebench.harness.config import Limits
+                from wavebench.harness.session import HarnessBatch, HarnessSession
+
+                limits = Limits.from_config(config)
+                out = Path(await output_dir_task)
+                process_slots = asyncio.Semaphore(limits.process_concurrency)
+                sessions = []
+                harness_batch = HarnessBatch(sessions, auto_open, results)
+                for slot, (name, mid) in enumerate(targets, 1):
+                    sessions.append(
+                        HarnessSession(
+                            out,
+                            slot,
+                            name,
+                            mid,
+                            user_prompt,
+                            session,
+                            api_key,
+                            limits,
+                            semaphore,
+                            process_slots,
+                            auto_install=auto_install,
+                            auto_open=auto_open,
+                            reasoning_effort=reasoning_effort,
+                            tracker=tracker,
+                        )
+                    )
+                await harness_batch.run()
+                task_errors = []
+            else:
+                tasks = [_run_model_task(name, mid) for name, mid in targets]
+                task_errors = await asyncio.gather(*tasks, return_exceptions=True)
             # run_model records its own failures, so a leaked exception here
             # means a task died before writing its result.  Backstop it —
             # a model must never be silently absent from the results box.
-            for (name, _mid), err in zip(targets, task_errors, strict=True):
+            for (name, _mid), err in zip(
+                targets if not harness_mode else [], task_errors, strict=True
+            ):
                 if not isinstance(err, BaseException) or name in results:
                     continue
                 if isinstance(err, asyncio.CancelledError):
@@ -420,7 +481,7 @@ async def main_async(
                 )
                 if auto_open == "after_all":
                     _open_with_viewer(gallery_path)
-            elif auto_open == "after_all" and output_dir_task.done():
+            elif not harness_mode and auto_open == "after_all" and output_dir_task.done():
                 out = output_dir_task.result()
                 code_tabs: list[tuple] = []
                 for name, info in results.items():
@@ -448,11 +509,40 @@ async def main_async(
                 output_dir_task.cancel()
 
         except asyncio.CancelledError:
+            run_failure = ("cancelled", "cancelled before generation completed")
             print(f"\n  {S.DIM}Cancelled.{S.RST}")
         except Exception as exc:
             exc_str = str(exc) or exc.__class__.__name__
+            run_failure = ("failed", exc_str)
             print(f"\n  {_fail} {S.RED}{exc_str}{S.RST}")
         finally:
+            if harness_batch:
+                for harness in harness_batch.sessions:
+                    if harness.name not in results:
+                        harness.status, harness.error = run_failure
+                        harness.generation = run_failure[0]
+                        harness.phase("finished")
+                        results[harness.name] = harness.result()
+            for name, mid in targets:
+                if name not in results:
+                    results[name] = {
+                        "status": run_failure[0],
+                        "time_s": 0.0,
+                        "file": None,
+                        "error": run_failure[1],
+                        "usage": {},
+                        "retries": [],
+                    }
+                    if harness_mode:
+                        results[name]["harness"] = {
+                            "version": 1,
+                            "model_id": mid,
+                            "generation": run_failure[0],
+                            "attempts": [],
+                        }
+            if "output_dir_task" in locals() and not output_dir_task.done():
+                output_dir_task.cancel()
+                await asyncio.gather(output_dir_task, return_exceptions=True)
             await tracker.stop()
 
     # ── Run results ────────────────────────────────────────────────────────
@@ -497,7 +587,11 @@ async def main_async(
             if model_cost is not None:
                 _total_run_cost += model_cost
                 _has_any_cost = True
-            cost_s = f"  {S.HYEL}{format_cost(model_cost)}{S.RST}" if model_cost else ""
+            cost_s = (
+                f"  {S.HYEL}{format_cost(model_cost)}{S.RST}"
+                if model_cost is not None
+                else (f"  {S.DIM}cost unknown{S.RST}" if info.get("harness") else "")
+            )
             # A length-truncated response still saves and still counts as a
             # success — the marker is the only thing separating it from a
             # complete answer in this box.
@@ -517,8 +611,13 @@ async def main_async(
                 elif tokens:
                     usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
                 else:
-                    usage_part = ""
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
+                    usage_part = f"  {S.DIM}usage unknown{S.RST}" if info.get("harness") else ""
+                outcome = (
+                    f"runtime passed ({len(info['harness']['attempts'])} run(s))"
+                    if info.get("harness")
+                    else "saved"
+                )
+                detail = f"{outcome} {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
             elif st == "cancelled":
                 sym = _skip
                 detail = f"{S.DIM}cancelled{S.RST}"
@@ -535,7 +634,7 @@ async def main_async(
                 overflow = _vlen(content) + 2 + len(t) - inner_w
                 max_fname = max(8, len(fname) - overflow)
                 fname = _truncate(fname, max_fname)
-                detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
+                detail = f"{outcome} {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{trunc_s}"
                 content = f"{rank} {sym} {_rpad(name, pad)}  {detail}"
             gap = max(inner_w - _vlen(content) - len(t), 2)
             print(_box_row(f"{content}{' ' * gap}{S.DIM}{t}{S.RST}", w))
@@ -568,6 +667,8 @@ async def main_async(
         reasoning_effort=raw_effort if not (tts_mode or image_mode) else None,
     )
     display_analytics(history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs"))
+    if harness_batch:
+        await harness_batch.review()
     if tts_mode and output_dir_final[0]:
         from wavebench.tui.tts_player import browse_tts_outputs
 

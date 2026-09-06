@@ -98,6 +98,35 @@ async def run_model(
     parsed extension is ``py``, dependency detection + venv setup fire
     as before. Text, TTS, and image modes skip that branch entirely.
     """
+    if mode.name == "harness":
+        from pathlib import Path
+
+        from wavebench.harness.config import Limits
+        from wavebench.harness.session import HarnessSession
+
+        harness = HarnessSession(
+            Path(await output_dir_task),
+            len(results) + 1,
+            model_name,
+            model_id,
+            user_prompt,
+            session,
+            api_key,
+            Limits(),
+            semaphore,
+            asyncio.Semaphore(1),
+            auto_install=auto_install,
+            auto_open=auto_open,
+            reasoning_effort=reasoning_effort,
+            tracker=tracker,
+        )
+        try:
+            await harness.build()
+            await harness.execute()
+        finally:
+            results[model_name] = harness.result()
+            await harness.close()
+        return
     start = time.monotonic()
     registered = tracker.is_running
 
