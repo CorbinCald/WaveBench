@@ -1,0 +1,24 @@
+  ╭─ Configuration ──────────────────────────────────────────────────────────╮
+  │                                                                          │
+  │  Models     TTS     Image    [Settings]                                  │
+  │                                                                          │
+  │   [✓] Reasoning effort  high                                             │
+  │   [✓] Analytics sort  runs                                               │
+  │   [✓] Theme  default                                                     │
+  │   [✓] Directory naming  llm                                              │
+  │   [ ] Auto-open files  off                                               │
+  │   [✓] Preview review timeout (s)  3600                                   │
+  │   [✓] Build time limit (s)  1800                                         │
+  │   [✓] Repair time limit (s)  600                                         │
+  │   [✓] Total token budget  512000                                         │
+  │ ▸ [✓] Output tokens per turn  24000                                      │
+  │   [✓] TTS voice  alloy                                                   │
+  │   [✓] TTS format  mp3                                                    │
+  │   [✓] TTS speed  1.0                                                     │
+  │   [✓] Image settings  custom                                             │
+  │   [✓]   Image aspect ratio  1:1                                          │
+  │   [✓]   Image size  1K                                                   │
+  │                                                                          │
+  │ 17 setting(s)  (modified)  1–16 shown                                    │
+  │ ←→ tab · ↑↓ · Space change · Enter/Tab save · Esc                        │
+  ╰──────────────────────────────────────────────────────────────────────────╯

@@ -166,7 +166,10 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
                     {"role": "tool", "tool_call_id": "call-one", "content": '{"ok":true}'},
                 ]
             )
-            await call_conversation(
+            # The unchanged conversation prefix has a measured token count;
+            # its JSON byte length alone would reject this smaller context.
+            monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, "vendor/model", 1200)
+            second_turn = await call_conversation(
                 session,
                 "test-key",
                 "vendor/model",
@@ -174,7 +177,9 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
                 TOOL_SCHEMA,
                 max_tokens=100,
                 reasoning_effort="low",
+                input_tokens_bound=50,
             )
+            assert second_turn.adjustments["context_bound"] == 1074
         assert len(requests) == 3
         assert all(request["tools"] == TOOL_SCHEMA for request in requests)
         assert requests[0] == requests[1]

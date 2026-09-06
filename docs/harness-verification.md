@@ -93,3 +93,31 @@ All checks passed!
 
 The deselected test is the repository's explicit live directory-naming test.
 The paid harness matrix above runs separately. Ruff is pinned to CI's 0.15.11.
+
+## Astra budget estimate and Settings follow-up
+
+The Astra runs starting at 15:28 and 16:27 MDT on 2026-09-06 stopped after
+598.90 and 588.81 active seconds, respectively. They had used 133,950 and
+142,407 tokens of the 256,000-token limit. Both stopped before submission or
+execution because the next-request guard reserved the full conversation's
+UTF-8 byte count as tokens; neither reached the 900-second build deadline.
+
+Replayed their saved assistant turns and usage offline through the updated
+controller, using fresh workspaces and real file/lint tools. Both reached the
+next model-request checkpoint with the full 16,384-token output allowance.
+The measured prompt prefix plus new-message byte estimate reserved about
+41,000 input tokens, versus 129,000–135,000 previously.
+[Replay measurements](evidence/harness-30/astra-budget-replay.json) record the
+original totals and corrected admission checks. This verifies the budget fix;
+it does not claim either original project completed generation or execution.
+
+The real `wavebench --config` menu was exercised in an 80 × 24 PTY. Verified
+the renamed **Preview review timeout (s)**, editing all four build/repair time
+and token controls, rejecting zero, scrolling to the final Settings row, and
+loading saved values through `Limits.from_config` while preserving other
+Harness settings. [Settings capture](evidence/harness-30/budget-settings.txt).
+
+Regression checks cover large conversation continuation, output-budget
+clamping, real total-token exhaustion, separate build/repair timeouts, and
+context admission using the measured estimate. The full offline suite passed:
+574 tests, one live test deselected; Ruff check and format also passed.

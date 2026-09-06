@@ -1,0 +1,24 @@
+[
+  {
+    "original_run": "e84bfd0b23484c3a8dad1db7d71447a5",
+    "original_turns": 6,
+    "active_seconds": 598.9049519001273,
+    "used_tokens": 133950,
+    "old_next_input_reserve": 135062,
+    "corrected_next_input_reserve": 41509,
+    "next_output_allowance": 16384,
+    "next_request_admitted": true,
+    "execution_attempts": 0
+  },
+  {
+    "original_run": "15f3f9044a144c5b933f3d046d9b3701",
+    "original_turns": 8,
+    "active_seconds": 588.8089116081828,
+    "used_tokens": 142407,
+    "old_next_input_reserve": 128743,
+    "corrected_next_input_reserve": 40683,
+    "next_output_allowance": 16384,
+    "next_request_admitted": true,
+    "execution_attempts": 0
+  }
+]

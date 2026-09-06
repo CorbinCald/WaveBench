@@ -140,14 +140,18 @@ async def call_conversation(
     *,
     max_tokens: int,
     reasoning_effort: str | None,
+    input_tokens_bound: int | None = None,
     on_progress=None,
     on_retry=None,
 ) -> Turn:
     """Retry rejected HTTP requests only; never replay a partially received turn."""
     await api._load_model_context_lengths(session, api_key)
     serialized = json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False)
-    # UTF-8 bytes conservatively bound tokenization, including tool results/schema.
-    context_bound = len(serialized.encode("utf-8")) + 1024
+    # The controller can anchor its estimate to provider-reported prompt usage.
+    # Standalone callers fall back to bytes for the entire request.
+    context_bound = (
+        len(serialized.encode("utf-8")) if input_tokens_bound is None else input_tokens_bound
+    ) + 1024
     context_limit = api._MODEL_CONTEXT_CACHE.get(model_id, 128_000)
     resolved = min(
         max_tokens,

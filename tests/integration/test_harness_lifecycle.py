@@ -264,3 +264,88 @@ async def test_malformed_generation_preserves_usage_without_tool_execution(facto
     assert session.status == "failed" and not session.attempts
     assert session.usage()["total_tokens"] == 7
     assert session.workspace.ls() == []
+
+
+async def test_measured_prompt_usage_keeps_large_projects_within_budget(factory, monkeypatch):
+    requests = []
+
+    async def model(client, api_key, model_id, messages, tools, **kwargs):
+        index = len(requests)
+        requests.append(kwargs)
+        if index == 0:
+            command = {"command": "write", "path": "main.py", "content": "value = 'hello'\n" * 3000}
+        elif index < 5:
+            command = {"command": "ls"}
+        else:
+            command = {"command": "done", "runtime": "python", "entry": "main.py"}
+        message = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call-{index}",
+                    "type": "function",
+                    "function": {"name": "wb", "arguments": json.dumps(command)},
+                }
+            ],
+        }
+        usage = {
+            "prompt_tokens": 1000 if index == 0 else 14000,
+            "completion_tokens": 12000 if index == 0 else 100,
+        }
+        usage["total_tokens"] = sum(usage.values())
+        return Turn(message, usage, model_id, "offline-provider", "tool_calls", {})
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=100_000))
+    await session.build()
+    assert session.generation == "submitted", session.error
+    assert len(requests) == 6
+    assert session.budget_tokens == 83_500
+    assert session.turns[-1]["input_tokens_bound"] < 16_000
+    assert 0 < requests[-1]["max_tokens"] <= session.limits.turn_tokens
+    used_before_last = sum(turn["usage"]["total_tokens"] for turn in session.turns[:-1])
+    assert (
+        used_before_last + requests[-1]["input_tokens_bound"] + requests[-1]["max_tokens"]
+        <= session.limits.total_tokens
+    )
+    assert not session.attempts
+
+
+async def test_token_limit_identifies_usage_and_next_request_reserve(factory, monkeypatch):
+    calls, _ = scripted(monkeypatch)
+    original = module.call_conversation
+
+    async def model(*args, **kwargs):
+        turn = await original(*args, **kwargs)
+        turn.usage = {"prompt_tokens": 8500, "completion_tokens": 500, "total_tokens": 9000}
+        return turn
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=10_000))
+    await session.build()
+    assert session.generation == "budget_exhausted"
+    assert calls[session.model_id] == 1
+    assert "9,000 / 10,000 tokens used" in session.error
+    assert "next input estimate" in session.error and "time" not in session.error
+    assert not session.attempts
+
+
+@pytest.mark.parametrize("repair", [False, True])
+async def test_active_deadline_names_the_phase_and_time_limit(factory, monkeypatch, repair):
+    scripted(monkeypatch, fail_first=repair)
+    original = module.call_conversation
+
+    async def model(*args, **kwargs):
+        last = args[3][-1]
+        if not repair or (last.get("role") == "user" and "run 1 failed" in last.get("content", "")):
+            await asyncio.sleep(2)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(build_seconds=1, repair_seconds=1))
+    await session.build()
+    await session.execute()
+    phase = "repairing" if repair else "building"
+    assert f"{phase} active time budget exhausted" in session.error
+    assert "/ 1s)" in session.error
+    assert len(session.attempts) == (1 if repair else 0)

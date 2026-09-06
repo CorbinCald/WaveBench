@@ -1,6 +1,6 @@
 """Tabbed configuration menu — Models/TTS/Image tabs (catalog browser + manual add)
 and Settings tab (theme, reasoning-effort, analytics sort, directory naming,
-auto-open, preview timeout, auto-install).
+auto-open, Harness budgets, preview review timeout, auto-install).
 
 ``interactive_config_menu`` is a single function that drives the tabs through
 a shared event loop; further decomposition is deferred per the maintainability
@@ -233,6 +233,8 @@ def interactive_config_menu(
     ]
     IMAGE_SIZE_CHOICES = ["1K", "2K", "4K"]
     image_settings_value = current_config.get("image_settings", "provider defaults")
+    harness_defaults = Limits()
+    harness_config = current_config.get("harness") or {}
     if image_settings_value == "custom":
         image_aspect_ratio_value = current_config.get("image_aspect_ratio", "1:1")
         image_size_value = current_config.get("image_size", "1K")
@@ -276,15 +278,22 @@ def interactive_config_menu(
             "type": "cycle",
             "choices": AUTO_OPEN_CHOICES,
         },
-        {
-            "key": "review_seconds",
-            "section": "harness",
-            "label": "Preview timeout (s)",
-            "value": (current_config.get("harness") or {}).get(
-                "review_seconds", Limits().review_seconds
-            ),
-            "type": "number",
-        },
+        *[
+            {
+                "key": key,
+                "section": "harness",
+                "label": label,
+                "value": harness_config.get(key, getattr(harness_defaults, key)),
+                "type": "number",
+            }
+            for key, label in (
+                ("review_seconds", "Preview review timeout (s)"),
+                ("build_seconds", "Build time limit (s)"),
+                ("repair_seconds", "Repair time limit (s)"),
+                ("total_tokens", "Total token budget"),
+                ("turn_tokens", "Output tokens per turn"),
+            )
+        ],
         {
             "key": "tts_voice",
             "label": "TTS voice",
@@ -459,11 +468,17 @@ def interactive_config_menu(
         new_ps = max(1, min(14, term.lines - _CHROME_LINES))
         if new_ps != model_page_size:
             model_page_size = new_ps
-            content_height = max(model_page_size, len(settings_items))
             for tab in MODEL_TABS:
                 indices = filtered_model_indices[tab]
                 if indices and model_cursor[tab] in indices:
                     model_page[tab] = indices.index(model_cursor[tab]) // model_page_size
+        content_height = (
+            model_page_size
+            if _is_model_tab()
+            else min(len(settings_items), max(1, term.lines - _CHROME_LINES))
+        )
+        visible_settings = _visible_settings()
+        settings_start = max(0, settings_cursor - content_height + 1)
         w = max(20, min(120, term.columns) - 4)
         _avail = max(10, (w - 4) - _overhead)
         short_w, id_w = _nat_short_w, _nat_id_w
@@ -538,10 +553,10 @@ def interactive_config_menu(
                 else:
                     buf.append(_box_row("", w) + "\033[K\n")
             else:
-                visible = _visible_settings()
-                if row < len(visible):
-                    _, item = visible[row]
-                    is_cur = row == settings_cursor
+                setting_row = settings_start + row
+                if setting_row < len(visible_settings):
+                    _, item = visible_settings[setting_row]
+                    is_cur = setting_row == settings_cursor
                     if item.get("type") in ("cycle", "number"):
                         val = item["value"]
                         if item.get("key") == "reasoning_effort":
@@ -610,6 +625,8 @@ def interactive_config_menu(
             tag = f"  {S.HYEL}(modified){S.RST}" if changed else ""
             vis_count = len(_visible_settings())
             status = f"{S.DIM}{vis_count} setting(s){S.RST}{tag}"
+            if vis_count > content_height:
+                status += f"  {settings_start + 1}–{min(settings_start + content_height, vis_count)} shown"
             if setting_error:
                 status = f"{S.HRED}{setting_error}{S.RST}"
         buf.append(_box_row(status, w) + "\033[K\n")
@@ -669,7 +686,7 @@ def interactive_config_menu(
                         editing_setting = None
                         setting_error = ""
                     else:
-                        setting_error = "Enter a positive whole number of seconds."
+                        setting_error = "Enter a positive whole number."
                 elif key == "backspace":
                     setting_buffer = setting_buffer[:-1]
                     setting_error = ""
