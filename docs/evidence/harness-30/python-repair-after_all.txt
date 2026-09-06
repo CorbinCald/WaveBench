@@ -1,0 +1,64 @@
+
+  ◌ Fetching models from OpenRouter…
+
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  ┃     MODE  HARNESS                                                        ┃
+  ┃   PROMPT  Build a small multi-file Python project: main.py imports a …   ┃
+  ┃  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  ┃
+  ┃   MODELS  2 active                                                       ┃
+  ┃   REASON  low                                                            ┃
+  ┃   NAMING  slug                                                           ┃
+  ┃  EXECUTE  after_all · one run + one repair on failure                    ┃
+  ┃     DEPS  off · isolated PyPI wheels                                     ┃
+  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  model-1: preflight
+  model-2: preflight
+  model-2: building
+  model-1: building
+  model-1: building
+  model-1: linting
+  model-2: building
+  model-1: building
+  model-2: linting
+  model-2: building
+  model-1: queued
+  model-2: queued
+  model-1: setting up
+  model-1: running
+  model-2: setting up
+  model-2: running
+  model-1: repairing
+  model-2: repairing
+  model-1: repairing
+  model-2: repairing
+  model-1: linting
+  model-1: repairing
+  model-2: linting
+  model-2: repairing
+  model-1: setting up
+  model-1: running
+  model-1: finished
+  model-2: setting up
+  model-2: running
+  model-2: finished
+
+  ╭─ Run Results ────────────────────────────────────────────────────────────╮
+  │   OUTPUT  …ts/harness/multi_file_python/0cf5f78756264063b6505129fe98590e │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │  1. ✓ model-1   saved → 001-mod…  8,583 tk  $0.002                 10.6s │
+  │  2. ✓ model-2   saved → 002-mod…  15,903 tk  $0.021                12.2s │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │ 2 passed · 12.7s total · $0.023                                          │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ╭─ Lifetime Analytics (1 run) ─────────────────────────────────────────────╮
+  │                                                                          │
+  │ MODEL               RUNS   RATE       AVG   AVG TKNS   AVG COST      TOTAL │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │ model-1 [harness]      1   100%     10.6s      8,583     $0.002     $0.002 │
+  │ model-2 [harness]      1   100%     12.2s     15,903     $0.021     $0.021 │
+  ├─ Totals ─────────────────────────────────────────────────────────────────┤
+  │ 2 calls · 2 passed · 100% · avg 11.4s · avg tkns 12,243                  │
+  │ avg cost $0.011 · total spend $0.023                                     │
+  ╰──────────────────────────────────────────────────────────────────────────╯

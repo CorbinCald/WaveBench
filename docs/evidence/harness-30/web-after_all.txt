@@ -1,0 +1,59 @@
+
+  ◌ Fetching models from OpenRouter…
+
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  ┃     MODE  HARNESS                                                        ┃
+  ┃   PROMPT  Build a small static web project with index.html, styles.cs…   ┃
+  ┃  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  ┃
+  ┃   MODELS  2 active                                                       ┃
+  ┃   REASON  low                                                            ┃
+  ┃   NAMING  slug                                                           ┃
+  ┃  EXECUTE  after_all · one run + one repair on failure                    ┃
+  ┃     DEPS  off · isolated PyPI wheels                                     ┃
+  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+  model-1: preflight
+  model-2: preflight
+  model-1: building
+  model-2: building
+  model-2: building
+  model-2: building
+  model-1: building
+  model-2: building
+  model-1: linting
+  model-1: building
+  model-2: linting
+  model-2: building
+  model-1: queued
+  model-2: queued
+  model-1: setting up
+  model-1: running
+  model-2: setting up
+  model-2: running
+PREVIEW_HTTP 200 510
+  model-1: finished
+PREVIEW_HTTP 200 532
+  model-2: finished
+
+  ╭─ Run Results ────────────────────────────────────────────────────────────╮
+  │   OUTPUT  …s/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559 │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │  1. ✓ model-1   runtime passed (1 run(s)) → 001-mod…  5,090 tk  $0.002  10.4s │
+  │  2. ✓ model-2   runtime passed (1 run(s)) → 002-mod…  11,845 tk  $0.018  10.6s │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │ 2 passed · 11.1s total · $0.019                                          │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ╭─ Lifetime Analytics (1 run) ─────────────────────────────────────────────╮
+  │                                                                          │
+  │ MODEL               RUNS   RATE       AVG   AVG TKNS   AVG COST      TOTAL │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │ model-1 [harness]      1   100%     10.4s      5,090     $0.002     $0.002 │
+  │ model-2 [harness]      1   100%     10.6s     11,845     $0.018     $0.018 │
+  ├─ Totals ─────────────────────────────────────────────────────────────────┤
+  │ 2 calls · 2 passed · 100% · avg 10.5s · avg tkns 8,467                   │
+  │ avg cost $0.010 · total spend $0.019                                     │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+  model-1 preview: http://127.0.0.1:35333/index.html
+  model-2 preview: http://127.0.0.1:45235/index.html
+  Managed previews remain open for up to 2s. Press Enter or Ctrl-C to stop.

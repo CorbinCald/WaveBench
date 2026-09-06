@@ -26,7 +26,8 @@ from wavebench.modes.tts import TTSMode
 
 
 def test_registry_contains_both_builtins() -> None:
-    assert set(MODES.keys()) == {"code", "text", "tts", "image"}
+    assert set(MODES.keys()) == {"harness", "code", "text", "tts", "image"}
+    assert MODES["harness"] is MODES["code"]
 
 
 def test_registry_maps_name_to_canonical_instance() -> None:
@@ -41,8 +42,8 @@ def test_code_mode_defaults_disallow_deps() -> None:
 
 
 def test_mode_identity_attrs() -> None:
-    assert CODE_MODE.name == "code"
-    assert CODE_MODE.display_name == "Code"
+    assert CODE_MODE.name == "harness"
+    assert CODE_MODE.display_name == "Harness"
     assert TEXT_MODE.name == "text"
     assert TEXT_MODE.display_name == "Text"
     assert TTS_MODE.name == "tts"
@@ -78,15 +79,15 @@ def test_parsed_output_parse_error_defaults_none() -> None:
 
 def test_code_mode_frame_prompt_without_deps_forbids_external_modules() -> None:
     framed = CODE_MODE.frame_prompt("write a snake game")
-    assert "single-file" in framed
-    assert "Do not include any external modules" in framed
+    assert "workspace" in framed and "single-file" not in framed
+    assert "Dependencies are disabled" in framed
     assert "write a snake game" in framed
 
 
 def test_code_mode_frame_prompt_with_deps_allows_pypi() -> None:
     mode = CodeMode(allow_deps=True)
     framed = mode.frame_prompt("parse a CSV with pandas")
-    assert "third-party packages" in framed
+    assert "PyPI wheels" in framed
     assert "parse a CSV with pandas" in framed
     # The no-deps phrasing must NOT appear.
     assert "Do not include any external modules" not in framed

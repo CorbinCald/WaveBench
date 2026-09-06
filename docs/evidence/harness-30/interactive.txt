@@ -1,0 +1,49 @@
+Interactive WaveBench verification, 2026-09-06, 110 columns by 36 rows.
+
+Settings with Auto-open off:
+  ╭─ Configuration ────────────────────────────────────────────────────────────────────────────────────────╮
+  │                                                                                                        │
+  │  Models     TTS     Image    [Settings]                                                                │
+  │                                                                                                        │
+  │   [~] Reasoning effort  low                                                                            │
+  │   [✓] Analytics sort  runs                                                                             │
+  │   [✓] Theme  default                                                                                   │
+  │   [✓] Directory naming  slug                                                                           │
+  │ ▸ [ ] Auto-open files  off                                                                             │
+  │   [✓] TTS voice  alloy                                                                                 │
+  │   [✓] TTS format  mp3                                                                                  │
+  │   [✓] TTS speed  1.0                                                                                   │
+  │   [✓] Image settings  provider defaults                                                                │
+  │   [ ] Auto-install deps  off                                                                           │
+  │                                                                                                        │
+  │                                                                                                        │
+  │                                                                                                        │
+  │                                                                                                        │
+  │                                                                                                        │
+  │ 10 setting(s)  (modified)                                                                              │
+  │ ←→ tab · ↑↓ · Space · Enter/Tab · Esc                                                                  │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Completed interactive run:
+  ╭─ Run Results ──────────────────────────────────────────────────────────────────────────────────────────╮
+  │   OUTPUT  …30-interactive/benchmarkResults/harness/static_web_project/d44f03f61fc747559ad318afc6a615a3 │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │  1. ✓ Haiku   runtime passed (1 run(s)) → 002-Haiku-9523ec469835/project  11,014 tk  $0.016       9.2s │
+  │  2. ✓ Luna    runtime passed (1 run(s)) → 001-Luna-127f96a383c2/project  4,864 tk  $0.002        10.1s │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 2 passed · 10.6s total · $0.018                                                                        │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ╭─ Lifetime Analytics (1 run) ───────────────────────────────────────────────────────────────────────────╮
+  │                                                                                                        │
+  │ MODEL             RUNS   RATE       AVG   AVG TKNS   AVG COST      TOTAL                               │
+  ├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Haiku [harness]      1   100%      9.2s     11,014     $0.016     $0.016                               │
+  │ Luna [harness]       1   100%     10.1s      4,864     $0.002     $0.002                               │
+  ├─ Totals ───────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 2 calls · 2 passed · 100% · avg 9.7s · avg tkns 7,939                                                  │
+  │ avg cost $0.009 · total spend $0.018                                                                   │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  Luna preview: http://127.0.0.1:39955/index.html
+  Haiku preview: http://127.0.0.1:36809/index.html
+  Managed previews remain open for up to 180s. Press Enter or Ctrl-C to stop.

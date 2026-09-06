@@ -129,7 +129,7 @@ Helpful fixtures in `tests/conftest.py`:
 
 ## Adding a new mode
 
-WaveBench's response modes — currently `CodeMode`, `TextMode`, and `TTSMode` — implement
+WaveBench's response modes — `HarnessMode` (`CodeMode` alias), `TextMode`, `TTSMode`, and `ImageMode` — implement
 the `Mode` protocol in `wavebench/modes/__init__.py`. A mode captures two
 mode-specific decisions: how to frame the user's prompt, and how to parse the
 raw LLM response into savable content with a file extension.
@@ -198,7 +198,7 @@ To add a new mode, for example `JsonMode`:
 4. **Decide how it appears in the interactive startup UI.** Once registered,
    your mode is automatically accepted by `wavebench --mode json` and appears
    in `wavebench --help`. The interactive startup selector currently displays
-   Code/Text/TTS shortcuts explicitly, so update `_print_mode_menu()` and key
+   Harness/Text/TTS/Image shortcuts explicitly, so update `_print_mode_menu()` and key
    handling in `wavebench/__main__.py` if the new mode should be selectable
    there too.
 
