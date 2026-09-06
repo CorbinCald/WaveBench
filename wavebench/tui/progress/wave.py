@@ -469,6 +469,31 @@ _LAYER_LIGHTING = (
 )
 
 
+def _water_lighting_codes(
+    color: tuple[int, int, int], shade: float, lighting_levels: tuple[float, ...]
+) -> tuple[str, ...]:
+    """Keep local highlights soft in the terminal's available colors."""
+    lights = (*lighting_levels, 0.96)
+    colors = tuple(_scale_color(color, shade * light) for light in lights)
+    if _styles.TRUECOLOR:
+        return tuple(_color_code(entry) for entry in colors)
+
+    # A small gain can jump from dark blue to cyan in the sparse 256-color
+    # cube. Limit lighting to its intended contrast relative to the rendered
+    # water body; the phosphor dots still carry highlights between these steps.
+    ramp = tuple((entry, _styles._luma(entry)) for entry in _styles.hue_ramp(color))
+    body_target = _styles._luma(colors[0])
+    _, body_luma = min(ramp, key=lambda step: abs(step[1] - body_target))
+    ceiling = body_luma * lights[-1] / lights[0]
+    allowed = tuple(step for step in ramp if step[1] <= ceiling)
+    return tuple(
+        _styles._palette_escape(
+            min(allowed, key=lambda step: abs(step[1] - _styles._luma(entry)))[0]
+        )
+        for entry in colors
+    )
+
+
 def _caustic_grid(
     width: int, height: int, phase: float, layer_index: int = 0
 ) -> tuple[float, int, list[tuple[_CausticSite, ...]]]:
@@ -734,10 +759,7 @@ def render_idle_wave(
                     * screen_shade
                     * layer_depth
                 )
-                codes = tuple(
-                    _color_code(_scale_color(active_color, shade * lighting))
-                    for lighting in (*lighting_levels, 0.96)
-                )
+                codes = _water_lighting_codes(active_color, shade, lighting_levels)
                 depth_codes[layer_index, depth_band] = codes
 
             surface_y = (surface[col * 2] + surface[col * 2 + 1]) * 0.5
