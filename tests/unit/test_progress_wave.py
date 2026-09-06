@@ -488,110 +488,65 @@ def test_distant_water_cannot_shine_through_nearer_texture(
 
 @pytest.mark.parametrize(("rear_layer", "near_layer"), [(0, 1), (0, 2), (1, 2)])
 @pytest.mark.parametrize("crest", [(1.2, 1.2), (2.2, 2.2), (3.2, 3.2), (1.2, 3.2), (3.2, 1.2)])
-def test_overlapping_crests_preserve_exposed_background_dots(
+def test_contour_cells_never_contain_rear_wave_dots(
     colored, monkeypatch, rear_layer, near_layer, crest
 ) -> None:
-    """A partial crest must not clear the rear water in the rest of its character."""
+    """A rear rim cannot protrude above a foreground crest inside its character."""
     surfaces = [[100.0] * 4 for _ in range(3)]
-    surfaces[rear_layer] = [-4.0] * 4
     surfaces[near_layer] = list(crest) * 2
     monkeypatch.setattr(wave_mod, "_idle_wave_surfaces", lambda *_args: tuple(surfaces))
-    # Quiet water makes the expected dots independent of moving highlights.
-    monkeypatch.setattr(
-        wave_mod,
-        "_caustic_edges",
-        lambda *_args: (
-            (0.0, 0.0, 100.0),
-            (0.0, 0.0, 100.0),
-            wave_mod._phosphor_limits(0.28, 1.0),
-        ),
-    )
+    without_rear = wave_mod.render_idle_wave(40, 2, 2, 0.7)
+    surfaces[rear_layer] = [-4.0] * 4
+    with_rear = wave_mod.render_idle_wave(40, 2, 2, 0.7)
 
-    rendered = wave_mod.render_idle_wave(0, 2, 1, 0.5)[0]
-    visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
-    for col, glyph in enumerate(visible):
-        mask = ord(glyph) - 0x2800
-        # Both character columns have an ambient dot at their upper left,
-        # above the nearer crest. Previously the whole upper cell was erased.
-        assert mask & 0x01, "exposed background water must survive inside a shared cell"
-        for subcol, surface_y in enumerate(crest):
-            for subrow, bits in enumerate(wave_mod._BRAILLE_DOT_BITS):
-                depth = subrow + 0.5 - surface_y
-                ambient = wave_mod._PHOSPHOR[subrow][(col * 2 + subcol) % 4] < 0.28 * (
-                    0.86 if subrow == 3 else 1.0
-                )
-                expected = 0 <= depth < 1.0 or ambient
-                assert bool(mask & bits[subcol]) == expected
+    # Both glyph geometry and color must remain the nearer wave's own. A
+    # brightness fade can hide the problem but cannot satisfy this comparison.
+    assert with_rear == without_rear
 
 
-def test_three_waves_share_a_cell_without_revealing_submerged_crests(colored, monkeypatch) -> None:
-    """Crossing surfaces keep every exposed rim, but hide rims under nearer texture."""
+def test_rear_water_cutout_follows_the_contour_in_dot_steps(colored, monkeypatch) -> None:
+    """The clearance curves with the crest instead of erasing rectangular cells."""
+    foreground = [9.2, 9.2, 10.2, 10.2, 11.2, 11.2]
     monkeypatch.setattr(
         wave_mod,
         "_idle_wave_surfaces",
-        lambda *_args: ([0.2, 0.2], [2.2, 2.2], [3.2, 1.2]),
+        lambda *_args: ([100.0] * 6, [0.2] * 6, foreground),
     )
+    # Fully lit water reveals the clipping boundary without texture hiding it.
     monkeypatch.setattr(
         wave_mod,
         "_caustic_edges",
-        lambda *_args: (
-            (0.0, 0.0, 100.0),
-            (0.0, 0.0, 100.0),
-            wave_mod._phosphor_limits(0.28, 1.0),
-        ),
+        lambda *_args: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), ((float("inf"),) * 4,) * 4),
     )
+    rows = wave_mod.render_idle_wave(40, 3, 4, 0.7)
+    visible = [re.sub(r"\033\[[0-9;]*m", "", row) for row in rows]
 
-    rendered = wave_mod.render_idle_wave(0, 1, 1, 0.5)[0]
-    visible = re.sub(r"\033\[[0-9;]*m", "", rendered)
-    # Left column: far rim, blank, middle rim, front rim. Right column:
-    # far rim, front rim, then blank texture that must hide the middle rim.
-    assert visible == chr(0x2800 + 0x5D)
+    assert [ord(char) - 0x2800 for char in visible[1]] == [0x1B, 0x3F, 0xFF]
+    for col, char in enumerate(visible[2]):
+        assert ord(char) - 0x2800 == wave_mod._surface_fill_mask(foreground, 2, col)
 
 
-@pytest.mark.parametrize(("rear_layer", "near_layer"), [(0, 1), (0, 2), (1, 2)])
-@pytest.mark.parametrize("crest", [(3.2, 3.2), (3.2, 3.6)])
-def test_partial_crests_do_not_relight_background_dots(
-    colored, monkeypatch, rear_layer, near_layer, crest
+@pytest.mark.parametrize(("width", "height"), [(38, 9), (78, 14), (118, 26), (300, 60)])
+def test_animated_wave_layers_never_light_the_same_character(
+    colored, monkeypatch, width, height
 ) -> None:
-    """One or two front rim dots must not recolor the whole shared character."""
-    surfaces = [[100.0, 100.0] for _ in range(3)]
-    monkeypatch.setattr(wave_mod, "_idle_wave_surfaces", lambda *_args: tuple(surfaces))
-    monkeypatch.setattr(
-        wave_mod,
-        "_caustic_edges",
-        lambda *_args: (
-            (0.0, 0.0, 100.0),
-            (0.0, 0.0, 100.0),
-            wave_mod._phosphor_limits(0.28, 1.0),
-        ),
-    )
+    """Moving crossings cannot combine two silhouettes, at any tested terminal size."""
+    sample = wave_mod._surface_water_mask
+    occupied = set()
 
-    def brightness():
-        return sum(_cell_colors(wave_mod.render_idle_wave(0, 1, 1, 0.7)[0])[0])
+    def record(surface, edges, row, col, occluder=None):
+        mask = sample(surface, edges, row, col, occluder)
+        if mask:
+            assert (row, col) not in occupied, "two wave silhouettes share one character"
+            occupied.add((row, col))
+        return mask
 
-    surfaces[rear_layer] = [0.2, 0.2]
-    rear = brightness()
-    surfaces[rear_layer] = [100.0, 100.0]
-    surfaces[near_layer] = list(crest)
-    near = brightness()
-    surfaces[rear_layer] = [0.2, 0.2]
-    overlap = brightness()
-
-    assert rear < overlap < rear + (near - rear) * 0.75
-
-
-def test_shared_edge_color_does_not_flicker_with_the_phosphor(colored, monkeypatch) -> None:
-    """Changing rear texture coverage cannot make a shared rim flash brighter."""
-    monkeypatch.setattr(
-        wave_mod,
-        "_idle_wave_surfaces",
-        lambda *_args: ([100.0] * 24, [0.2] * 24, [3.2] * 24),
-    )
-    colors = set()
-    for phase in (0.0, 30.0, 75.0):
-        row = wave_mod.render_idle_wave(40, 12, 1, 0.7, wave_phase=phase)[0]
-        colors.update(_cell_colors(row))
-    assert len(colors) == 1
+    monkeypatch.setattr(wave_mod, "_surface_water_mask", record)
+    for intensity in (0.0, 0.5, 1.0):
+        for phase in (0.0, 26.0, 90.0):
+            occupied.clear()
+            wave_mod.render_idle_wave(40, width, height, intensity, phase)
+            assert occupied
 
 
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (10, 3), (40, 60), (300, 60)])
@@ -799,8 +754,11 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
         far_rims: list[int] = []
         for row_index, row in enumerate(rows):
             colors = _cell_colors(row)
+            glyphs = re.sub(r"\033\[[0-9;]*m", "", row)
             assert len(colors) == width
             for col, color in enumerate(colors):
+                if glyphs[col] == " ":
+                    continue
                 if wave_mod._surface_fill_mask(foreground, row_index, col):
                     band = wave_mod._surface_depth_band(
                         foreground,
@@ -823,10 +781,8 @@ def test_idle_wave_depth_colors_are_ordered(colored) -> None:
                         far_rims.append(sum(color))
 
         assert surface_bodies and deep_bodies and middle_rims and far_rims, intensity
-        # A shared crest blends toward the rear water instead of inheriting
-        # the front rim's full brightness. Typical crests still show depth;
-        # the partial-crest tests separately bound those blended edge colors.
-        assert median(far_rims) < median(middle_rims) < median(surface_bodies), intensity
+        assert max(far_rims) < min(middle_rims), intensity
+        assert max(middle_rims) < min(surface_bodies), intensity
         assert max(deep_bodies) < min(surface_bodies), intensity
 
 
