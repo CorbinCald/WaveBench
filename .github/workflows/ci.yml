@@ -14,7 +14,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap nodejs
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap nodejs apparmor-profiles
+      - name: Enable the packaged Bubblewrap AppArmor profile
+        run: |
+          if [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
+            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       # Keep this ruff version in lockstep with the rev pinned in
       # .pre-commit-config.yaml, so CI and the client-side hook agree.
       - run: pip install 'ruff==0.15.11'
