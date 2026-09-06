@@ -484,23 +484,9 @@ _WaterShade = tuple[str, tuple[int, int, int]]
 def _water_lighting_codes(
     color: tuple[int, int, int], shade: float, lights: tuple[float, ...]
 ) -> tuple[_WaterShade, ...]:
-    """Keep local highlights soft in the terminal's available colors."""
+    """Build the fine lighting shades for a truecolor water depth band."""
     colors = tuple(_scale_color(color, shade * light) for light in lights)
-    if _styles.TRUECOLOR:
-        return tuple((_color_code(entry), entry) for entry in colors)
-
-    # A small gain can jump from dark blue to cyan in the sparse 256-color
-    # cube. Limit lighting to its intended contrast relative to the rendered
-    # water body; the phosphor dots still carry highlights between these steps.
-    ramp = tuple((entry, _styles._luma(entry)) for entry in _styles.hue_ramp(color))
-    body_target = _styles._luma(colors[0])
-    _, body_luma = min(ramp, key=lambda step: abs(step[1] - body_target))
-    ceiling = body_luma * max(lights) / lights[0]
-    allowed = tuple(step for step in ramp if step[1] <= ceiling)
-    entries = tuple(
-        min(allowed, key=lambda step: abs(step[1] - _styles._luma(entry)))[0] for entry in colors
-    )
-    return tuple((_styles._palette_escape(entry), entry) for entry in entries)
+    return tuple((_color_code(entry), entry) for entry in colors)
 
 
 def _caustic_grid(
@@ -696,6 +682,17 @@ def render_idle_wave(
         (middle_surface, foreground_surface, middle_depth, phase * 0.71 + 17.0),
         (far_surface, far_occluding_surface, far_depth, phase * 0.44 + 31.0),
     )
+    # The sparse 256-color palette turns a depth fade into a hard horizontal
+    # cutoff (e.g. red 135 to red 95). Hold one body shade across each layer;
+    # its moving phosphor texture still supplies caustics and depth cues.
+    palette_codes = (
+        tuple(
+            _color_code(_scale_color(active_color, depth * _LAYER_LIGHTING[index][0]))
+            for index, (_surface, _occluder, depth, _phase) in enumerate(layers)
+        )
+        if not _styles.TRUECOLOR
+        else ()
+    )
     fields = []
     for layer_index, (_surface, _occluder, _depth, material_phase) in enumerate(layers):
         scale, columns, neighbors = _caustic_grid(
@@ -756,6 +753,14 @@ def render_idle_wave(
                 continue
 
             layer_index, surface, occluder, layer_depth, edges, scale = color_layer
+            if palette_codes:
+                color = palette_codes[layer_index]
+                if color != current_color:
+                    parts.append(color)
+                    current_color = color
+                parts.append(chr(0x2800 + mask))
+                continue
+
             # Distant water uses a shorter ramp across its visible depth.
             # Coarser bands keep narrow strips economical to send over a PTY.
             bands = _DEPTH_BANDS if occluder is None else 3
