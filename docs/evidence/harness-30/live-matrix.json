@@ -1,0 +1,4031 @@
+{
+  "date": "2026-09-06",
+  "models": [
+    "openai/gpt-5.6-luna",
+    "anthropic/claude-haiku-4.5"
+  ],
+  "cases": [
+    {
+      "case": "python-repair-off",
+      "passed": true,
+      "started_at": 1788721209.5964596,
+      "finished_at": 1788721224.6536517,
+      "preview_loads": null,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/001-model-1-29c9bd4cd726/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/001-model-1-29c9bd4cd726/project/main.py",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 9286,
+            "completion_tokens": 828,
+            "total_tokens": 10114,
+            "cost": 0.00202673
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721218.7886481,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/metadata/001-model-1-29c9bd4cd726/run-1-df59e0f6.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 1, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10237403900828212,
+              "finished_at": 1788721218.8912084
+            },
+            {
+              "number": 2,
+              "started_at": 1788721224.4913077,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/metadata/001-model-1-29c9bd4cd726/run-2-c55e6718.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.10323598299873993,
+              "finished_at": 1788721224.5947857
+            }
+          ],
+          "timing": {
+            "generation_s": 7.410875318048056,
+            "api_s": 12.794667245005257,
+            "tool_s": 0.21356402098899707,
+            "queued_s": 0.000201097980607301,
+            "repair_s": 5.597355947946198,
+            "runtime_s": 0.20561002200702205,
+            "setup_s": 0.00012193003203719854
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721211.1195822
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721211.3756819
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721214.561857
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721217.1875727
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721217.2909179
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721218.7881858
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721218.7883863
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721218.78865
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721218.8912592
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721220.7347572
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721222.9630961
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721223.067344
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721224.4910054
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721224.4913085
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721224.5947936
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 489,
+                "completion_tokens": 320,
+                "total_tokens": 809,
+                "cost": 0.0004818,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0004818,
+                  "upstream_inference_prompt_cost": 9.78e-05,
+                  "upstream_inference_completions_cost": 0.000384
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 20,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1006,
+                "completion_tokens": 129,
+                "total_tokens": 1135,
+                "cost": 0.000356,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.000356,
+                  "upstream_inference_prompt_cost": 0.0002012,
+                  "upstream_inference_completions_cost": 0.0001548
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 10,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 8443,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1344,
+                "completion_tokens": 54,
+                "total_tokens": 1398,
+                "cost": 0.00040065,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1341,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00040065,
+                  "upstream_inference_prompt_cost": 0.00033585,
+                  "upstream_inference_completions_cost": 6.48e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 11412,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 1892,
+                "completion_tokens": 104,
+                "total_tokens": 1996,
+                "cost": 0.00028922,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1341,
+                  "cache_write_tokens": 548,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00028922,
+                  "upstream_inference_prompt_cost": 0.00016442,
+                  "upstream_inference_completions_cost": 0.0001248
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 8,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 13462,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2047,
+                "completion_tokens": 167,
+                "total_tokens": 2214,
+                "cost": 0.00027753,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1889,
+                  "cache_write_tokens": 155,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00027753,
+                  "upstream_inference_prompt_cost": 7.713e-05,
+                  "upstream_inference_completions_cost": 0.0002004
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 15744,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2508,
+                "completion_tokens": 54,
+                "total_tokens": 2562,
+                "cost": 0.00022153,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 2044,
+                  "cache_write_tokens": 461,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00022153,
+                  "upstream_inference_prompt_cost": 0.00015673,
+                  "upstream_inference_completions_cost": 6.48e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 17669,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/002-model-2-397cf702da6a/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/002-model-2-397cf702da6a/project/main.py",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 14825,
+            "completion_tokens": 1340,
+            "total_tokens": 16165,
+            "cost": 0.021525
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721218.4730847,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/metadata/002-model-2-397cf702da6a/run-1-1e179597.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 1, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10253419895889238,
+              "finished_at": 1788721218.5758042
+            },
+            {
+              "number": 2,
+              "started_at": 1788721223.9041495,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-off/benchmarkResults/harness/multi_file_python/3138948b951e4b2d9a3b11b26f972578/metadata/002-model-2-397cf702da6a/run-2-57103837.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.10200528299901634,
+              "finished_at": 1788721224.006389
+            }
+          ],
+          "timing": {
+            "generation_s": 7.096456348954234,
+            "api_s": 12.210711161023937,
+            "tool_s": 0.21126726001966745,
+            "queued_s": 0.00018687802366912365,
+            "repair_s": 5.32552207208937,
+            "runtime_s": 0.20453948195790872,
+            "setup_s": 0.00011015805648639798
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721211.1205885
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721211.374413
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721215.811177
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721217.1454566
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721217.2488894
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721218.4726572
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721218.4728444
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721218.473086
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721218.5758507
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721221.3295956
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721222.5264559
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721222.630508
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721223.9038699
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721223.9041502
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721224.0064003
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1161,
+                "completion_tokens": 715,
+                "total_tokens": 1876,
+                "cost": 0.004736,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004736,
+                  "upstream_inference_prompt_cost": 0.001161,
+                  "upstream_inference_completions_cost": 0.003575
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 255,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2107,
+                "completion_tokens": 69,
+                "total_tokens": 2176,
+                "cost": 0.002452,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002452,
+                  "upstream_inference_prompt_cost": 0.002107,
+                  "upstream_inference_completions_cost": 0.000345
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9037,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2357,
+                "completion_tokens": 102,
+                "total_tokens": 2459,
+                "cost": 0.002867,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002867,
+                  "upstream_inference_prompt_cost": 0.002357,
+                  "upstream_inference_completions_cost": 0.00051
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9779,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2752,
+                "completion_tokens": 290,
+                "total_tokens": 3042,
+                "cost": 0.004202,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004202,
+                  "upstream_inference_prompt_cost": 0.002752,
+                  "upstream_inference_completions_cost": 0.00145
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 116,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 11792,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3103,
+                "completion_tokens": 61,
+                "total_tokens": 3164,
+                "cost": 0.003408,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003408,
+                  "upstream_inference_prompt_cost": 0.003103,
+                  "upstream_inference_completions_cost": 0.000305
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 14285,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3345,
+                "completion_tokens": 103,
+                "total_tokens": 3448,
+                "cost": 0.00386,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00386,
+                  "upstream_inference_prompt_cost": 0.003345,
+                  "upstream_inference_completions_cost": 0.000515
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 14977,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "case": "python-repair-incremental",
+      "passed": true,
+      "started_at": 1788721224.6539977,
+      "finished_at": 1788721241.1401014,
+      "preview_loads": null,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/001-model-1-0e2ba81010a2/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/001-model-1-0e2ba81010a2/project/main.py",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 8312,
+            "completion_tokens": 666,
+            "total_tokens": 8978,
+            "cost": 0.00171179
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721231.6166975,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/metadata/001-model-1-0e2ba81010a2/run-1-16807fd3.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 1, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10224257898516953,
+              "finished_at": 1788721231.7191105
+            },
+            {
+              "number": 2,
+              "started_at": 1788721237.9144087,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/metadata/001-model-1-0e2ba81010a2/run-2-1a3effc1.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.1024663329590112,
+              "finished_at": 1788721238.0170984
+            }
+          ],
+          "timing": {
+            "generation_s": 6.0416737259947695,
+            "api_s": 12.023511576000601,
+            "tool_s": 0.21081516798585653,
+            "queued_s": 0.0001902109943330288,
+            "repair_s": 6.192653017991688,
+            "runtime_s": 0.20470891194418073,
+            "setup_s": 0.0001255759852938354
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721225.248099
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721225.5728898
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721228.710855
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721230.0679302
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721230.1716619
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721231.6162572
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721231.6164467
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721231.6166992
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721231.7191882
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721235.116956
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721236.3645668
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721236.468705
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721237.914123
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721237.9144094
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721238.0171094
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 489,
+                "completion_tokens": 302,
+                "total_tokens": 791,
+                "cost": 0.0004602,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0004602,
+                  "upstream_inference_prompt_cost": 9.78e-05,
+                  "upstream_inference_completions_cost": 0.0003624
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 24,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 948,
+                "completion_tokens": 51,
+                "total_tokens": 999,
+                "cost": 0.0002508,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0002508,
+                  "upstream_inference_prompt_cost": 0.0001896,
+                  "upstream_inference_completions_cost": 6.12e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 7154,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1153,
+                "completion_tokens": 54,
+                "total_tokens": 1207,
+                "cost": 0.0003529,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1150,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0003529,
+                  "upstream_inference_prompt_cost": 0.0002881,
+                  "upstream_inference_completions_cost": 6.48e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 7965,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 1701,
+                "completion_tokens": 154,
+                "total_tokens": 1855,
+                "cost": 0.0003454,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1150,
+                  "cache_write_tokens": 548,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0003454,
+                  "upstream_inference_prompt_cost": 0.0001606,
+                  "upstream_inference_completions_cost": 0.0001848
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 71,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 10023,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 1907,
+                "completion_tokens": 51,
+                "total_tokens": 1958,
+                "cost": 0.00014726,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1698,
+                  "cache_write_tokens": 206,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00014726,
+                  "upstream_inference_prompt_cost": 8.606e-05,
+                  "upstream_inference_completions_cost": 6.12e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 12605,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2114,
+                "completion_tokens": 54,
+                "total_tokens": 2168,
+                "cost": 0.00015523,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1904,
+                  "cache_write_tokens": 207,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00015523,
+                  "upstream_inference_prompt_cost": 9.043e-05,
+                  "upstream_inference_completions_cost": 6.48e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 13416,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/002-model-2-777e4b95adbf/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/002-model-2-777e4b95adbf/project/main.py",
+          "usage": {
+            "api_turns": 8,
+            "usage_complete": true,
+            "prompt_tokens": 18499,
+            "completion_tokens": 1476,
+            "total_tokens": 19975,
+            "cost": 0.025879
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721235.0706508,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/metadata/002-model-2-777e4b95adbf/run-1-74f4489d.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 5, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10386437905253842,
+              "finished_at": 1788721235.1747184
+            },
+            {
+              "number": 2,
+              "started_at": 1788721240.964903,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-incremental/benchmarkResults/harness/multi_file_python/0201cccb34f8405f8b463237caee2a28/metadata/002-model-2-777e4b95adbf/run-2-f5db6167.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.10304415604332462,
+              "finished_at": 1788721241.0681942
+            }
+          ],
+          "timing": {
+            "generation_s": 9.49347429611953,
+            "api_s": 15.066721215087455,
+            "tool_s": 0.21391137002501637,
+            "queued_s": 0.00023422297090291977,
+            "repair_s": 5.787158288992941,
+            "runtime_s": 0.20690853509586304,
+            "setup_s": 0.00011604407336562872
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721225.2494204
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721225.5739653
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721228.2155478
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721229.6744695
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721232.169026
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721233.6002264
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721233.703982
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721235.0701478
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721235.0703816
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721235.070653
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721235.174784
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721238.3210812
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721239.5166595
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721239.6207392
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721240.9645896
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721240.9649038
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721241.0682108
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1161,
+                "completion_tokens": 322,
+                "total_tokens": 1483,
+                "cost": 0.002771,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002771,
+                  "upstream_inference_prompt_cost": 0.001161,
+                  "upstream_inference_completions_cost": 0.00161
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 188,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1545,
+                "completion_tokens": 164,
+                "total_tokens": 1709,
+                "cost": 0.002365,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002365,
+                  "upstream_inference_prompt_cost": 0.001545,
+                  "upstream_inference_completions_cost": 0.00082
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 7077,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1771,
+                "completion_tokens": 260,
+                "total_tokens": 2031,
+                "cost": 0.003071,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003071,
+                  "upstream_inference_prompt_cost": 0.001771,
+                  "upstream_inference_completions_cost": 0.0013
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 7850,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2091,
+                "completion_tokens": 66,
+                "total_tokens": 2157,
+                "cost": 0.002421,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002421,
+                  "upstream_inference_prompt_cost": 0.002091,
+                  "upstream_inference_completions_cost": 0.00033
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 8914,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2339,
+                "completion_tokens": 107,
+                "total_tokens": 2446,
+                "cost": 0.002874,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002874,
+                  "upstream_inference_prompt_cost": 0.002339,
+                  "upstream_inference_completions_cost": 0.000535
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9648,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2814,
+                "completion_tokens": 395,
+                "total_tokens": 3209,
+                "cost": 0.004789,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004789,
+                  "upstream_inference_prompt_cost": 0.002814,
+                  "upstream_inference_completions_cost": 0.001975
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 184,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 11690,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3270,
+                "completion_tokens": 60,
+                "total_tokens": 3330,
+                "cost": 0.00357,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00357,
+                  "upstream_inference_prompt_cost": 0.00327,
+                  "upstream_inference_completions_cost": 0.0003
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 14981,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3508,
+                "completion_tokens": 102,
+                "total_tokens": 3610,
+                "cost": 0.004018,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004018,
+                  "upstream_inference_prompt_cost": 0.003508,
+                  "upstream_inference_completions_cost": 0.00051
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 15678,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "case": "python-repair-after_all",
+      "passed": true,
+      "started_at": 1788721241.1406693,
+      "finished_at": 1788721254.3613896,
+      "preview_loads": null,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/001-model-1-e38e10c0c06d/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/001-model-1-e38e10c0c06d/project/main.py",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 7990,
+            "completion_tokens": 593,
+            "total_tokens": 8583,
+            "cost": 0.0015877999999999999
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721248.7347,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/metadata/001-model-1-e38e10c0c06d/run-1-9bb5a5b8.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 1, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10439944098470733,
+              "finished_at": 1788721248.8392878
+            },
+            {
+              "number": 2,
+              "started_at": 1788721253.7863984,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/metadata/001-model-1-e38e10c0c06d/run-2-59c7ae51.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.10295503999805078,
+              "finished_at": 1788721253.8895926
+            }
+          ],
+          "timing": {
+            "generation_s": 5.655715699016582,
+            "api_s": 10.389269927109126,
+            "tool_s": 0.21079568791901693,
+            "queued_s": 1.1153389789978974,
+            "repair_s": 4.944349916011561,
+            "runtime_s": 0.2073544809827581,
+            "setup_s": 0.00012953404802829027
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721241.6465943
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721241.9617052
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721244.8899376
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721246.1242049
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721246.2271829
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721247.619032
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721248.7343707
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721248.734702
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721248.839361
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721250.6823175
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721252.374948
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721252.4781353
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721253.7861004
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721253.7863991
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721253.8896
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 489,
+                "completion_tokens": 265,
+                "total_tokens": 754,
+                "cost": 0.0004158,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0004158,
+                  "upstream_inference_prompt_cost": 9.78e-05,
+                  "upstream_inference_completions_cost": 0.000318
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 21,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 903,
+                "completion_tokens": 51,
+                "total_tokens": 954,
+                "cost": 0.0002418,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0002418,
+                  "upstream_inference_prompt_cost": 0.0001806,
+                  "upstream_inference_completions_cost": 6.12e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 8058,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1104,
+                "completion_tokens": 65,
+                "total_tokens": 1169,
+                "cost": 0.00035385,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1101,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00035385,
+                  "upstream_inference_prompt_cost": 0.00027585,
+                  "upstream_inference_completions_cost": 7.8e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 8867,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 1658,
+                "completion_tokens": 107,
+                "total_tokens": 1765,
+                "cost": 0.00028952,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1101,
+                  "cache_write_tokens": 554,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00028952,
+                  "upstream_inference_prompt_cost": 0.00016112,
+                  "upstream_inference_completions_cost": 0.0001284
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 11,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 12571,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 1817,
+                "completion_tokens": 51,
+                "total_tokens": 1868,
+                "cost": 0.00013465,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1655,
+                  "cache_write_tokens": 159,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00013465,
+                  "upstream_inference_prompt_cost": 7.345e-05,
+                  "upstream_inference_completions_cost": 6.12e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 14873,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2019,
+                "completion_tokens": 54,
+                "total_tokens": 2073,
+                "cost": 0.00015218,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1814,
+                  "cache_write_tokens": 202,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00015218,
+                  "upstream_inference_prompt_cost": 8.738e-05,
+                  "upstream_inference_completions_cost": 6.48e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 15682,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/002-model-2-cfe9f97634bf/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/002-model-2-cfe9f97634bf/project/main.py",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 14641,
+            "completion_tokens": 1262,
+            "total_tokens": 15903,
+            "cost": 0.020951
+          },
+          "generation": "submitted",
+          "repair": "submitted",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721248.7366881,
+              "outcome": "failed",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/metadata/002-model-2-cfe9f97634bf/run-1-f49705cc.log",
+              "exit_code": 1,
+              "rule": "exit code 0",
+              "diagnostics": "Traceback (most recent call last):\n  File \"/trusted/trusted.py\", line 154, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"/trusted/trusted.py\", line 133, in main\n    python_entry(args[0], args[1:])\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\n  File \"/trusted/trusted.py\", line 84, in python_entry\n    runpy.run_path(entry, run_name=\"__main__\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/workspace/main.py\", line 1, in <module>\n    raise RuntimeError('intentional acceptance failure')\nRuntimeError: intentional acceptance failure\n",
+              "time_s": 0.10367104201577604,
+              "finished_at": 1788721248.8405519
+            },
+            {
+              "number": 2,
+              "started_at": 1788721254.2225327,
+              "outcome": "success",
+              "launch": {
+                "runtime": "python",
+                "entry": "main.py",
+                "args": [],
+                "preview": "/"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/python-repair-after_all/benchmarkResults/harness/multi_file_python/0cf5f78756264063b6505129fe98590e/metadata/002-model-2-cfe9f97634bf/run-2-f4f53292.log",
+              "exit_code": 0,
+              "rule": "exit code 0",
+              "diagnostics": "14\n",
+              "time_s": 0.10222695296397433,
+              "finished_at": 1788721254.3249896
+            }
+          ],
+          "timing": {
+            "generation_s": 6.771846569958143,
+            "api_s": 11.937672680942342,
+            "tool_s": 0.2137176159885712,
+            "queued_s": 0.0022701459820382297,
+            "repair_s": 5.37954372697277,
+            "runtime_s": 0.20589799497975037,
+            "setup_s": 8.364696986973286e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721241.6476636
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721241.9604762
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721246.1551282
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721247.2826252
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721247.3885376
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721248.734142
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721248.7364106
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721248.7366893
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721248.8405719
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721251.8199224
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721252.8960793
+            },
+            {
+              "phase": "repairing",
+              "timestamp": 1788721253.000776
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721254.2222538
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721254.2225337
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721254.3249958
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1161,
+                "completion_tokens": 656,
+                "total_tokens": 1817,
+                "cost": 0.004441,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004441,
+                  "upstream_inference_prompt_cost": 0.001161,
+                  "upstream_inference_completions_cost": 0.00328
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 206,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3561,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2054,
+                "completion_tokens": 59,
+                "total_tokens": 2113,
+                "cost": 0.002349,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002349,
+                  "upstream_inference_prompt_cost": 0.002054,
+                  "upstream_inference_completions_cost": 0.000295
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 8613,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2291,
+                "completion_tokens": 100,
+                "total_tokens": 2391,
+                "cost": 0.002791,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002791,
+                  "upstream_inference_prompt_cost": 0.002291,
+                  "upstream_inference_completions_cost": 0.0005
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9303,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 2731,
+                "completion_tokens": 291,
+                "total_tokens": 3022,
+                "cost": 0.004186,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004186,
+                  "upstream_inference_prompt_cost": 0.002731,
+                  "upstream_inference_completions_cost": 0.001455
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 120,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 11316,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3083,
+                "completion_tokens": 60,
+                "total_tokens": 3143,
+                "cost": 0.003383,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003383,
+                  "upstream_inference_prompt_cost": 0.003083,
+                  "upstream_inference_completions_cost": 0.0003
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 13864,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "repairing",
+              "usage": {
+                "prompt_tokens": 3321,
+                "completion_tokens": 96,
+                "total_tokens": 3417,
+                "cost": 0.003801,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003801,
+                  "upstream_inference_prompt_cost": 0.003321,
+                  "upstream_inference_completions_cost": 0.00048
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 14559,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "case": "web-off",
+      "passed": true,
+      "started_at": 1788721254.362014,
+      "finished_at": 1788721272.5466628,
+      "preview_loads": null,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/001-model-1-5cd1abde6770/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/001-model-1-5cd1abde6770/project/index.html",
+          "usage": {
+            "api_turns": 5,
+            "usage_complete": true,
+            "prompt_tokens": 5663,
+            "completion_tokens": 1309,
+            "total_tokens": 6972,
+            "cost": 0.00246955
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721272.2752738,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/metadata/001-model-1-5cd1abde6770/run-1-a2eb73b1.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10350353899411857,
+              "finished_at": 1788721272.3790057
+            }
+          ],
+          "timing": {
+            "generation_s": 17.26105247309897,
+            "api_s": 17.1544434610405,
+            "tool_s": 0.1066090120584704,
+            "queued_s": 0.00024484802270308137,
+            "repair_s": 0.0,
+            "runtime_s": 0.10350353899411857,
+            "setup_s": 7.093901513144374e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721254.7531307
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721255.0109124
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721257.3616848
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721259.3063552
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721268.2129264
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721270.4317465
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721270.5352721
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721272.2747307
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721272.2749753
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721272.2752755
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721272.4790547
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 449,
+                "completion_tokens": 67,
+                "total_tokens": 516,
+                "cost": 0.0001702,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0001702,
+                  "upstream_inference_prompt_cost": 8.98e-05,
+                  "upstream_inference_completions_cost": 8.04e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 14,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 565,
+                "completion_tokens": 64,
+                "total_tokens": 629,
+                "cost": 0.0001898,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0001898,
+                  "upstream_inference_prompt_cost": 0.000113,
+                  "upstream_inference_completions_cost": 7.68e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 6585,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 672,
+                "completion_tokens": 1058,
+                "total_tokens": 1730,
+                "cost": 0.001404,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.001404,
+                  "upstream_inference_prompt_cost": 0.0001344,
+                  "upstream_inference_completions_cost": 0.0012696
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 8739,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1883,
+                "completion_tokens": 64,
+                "total_tokens": 1947,
+                "cost": 0.0005474,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1880,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0005474,
+                  "upstream_inference_prompt_cost": 0.0004706,
+                  "upstream_inference_completions_cost": 7.68e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 14518,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2094,
+                "completion_tokens": 56,
+                "total_tokens": 2150,
+                "cost": 0.00015815,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1880,
+                  "cache_write_tokens": 211,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00015815,
+                  "upstream_inference_prompt_cost": 9.095e-05,
+                  "upstream_inference_completions_cost": 6.72e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 17860,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/002-model-2-d78473ba5f59/project",
+          "entry_point": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/002-model-2-d78473ba5f59/project/index.html",
+          "usage": {
+            "api_turns": 5,
+            "usage_complete": true,
+            "prompt_tokens": 10287,
+            "completion_tokens": 1378,
+            "total_tokens": 11665,
+            "cost": 0.017176999999999998
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721265.2506564,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-final/web-off/benchmarkResults/harness/static_web_project/96538c1b00ef410ab45ecb5abcfef217/metadata/002-model-2-d78473ba5f59/run-1-65dbb3de.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10314472997561097,
+              "finished_at": 1788721265.3539953
+            }
+          ],
+          "timing": {
+            "generation_s": 10.237748490064405,
+            "api_s": 10.13093134900555,
+            "tool_s": 0.10681714105885476,
+            "queued_s": 0.00019838899606838822,
+            "repair_s": 0.0,
+            "runtime_s": 0.10314472997561097,
+            "setup_s": 7.500103674829006e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721254.754062
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721255.0098186
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721257.628602
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721260.813378
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721262.6348057
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721263.7535353
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721263.8577049
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721265.2502
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721265.2503982
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721265.250658
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721265.4541545
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1116,
+                "completion_tokens": 430,
+                "total_tokens": 1546,
+                "cost": 0.003266,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003266,
+                  "upstream_inference_prompt_cost": 0.001116,
+                  "upstream_inference_completions_cost": 0.00215
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 171,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1608,
+                "completion_tokens": 628,
+                "total_tokens": 2236,
+                "cost": 0.004748,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004748,
+                  "upstream_inference_prompt_cost": 0.001608,
+                  "upstream_inference_completions_cost": 0.00314
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 7079,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2298,
+                "completion_tokens": 154,
+                "total_tokens": 2452,
+                "cost": 0.003068,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003068,
+                  "upstream_inference_prompt_cost": 0.002298,
+                  "upstream_inference_completions_cost": 0.00077
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 8948,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2514,
+                "completion_tokens": 59,
+                "total_tokens": 2573,
+                "cost": 0.002809,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002809,
+                  "upstream_inference_prompt_cost": 0.002514,
+                  "upstream_inference_completions_cost": 0.000295
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9675,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2751,
+                "completion_tokens": 107,
+                "total_tokens": 2858,
+                "cost": 0.003286,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003286,
+                  "upstream_inference_prompt_cost": 0.002751,
+                  "upstream_inference_completions_cost": 0.000535
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 10350,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "case": "web-incremental",
+      "passed": true,
+      "started_at": 1788721454.379863,
+      "finished_at": 1788721470.2303529,
+      "preview_loads": 2,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/001-model-1-8f2575ee3fdf/project",
+          "entry_point": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/001-model-1-8f2575ee3fdf/project/index.html",
+          "usage": {
+            "api_turns": 3,
+            "usage_complete": true,
+            "prompt_tokens": 3692,
+            "completion_tokens": 992,
+            "total_tokens": 4684,
+            "cost": 0.00174243
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721465.6344182,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/metadata/001-model-1-8f2575ee3fdf/run-1-7252dd97.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10507903597317636,
+              "finished_at": 1788721465.7397037,
+              "preview_url": "http://127.0.0.1:34337/index.html"
+            }
+          ],
+          "timing": {
+            "generation_s": 10.578285898955073,
+            "api_s": 10.471483968023676,
+            "tool_s": 0.10680193093139678,
+            "queued_s": 0.0002468790044076741,
+            "repair_s": 0.0,
+            "runtime_s": 0.10507903597317636,
+            "setup_s": 9.531504474580288e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721454.7617047
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721455.0538425
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721462.5303888
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721463.9708283
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721464.0748012
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721465.6338012
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721465.6340473
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721465.6344206
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721465.805108
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 449,
+                "completion_tokens": 867,
+                "total_tokens": 1316,
+                "cost": 0.0011302,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0011302,
+                  "upstream_inference_prompt_cost": 8.98e-05,
+                  "upstream_inference_completions_cost": 0.0010404
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 14,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1517,
+                "completion_tokens": 60,
+                "total_tokens": 1577,
+                "cost": 0.0004511,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1514,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0004511,
+                  "upstream_inference_prompt_cost": 0.0003791,
+                  "upstream_inference_completions_cost": 7.2e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 7,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 9942,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1726,
+                "completion_tokens": 65,
+                "total_tokens": 1791,
+                "cost": 0.00016113,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1514,
+                  "cache_write_tokens": 209,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00016113,
+                  "upstream_inference_prompt_cost": 8.313e-05,
+                  "upstream_inference_completions_cost": 7.8e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 12378,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/002-model-2-e14caf06e163/project",
+          "entry_point": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/002-model-2-e14caf06e163/project/index.html",
+          "usage": {
+            "api_turns": 6,
+            "usage_complete": true,
+            "prompt_tokens": 13330,
+            "completion_tokens": 1501,
+            "total_tokens": 14831,
+            "cost": 0.020835
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721467.9474468,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-previews/web-incremental/benchmarkResults/harness/static_web_project/cde4d0944872417fa05abc680f47fb84/metadata/002-model-2-e14caf06e163/run-1-b592c3ee.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10711230203742161,
+              "finished_at": 1788721468.0547676,
+              "preview_url": "http://127.0.0.1:40619/index.html"
+            }
+          ],
+          "timing": {
+            "generation_s": 12.890768720011692,
+            "api_s": 12.782919167075306,
+            "tool_s": 0.10784955293638632,
+            "queued_s": 0.00022312899818643928,
+            "repair_s": 0.0,
+            "runtime_s": 0.10711230203742161,
+            "setup_s": 8.04699957370758e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721454.7629507
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721455.0525975
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721457.9676983
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721462.4923556
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721464.1017363
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721465.3115656
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721466.3817213
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721466.485087
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721467.9469435
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721467.9471717
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721467.9474483
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721468.1058536
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1116,
+                "completion_tokens": 443,
+                "total_tokens": 1559,
+                "cost": 0.003331,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003331,
+                  "upstream_inference_prompt_cost": 0.001116,
+                  "upstream_inference_completions_cost": 0.002215
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 176,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1620,
+                "completion_tokens": 651,
+                "total_tokens": 2271,
+                "cost": 0.004875,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004875,
+                  "upstream_inference_prompt_cost": 0.00162,
+                  "upstream_inference_completions_cost": 0.003255
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 7176,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2333,
+                "completion_tokens": 152,
+                "total_tokens": 2485,
+                "cost": 0.003093,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003093,
+                  "upstream_inference_prompt_cost": 0.002333,
+                  "upstream_inference_completions_cost": 0.00076
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9114,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2546,
+                "completion_tokens": 78,
+                "total_tokens": 2624,
+                "cost": 0.002936,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002936,
+                  "upstream_inference_prompt_cost": 0.002546,
+                  "upstream_inference_completions_cost": 0.00039
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9841,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2739,
+                "completion_tokens": 61,
+                "total_tokens": 2800,
+                "cost": 0.003044,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003044,
+                  "upstream_inference_prompt_cost": 0.002739,
+                  "upstream_inference_completions_cost": 0.000305
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 10450,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2976,
+                "completion_tokens": 116,
+                "total_tokens": 3092,
+                "cost": 0.003556,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003556,
+                  "upstream_inference_prompt_cost": 0.002976,
+                  "upstream_inference_completions_cost": 0.00058
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 11145,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "case": "web-after_all",
+      "passed": true,
+      "started_at": 1788721549.6258245,
+      "finished_at": 1788721563.1820288,
+      "preview_loads": 2,
+      "models": [
+        {
+          "name": "model-1",
+          "model_id": "openai/gpt-5.6-luna",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/001-model-1-b474a2641c22/project",
+          "entry_point": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/001-model-1-b474a2641c22/project/index.html",
+          "usage": {
+            "api_turns": 3,
+            "usage_complete": true,
+            "prompt_tokens": 4009,
+            "completion_tokens": 1081,
+            "total_tokens": 5090,
+            "cost": 0.00192457
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721560.8779006,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/metadata/001-model-1-b474a2641c22/run-1-36d74630.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10589925898239017,
+              "finished_at": 1788721560.984011,
+              "preview_url": "http://127.0.0.1:35333/index.html"
+            }
+          ],
+          "timing": {
+            "generation_s": 10.35633959498955,
+            "api_s": 10.249132705968805,
+            "tool_s": 0.10720688902074471,
+            "queued_s": 0.2589305699802935,
+            "repair_s": 0.0,
+            "runtime_s": 0.10589925898239017,
+            "setup_s": 9.203300578519702e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721550.0049224
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721550.2603302
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721556.8020377
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721558.5908694
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721558.6955266
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721560.618602
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721560.8775322
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721560.8779023
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721561.0505345
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 449,
+                "completion_tokens": 888,
+                "total_tokens": 1337,
+                "cost": 0.0011554,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.0011554,
+                  "upstream_inference_prompt_cost": 8.98e-05,
+                  "upstream_inference_completions_cost": 0.0010656
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 14,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1534,
+                "completion_tokens": 128,
+                "total_tokens": 1662,
+                "cost": 0.00053695,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 1531,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00053695,
+                  "upstream_inference_prompt_cost": 0.00038335,
+                  "upstream_inference_completions_cost": 0.0001536
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 9984,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2026,
+                "completion_tokens": 65,
+                "total_tokens": 2091,
+                "cost": 0.00023222,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 1531,
+                  "cache_write_tokens": 492,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00023222,
+                  "upstream_inference_prompt_cost": 0.00015422,
+                  "upstream_inference_completions_cost": 7.8e-05
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 9,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "openai/gpt-5.6-luna",
+              "provider": "OpenAI",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 1050000,
+                "context_bound": 13539,
+                "reasoning": {
+                  "reasoning": {
+                    "effort": "low"
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        },
+        {
+          "name": "model-2",
+          "model_id": "anthropic/claude-haiku-4.5",
+          "status": "success",
+          "workspace": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/002-model-2-1c02fb73cb8a/project",
+          "entry_point": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/002-model-2-1c02fb73cb8a/project/index.html",
+          "usage": {
+            "api_turns": 5,
+            "usage_complete": true,
+            "prompt_tokens": 10428,
+            "completion_tokens": 1417,
+            "total_tokens": 11845,
+            "cost": 0.017513
+          },
+          "generation": "submitted",
+          "repair": "not_needed",
+          "attempts": [
+            {
+              "number": 1,
+              "started_at": 1788721560.879755,
+              "outcome": "success",
+              "launch": {
+                "runtime": "static",
+                "entry": "index.html",
+                "args": [],
+                "preview": "/index.html"
+              },
+              "log": "/tmp/wavebench-issue30-live-review-final/web-after_all/benchmarkResults/harness/static_web_project/ef2d740379e04a2790084ad17c4fc559/metadata/002-model-2-1c02fb73cb8a/run-1-c554ed5a.log",
+              "exit_code": null,
+              "rule": "HTTP readiness (2xx/3xx) before startup deadline",
+              "diagnostics": "\"GET /index.html HTTP/1.1\" 200 -\n",
+              "time_s": 0.10419485298916698,
+              "finished_at": 1788721560.984162,
+              "preview_url": "http://127.0.0.1:45235/index.html"
+            }
+          ],
+          "timing": {
+            "generation_s": 10.613135960069485,
+            "api_s": 10.50359428912634,
+            "tool_s": 0.10954167094314471,
+            "queued_s": 0.002157017996069044,
+            "repair_s": 0.0,
+            "runtime_s": 0.10419485298916698,
+            "setup_s": 5.1979965064674616e-05
+          },
+          "events": [
+            {
+              "phase": "preflight",
+              "timestamp": 1788721550.006314
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721550.2613196
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721553.3661022
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721556.5528817
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721558.1553779
+            },
+            {
+              "phase": "linting",
+              "timestamp": 1788721559.2801807
+            },
+            {
+              "phase": "building",
+              "timestamp": 1788721559.3862283
+            },
+            {
+              "phase": "queued",
+              "timestamp": 1788721560.8772862
+            },
+            {
+              "phase": "setting up",
+              "timestamp": 1788721560.879442
+            },
+            {
+              "phase": "running",
+              "timestamp": 1788721560.8797562
+            },
+            {
+              "phase": "finished",
+              "timestamp": 1788721561.0991216
+            }
+          ],
+          "turns": [
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1116,
+                "completion_tokens": 457,
+                "total_tokens": 1573,
+                "cost": 0.003401,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003401,
+                  "upstream_inference_prompt_cost": 0.001116,
+                  "upstream_inference_completions_cost": 0.002285
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 190,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 3382,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 1632,
+                "completion_tokens": 643,
+                "total_tokens": 2275,
+                "cost": 0.004847,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.004847,
+                  "upstream_inference_prompt_cost": 0.001632,
+                  "upstream_inference_completions_cost": 0.003215
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 7442,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2339,
+                "completion_tokens": 152,
+                "total_tokens": 2491,
+                "cost": 0.003099,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.003099,
+                  "upstream_inference_prompt_cost": 0.002339,
+                  "upstream_inference_completions_cost": 0.00076
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 9370,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2551,
+                "completion_tokens": 59,
+                "total_tokens": 2610,
+                "cost": 0.002846,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.002846,
+                  "upstream_inference_prompt_cost": 0.002551,
+                  "upstream_inference_completions_cost": 0.000295
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 10099,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "phase": "building",
+              "usage": {
+                "prompt_tokens": 2790,
+                "completion_tokens": 106,
+                "total_tokens": 2896,
+                "cost": 0.00332,
+                "is_byok": false,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "audio_tokens": 0,
+                  "video_tokens": 0
+                },
+                "cost_details": {
+                  "upstream_inference_cost": 0.00332,
+                  "upstream_inference_prompt_cost": 0.00279,
+                  "upstream_inference_completions_cost": 0.00053
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "image_tokens": 0,
+                  "audio_tokens": 0
+                }
+              },
+              "model": "anthropic/claude-haiku-4.5",
+              "provider": "Amazon Bedrock",
+              "finish_reason": "tool_calls",
+              "adjustments": {
+                "requested_max_tokens": 8192,
+                "max_tokens": 8192,
+                "context_limit": 200000,
+                "context_bound": 10787,
+                "reasoning": {
+                  "reasoning": {
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          ],
+          "api_retries": [],
+          "lint_exit_codes": [
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

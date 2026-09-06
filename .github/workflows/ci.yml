@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap nodejs
       # Keep this ruff version in lockstep with the rev pinned in
       # .pre-commit-config.yaml, so CI and the client-side hook agree.
       - run: pip install 'ruff==0.15.11'
@@ -21,3 +22,5 @@ jobs:
       - run: ruff format --check .
       # "not slow" keeps the live OpenRouter test (real API credits) out of CI.
       - run: python -m pytest -m "not slow"
+        env:
+          WAVEBENCH_REQUIRE_SANDBOX_TESTS: "1"

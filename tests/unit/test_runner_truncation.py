@@ -17,7 +17,7 @@ import asyncio
 from typing import Any
 
 from wavebench.core import runner as runner_mod
-from wavebench.modes.code import CodeMode
+from wavebench.modes.text import TextMode
 
 
 class _NoopTracker:
@@ -50,7 +50,7 @@ async def _run(
 
     results: dict[str, Any] = {}
     await runner_mod.run_model(
-        CodeMode(),
+        TextMode(),
         session=object(),  # type: ignore[arg-type]
         api_key="test-key",
         model_name="someModel",
@@ -111,14 +111,10 @@ async def test_mid_stream_error_records_failure_with_reason(tmp_path, monkeypatc
     assert result["file"] is None
 
 
-async def test_refusal_prose_records_parse_failure_with_reason(tmp_path, monkeypatch) -> None:
-    # A refusal used to fall through extraction stage 4 and save as code —
-    # scoring the model a pass for declining the task.
-    result = await _run(
-        tmp_path, monkeypatch, {"total_tokens": 12}, content="I cannot assist with that request."
-    )
+async def test_blank_text_records_parse_failure_with_reason(tmp_path, monkeypatch) -> None:
+    result = await _run(tmp_path, monkeypatch, {"total_tokens": 12}, content="   \n  ")
     assert result["status"] == "failed"
-    assert "code extraction failed" in result["error"]
+    assert "empty response" in result["error"]
     assert result["file"] is None
 
 

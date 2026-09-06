@@ -51,9 +51,9 @@ def test_constants_preserved() -> None:
     from wavebench.modes import CODE_MODE, TEXT_MODE
     from wavebench.modes.code import CodeMode
 
-    assert "expert programmer" in CODE_MODE.frame_prompt("")
-    assert "Do not include any external modules" in CODE_MODE.frame_prompt("")
-    assert "third-party packages" in CodeMode(allow_deps=True).frame_prompt("")
+    assert "workspace" in CODE_MODE.frame_prompt("")
+    assert "Dependencies are disabled" in CODE_MODE.frame_prompt("")
+    assert "PyPI wheels" in CodeMode(allow_deps=True).frame_prompt("")
     assert "Markdown" in TEXT_MODE.frame_prompt("")
 
 

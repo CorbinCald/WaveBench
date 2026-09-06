@@ -15,6 +15,10 @@ def compute_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None
 
     Returns None when pricing data is unavailable or the cost is zero.
     """
+    if usage.get("cost") is not None:
+        return float(usage["cost"])
+    if usage.get("usage_complete") is False:
+        return None
     if not pricing or not usage:
         return None
     try:
@@ -29,5 +33,5 @@ def compute_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None
         return cost if cost > 0 else None
     prompt_tokens = usage.get("prompt_tokens") or 0
     completion_tokens = usage.get("completion_tokens") or 0
-    cost = prompt_tokens * pp + completion_tokens * cp + request_cost
-    return cost if cost > 0 else None
+    cost = prompt_tokens * pp + completion_tokens * cp + request_cost * usage.get("api_turns", 1)
+    return cost if cost > 0 or usage.get("api_turns") else None

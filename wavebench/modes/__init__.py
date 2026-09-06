@@ -69,11 +69,8 @@ class Mode(Protocol):
     def frame_prompt(self, user_prompt: str) -> str:
         """Wrap the raw user prompt with mode-specific instructions.
 
-        Returns a single string that the OpenRouter client will send as
-        the ``user`` message content for chat modes or as ``input`` for
-        TTS mode. (The spec envisioned an OpenAI-style messages list; the
-        current chat client accepts only a string prompt, so we match that
-        — upgrading is a separate concern.)
+        Returns a string for single-response modes. Harness uses separate
+        system/user messages and a conversation loop with the same framing.
         """
         ...
 
@@ -91,22 +88,25 @@ def register(mode: Mode) -> None:
 
 
 # ── Built-in modes ───────────────────────────────────────────────────────
-from .code import CODE_MODE  # noqa: E402  (avoid circular import)
+from .code import CODE_MODE, HARNESS_MODE, HarnessMode  # noqa: E402  (avoid circular import)
 from .image import IMAGE_MODE  # noqa: E402
 from .text import TEXT_MODE  # noqa: E402
 from .tts import TTS_MODE  # noqa: E402
 
 register(CODE_MODE)
+MODES["code"] = HARNESS_MODE  # Historical CLI compatibility alias.
 register(TEXT_MODE)
 register(TTS_MODE)
 register(IMAGE_MODE)
 
 __all__ = [
     "CODE_MODE",
+    "HARNESS_MODE",
     "IMAGE_MODE",
     "MODES",
     "TEXT_MODE",
     "TTS_MODE",
+    "HarnessMode",
     "Mode",
     "ParsedOutput",
     "register",

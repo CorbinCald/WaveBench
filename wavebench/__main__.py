@@ -3,7 +3,7 @@
 Parses command-line arguments, loads persistent state (models + config),
 dispatches to either ``core.main_async()`` for a benchmark run or the
 interactive config menu, and prints lifetime analytics on ``--stats``.
-Supports the interactive mode-select screen at startup (Code / Text / TTS / Image / config).
+Supports the interactive mode selector (Harness / Text / TTS / Image / config).
 """
 
 import argparse
@@ -62,10 +62,14 @@ QUERY_HISTORY_FILE = ".benchmark_query_history"
 
 
 def _query_history_path(mode_name: str = "code") -> str:
+    if mode_name == "harness":
+        mode_name = "code"
     return os.path.join(os.getcwd(), f"{QUERY_HISTORY_FILE}.{mode_name}")
 
 
 def _query_history_load_path(mode_name: str = "code") -> str:
+    if mode_name == "harness":
+        mode_name = "code"
     path = _query_history_path(mode_name)
     if mode_name == "code" and not os.path.exists(path):
         legacy_path = os.path.join(os.getcwd(), QUERY_HISTORY_FILE)
@@ -116,7 +120,8 @@ def main() -> None:
         type=str,
         choices=sorted(MODES.keys()),
         default=None,
-        help="Response mode (default: code). Registered modes: " + ", ".join(sorted(MODES.keys())),
+        help="Response mode (default: harness; code is a compatibility alias). Modes: "
+        + ", ".join(sorted(MODES.keys())),
     )
     parser.add_argument(
         "--text",
@@ -172,20 +177,21 @@ def main() -> None:
         "--open",
         "--auto-open",
         dest="auto_open",
-        choices=["incremental", "after_all"],
+        choices=["off", "incremental", "after_all"],
         default=None,
         help=(
-            "Auto-open generated code/text files "
-            "(incremental or after_all; TTS/image use run viewers)"
+            "Harness scheduling/presentation: incremental, after_all, or off (headless validation); TTS/image use run viewers"
         ),
     )
     parser.add_argument(
         "--auto-install",
         action="store_true",
         default=None,
-        help="Auto-install detected dependencies in a venv",
+        help="Install harness requirements.txt PyPI wheels in each model's isolated workspace",
     )
     args = parser.parse_args()
+    if args.mode == "code":
+        args.mode = "harness"
 
     # ── Stats-only mode ────────────────────────────────────────────────────
     if args.stats:
@@ -271,7 +277,7 @@ def main() -> None:
             active = selected_models if selected_models is not None else MODEL_MAPPING
             w = _tw() - 4
             row = (
-                f"{_styles.ACCENT_HI}[1]{S.RST} Code  "
+                f"{_styles.ACCENT_HI}[1]{S.RST} Harness  "
                 f"{_styles.ACCENT}[2]{S.RST} Text  "
                 f"{_styles.ACCENT}[3]{S.RST} TTS  "
                 f"{_styles.ACCENT}[4]{S.RST} Image"
@@ -355,7 +361,7 @@ def main() -> None:
         _refresh_header()
 
         while True:
-            mode_name = args.mode or ("text" if args.text else "code")
+            mode_name = args.mode or ("text" if args.text else "harness")
 
             # ── Mode selection (skip if --mode/--text was passed on CLI) ────
             if not mode_from_cli:
@@ -430,7 +436,7 @@ def main() -> None:
                         mode_done = True
                     elif key == "1":
                         sys.stdout.write("1\n")
-                        mode_name = "code"
+                        mode_name = "harness"
                         mode_done = True
                 sys.stdout.write("\033[4A\r\033[J")
                 sys.stdout.flush()

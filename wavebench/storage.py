@@ -107,7 +107,7 @@ def load_config() -> dict[str, Any]:
         "reasoning_effort": "high",
         "analytics_sort": "runs",
         "theme": "default",
-        "auto_open": "off",
+        "auto_open": "incremental",
         "auto_install": "off",
         "directory_naming": "llm",
         "tts_voice": "alloy",
@@ -229,6 +229,7 @@ def record_run(
         **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
         "models": {
             name: {
+                **info,
                 "status": info["status"],
                 "time_s": round(info["time_s"], 2),
                 "file": info.get("file"),

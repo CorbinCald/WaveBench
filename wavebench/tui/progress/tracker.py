@@ -234,6 +234,18 @@ class ProgressTracker:
             last_chars = self._active[model_name].get("chars", 0)
         self._parsing[model_name] = {"start": time.monotonic(), "chars": last_chars}
 
+    def set_phase(self, model_name: str, phase: str) -> None:
+        if model_name not in self._active:
+            self.register(model_name)
+        self._parsing[model_name] = {
+            "start": time.monotonic(),
+            "chars": self._active[model_name].get("chars", 0),
+            "label": phase,
+        }
+        if phase == "finished":
+            self.unregister(model_name)
+            self.finish_parsing(model_name)
+
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
         self._parsing.pop(model_name, None)
@@ -423,7 +435,11 @@ class ProgressTracker:
         st = info.get("status", "failed")
         t = format_duration(info.get("time_s", 0))
         cost = self._model_cost(name, info)
-        cost_s = f"  {S.HYEL}{format_cost(cost)}{S.RST}" if cost else ""
+        cost_s = (
+            f"  {S.HYEL}{format_cost(cost)}{S.RST}"
+            if cost is not None
+            else (f"  {S.DIM}cost unknown{S.RST}" if info.get("harness") else "")
+        )
         retries = info.get("retries") or []
         retry_s = ""
         if retries:
@@ -449,8 +465,15 @@ class ProgressTracker:
             elif tokens:
                 usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
             else:
-                usage_part = ""
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
+                usage_part = f"  {S.DIM}usage unknown{S.RST}" if info.get("harness") else ""
+            outcome = (
+                f"runtime passed ({len(info['harness']['attempts'])} run(s))"
+                if info.get("harness")
+                else "saved"
+            )
+            detail = (
+                f"{outcome} {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
+            )
         elif st == "cancelled":
             sym = _skip
             detail = f"{S.DIM}cancelled{S.RST}{retry_s}"
@@ -471,7 +494,9 @@ class ProgressTracker:
             overflow = _vlen(content) + 2 + len(t) - inner_w
             max_fname = max(8, len(fname) - overflow)
             fname = _truncate(fname, max_fname)
-            detail = f"saved {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
+            detail = (
+                f"{outcome} {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
+            )
             content = f"{rank_s} {sym} {_rpad(name, self._pad)}  {detail}"
         gap = max(inner_w - _vlen(content) - len(t), 2)
         return f"{content}{' ' * gap}{S.DIM}{t}{S.RST}"
@@ -584,7 +609,7 @@ class ProgressTracker:
                         row = (
                             f"{boxes}   "
                             f"{_rpad(name, self._pad)}  "
-                            f"{S.DIM}parsing{dots:<4}"
+                            f"{S.DIM}{pinfo.get('label', 'parsing')}{dots:<4}"
                             f"  {mel:>7}{S.RST}"
                         )
                     elif name in self._active:

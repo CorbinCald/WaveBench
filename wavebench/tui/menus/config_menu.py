@@ -271,7 +271,7 @@ def interactive_config_menu(
         {
             "key": "auto_open",
             "label": "Auto-open files",
-            "value": current_config.get("auto_open", "off"),
+            "value": current_config.get("auto_open", "incremental"),
             "type": "cycle",
             "choices": AUTO_OPEN_CHOICES,
         },
@@ -327,8 +327,6 @@ def interactive_config_menu(
             "value": current_config.get("auto_install", "off"),
             "type": "cycle",
             "choices": ["off", "on"],
-            "parent_key": "auto_open",
-            "parent_hidden_when": "off",
         },
     ]
 
@@ -596,7 +594,7 @@ def interactive_config_menu(
                 "reasoning_effort": "high",
                 "analytics_sort": "runs",
                 "theme": "default",
-                "auto_open": "off",
+                "auto_open": "incremental",
                 "auto_install": "off",
                 "directory_naming": "llm",
                 "tts_voice": "alloy",
