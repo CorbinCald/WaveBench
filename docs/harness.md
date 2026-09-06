@@ -150,6 +150,71 @@ Lint uses Python compilation without imports, `node --check`, JSON parsing, and
 HTML parsing. It ignores package scripts, project plugins, and configuration
 hooks. HTML checks are structural parsing, not full HTML/CSS validation.
 
+## Prompt caching and context compaction
+
+Harness keeps instructions, tool schemas, and earlier messages stable, appends
+new content, and sends a per-conversation OpenRouter `session_id` for provider
+affinity. Each model/session has its own key, retained through repair and
+compaction. Cache markers are added to outgoing copies, leaving saved messages,
+reasoning signatures, tool IDs, and tool results intact. HTTP retries reuse the
+same prepared payload. This is **prompt caching**; responses are freshly generated.
+
+| Provider/model | Policy |
+|---|---|
+| OpenAI GPT-5.6 and later | Explicit content breakpoints, stable `prompt_cache_key`, and 30-minute TTL. Keep the original prompt boundary and recent request boundaries, up to four. |
+| Earlier OpenAI models | Automatic caching with a stable `prompt_cache_key`; no unsupported explicit controls. |
+| Anthropic | Explicit `cache_control` breakpoints on the original prompt and recent request boundaries, up to four. Retaining the previous boundary supports batches beyond the 20-block lookback. Start with 5-minute TTL; promote to 1 hour when request spacing reaches 4 minutes. |
+| Google Gemini 2.5 and later | Implicit caching for short prompts. At a locally estimated 4,096-token prefix, add one explicit checkpoint and keep it fixed until its 5-minute TTL expires. Advancing it every turn would repeatedly pay creation/storage costs. |
+| Other models | Stable prefixes, schemas, and session affinity support provider-managed automatic caching without sending unsupported vendor controls. |
+
+Cache eligibility, minimum lengths, routing, eviction, and discounts remain
+provider-dependent. `usage.prompt_tokens_details` records cache reads/writes;
+`usage.cache_read_ratio` is known only when all relevant counts are reported.
+The provider's actual cost includes cache-write and storage charges. Unknown
+cost stays unknown rather than being estimated using an incorrect uncached rate.
+Single-shot text calls use deterministic prompt affinity for repeated prompts;
+they do not explicitly provision a cache for an unknown future conversation.
+
+Before each build/repair request, Harness checks the active context. It compacts
+when the estimated input **exceeds 240,000 tokens**, or earlier to reserve output
+space in a smaller model window. This is context size, not cumulative billed
+tokens. The compactor is fixed to **`openai/gpt-5.6-luna`, High effort**, independent
+of the benchmark's model and reasoning setting; an effort rejection never
+silently downgrades it.
+
+The controller preserves the leading instructions and **first user message**
+exactly, plus the **latest complete assistant message**, including tool calls,
+reasoning/signature fields, all following tool results, and repair feedback.
+Luna summarizes only the intervening history, retaining requirements,
+corrections, file state, failures, and outstanding work. It receives no tools and
+cannot edit the project. Previous summaries are included in subsequent
+compactions. The summary is factual memory; project files remain readable.
+
+The TUI shows `compacting` during the request. Before replacement, the original
+conversation is archived as `conversation-before-compaction-NNN.json` in model
+metadata. `compaction-NNN.json` records the exact request, complete response,
+usage, duration, reason, and before/after sizes. Empty, truncated, oversized,
+wrong-model, or ineffective summaries leave the original context intact and
+end generation with an error. If the required preserved messages cannot fit,
+Harness fails explicitly instead of truncating them. Cache boundaries reset
+after successful replacement; provider affinity remains stable.
+
+Compaction input/output and elapsed time count toward the **same total-token and
+active-phase limits** as generation. It consumes no project execution attempt
+and does not reset turn limits. Results include its cost in overall usage, with
+`harness.model_usage`, `harness.compaction.usage`, and `timing.compaction_s`
+separately identifying overhead. Luna's one-use summary input requests no paid
+cache writes. The default **256,000 total-token budget** can stop a long session
+before the 240,000-context threshold; raise **Settings → Total token budget**
+(and time limits if needed) to allow longer sessions. Compaction never raises
+these limits automatically.
+
+Provider references: [OpenRouter caching and routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching),
+[OpenAI cache controls](https://developers.openai.com/api/docs/guides/prompt-caching),
+[Anthropic cache behavior](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+[Google caching](https://ai.google.dev/gemini-api/docs/caching), and
+[GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
+
 ## Budgets and records
 
 Defaults are configured in `wavebench/harness/config.py`. Override them under
@@ -181,11 +246,15 @@ repair request, including repeated conversation input and generated output.
 | Total source, runtime and dependency storage | 512 MiB, monitored during subprocesses |
 | Project execution attempts | **One initial run, plus one retry only after failure** |
 
-The token budget uses provider usage where available. The next input estimate
-reuses the last provider-reported prompt count for the unchanged conversation
-prefix and conservatively counts UTF-8 bytes only for newly appended messages.
-Until a provider prompt count is available, the whole request uses the byte
-estimate. Context admission uses this same estimate plus a reserve; provider context/output caps and reasoning adjustments
+The token budget uses provider usage where available. Local counting uses
+`tiktoken`'s `o200k_base` as an estimate; it is not an exact tokenizer for every
+vendor. The next input estimate reuses the last measured prompt count for the
+unchanged prefix and counts only appended content locally, calibrated to that
+provider's observed ratio. Ten percent extra is reserved on unmeasured content,
+plus 1,024 tokens for context admission. Compaction retains the calibration but
+resets the measured prefix. Google's separately billed explicit-cache creation
+input is excluded from the context measurement while remaining in total usage
+and budget accounting. Provider context/output caps and reasoning adjustments
 are recorded per turn. Missing usage and cost are persisted as unknown, never
 invented as zero. HTTP retries are bounded separately and never replay completed
 tool effects. Truncated or malformed streamed arguments do not execute.
@@ -207,7 +276,13 @@ one-shot model rows. Failed runs' known costs are also included.
 
 The default suite is offline. Lifecycle tests use scripted conversations and
 real sandboxed Python/Node/static subprocesses; protocol tests use a local HTTP
-SSE server. CI installs Bubblewrap and requires the sandbox tests.
+SSE server. CI installs Bubblewrap and requires the sandbox tests. The first
+tokenizer use downloads its public vocabulary; prepare it once before offline
+testing (CI does this during setup):
+
+```bash
+python -c 'import tiktoken; tiktoken.get_encoding("o200k_base")'
+```
 
 ```bash
 python -m pytest -m 'not slow'
@@ -233,3 +308,13 @@ should also be exercised locally. See [verification evidence](harness-verificati
 Protocol references: [OpenRouter tool calling](https://openrouter.ai/docs/guides/features/tool-calling),
 [Anthropic parallel-call semantics](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use),
 and [Bubblewrap's security model](https://github.com/containers/bubblewrap).
+
+To verify real cache reads on OpenAI, Anthropic, and Google and compact a
+270K-token fixture with Luna High before completing a real Python project:
+
+```bash
+python scripts/verify_context_live.py --live --output /tmp/wavebench-context-check
+```
+
+This uses paid requests; `--cache-only` skips the long-context case. See
+[cache and compaction verification](cache-context-verification.md).

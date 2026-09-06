@@ -1,0 +1,383 @@
+{
+  "google/gemini-2.5-flash": [
+    {
+      "usage": {
+        "prompt_tokens": 29217,
+        "completion_tokens": 3,
+        "total_tokens": 29220,
+        "cost": 0.006045586666666667,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 14609,
+          "cache_write_tokens": 14609,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.006045586666666667,
+          "upstream_inference_prompt_cost": 0.006038086666666667,
+          "upstream_inference_completions_cost": 7.5e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Google",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1048576,
+        "context_bound": 15688,
+        "cache": {
+          "policy": "google",
+          "session_id": "wb-2267c66b5b3e908b44203fa87961cb79cabd9a8696561692",
+          "breakpoints": [
+            1
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 14645,
+        "completion_tokens": 3,
+        "total_tokens": 14648,
+        "cost": 0.00045657,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 14609,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00045657,
+          "upstream_inference_prompt_cost": 0.00044907,
+          "upstream_inference_completions_cost": 7.5e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Google",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1048576,
+        "context_bound": 15855,
+        "cache": {
+          "policy": "google",
+          "session_id": "wb-2267c66b5b3e908b44203fa87961cb79cabd9a8696561692",
+          "breakpoints": [
+            1
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 14682,
+        "completion_tokens": 3,
+        "total_tokens": 14685,
+        "cost": 0.00046767,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 14609,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00046767,
+          "upstream_inference_prompt_cost": 0.00046017,
+          "upstream_inference_completions_cost": 7.5e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Google",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1048576,
+        "context_bound": 16019,
+        "cache": {
+          "policy": "google",
+          "session_id": "wb-2267c66b5b3e908b44203fa87961cb79cabd9a8696561692",
+          "breakpoints": [
+            1
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    }
+  ],
+  "anthropic/claude-haiku-4.5": [
+    {
+      "usage": {
+        "prompt_tokens": 13840,
+        "completion_tokens": 108,
+        "total_tokens": 13948,
+        "cost": 0.0019267,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 13837,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.0019267,
+          "upstream_inference_prompt_cost": 0.0013867,
+          "upstream_inference_completions_cost": 0.00054
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Amazon Bedrock",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 200000,
+        "context_bound": 15688,
+        "cache": {
+          "policy": "anthropic",
+          "session_id": "wb-f943683cf422001a54022baca5d4fc30a79cacdbac86a1d6",
+          "breakpoints": [
+            1
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 14016,
+        "completion_tokens": 52,
+        "total_tokens": 14068,
+        "cost": 0.0018667,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 13837,
+          "cache_write_tokens": 176,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.0018667,
+          "upstream_inference_prompt_cost": 0.0016067,
+          "upstream_inference_completions_cost": 0.00026
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Amazon Bedrock",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 200000,
+        "context_bound": 15930,
+        "cache": {
+          "policy": "anthropic",
+          "session_id": "wb-f943683cf422001a54022baca5d4fc30a79cacdbac86a1d6",
+          "breakpoints": [
+            1,
+            4
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 14137,
+        "completion_tokens": 52,
+        "total_tokens": 14189,
+        "cost": 0.00181555,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 14013,
+          "cache_write_tokens": 121,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00181555,
+          "upstream_inference_prompt_cost": 0.00155555,
+          "upstream_inference_completions_cost": 0.00026
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "Amazon Bedrock",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 200000,
+        "context_bound": 16114,
+        "cache": {
+          "policy": "anthropic",
+          "session_id": "wb-f943683cf422001a54022baca5d4fc30a79cacdbac86a1d6",
+          "breakpoints": [
+            1,
+            4,
+            7
+          ],
+          "ttl": "5m"
+        },
+        "reasoning": {}
+      }
+    }
+  ],
+  "openai/gpt-5.6-luna": [
+    {
+      "usage": {
+        "prompt_tokens": 12410,
+        "completion_tokens": 100,
+        "total_tokens": 12510,
+        "cost": 0.00322235,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 12407,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00322235,
+          "upstream_inference_prompt_cost": 0.00310235,
+          "upstream_inference_completions_cost": 0.00012
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 45,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "OpenAI",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1050000,
+        "context_bound": 15688,
+        "cache": {
+          "policy": "openai_explicit",
+          "session_id": "wb-eeae85add279ae93bc169a5214b81f017461505d6d761a77",
+          "breakpoints": [
+            1
+          ],
+          "ttl": "30m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 12567,
+        "completion_tokens": 63,
+        "total_tokens": 12630,
+        "cost": 0.00036359,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 12407,
+          "cache_write_tokens": 157,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00036359,
+          "upstream_inference_prompt_cost": 0.00028799,
+          "upstream_inference_completions_cost": 7.56e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 8,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "OpenAI",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1050000,
+        "context_bound": 17491,
+        "cache": {
+          "policy": "openai_explicit",
+          "session_id": "wb-eeae85add279ae93bc169a5214b81f017461505d6d761a77",
+          "breakpoints": [
+            1,
+            4
+          ],
+          "ttl": "30m"
+        },
+        "reasoning": {}
+      }
+    },
+    {
+      "usage": {
+        "prompt_tokens": 12687,
+        "completion_tokens": 61,
+        "total_tokens": 12748,
+        "cost": 0.00035508,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 12564,
+          "cache_write_tokens": 120,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00035508,
+          "upstream_inference_prompt_cost": 0.00028188,
+          "upstream_inference_completions_cost": 7.32e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 6,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "provider": "OpenAI",
+      "adjustments": {
+        "requested_max_tokens": 2048,
+        "max_tokens": 2048,
+        "context_limit": 1050000,
+        "context_bound": 18853,
+        "cache": {
+          "policy": "openai_explicit",
+          "session_id": "wb-eeae85add279ae93bc169a5214b81f017461505d6d761a77",
+          "breakpoints": [
+            1,
+            4,
+            7
+          ],
+          "ttl": "30m"
+        },
+        "reasoning": {}
+      }
+    }
+  ]
+}

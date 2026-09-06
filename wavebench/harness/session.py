@@ -11,11 +11,22 @@ import time
 import webbrowser
 from pathlib import Path
 
+from wavebench import api
 from wavebench.api import call_model_conversation as call_conversation
+from wavebench.prompt_cache import CachePolicy
+from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
 from . import HARNESS_VERSION
 from .commands import TOOL_SCHEMA, Dispatcher
 from .config import Limits
+from .context import (
+    COMPACTION_EFFORT,
+    COMPACTION_MODEL,
+    COMPACTION_OUTPUT_TOKENS,
+    COMPACTION_THRESHOLD,
+    compaction_reason,
+    plan_compaction,
+)
 from .runtime import Runtime, SetupError
 from .transport import TurnError, capability
 from .workspace import allocate_project
@@ -102,8 +113,10 @@ class HarnessSession:
         self.descriptor = None
         self.preview = None
         self.budget_tokens = 0
-        self._known_prompt_tokens: int | None = None
-        self._known_prompt_bytes = 0
+        self.prompt_estimate = PromptEstimate()
+        self.cache_policy = CachePolicy(model_id)
+        self.compactions: list[dict] = []
+        self.compaction_seconds = 0.0
         self.api_seconds = 0.0
         self.tool_seconds = 0.0
         self.build_seconds = 0.0
@@ -138,16 +151,30 @@ class HarnessSession:
         if self.tracker and self.tracker.is_running:
             self.tracker.note_retry(self.name, status, attempt, max_attempts, wait_s)
 
-    def usage(self) -> dict:
-        aggregate = {"api_turns": len(self.turns), "usage_complete": bool(self.turns)}
+    def usage(self, turns=None) -> dict:
+        turns = self.turns if turns is None else turns
+        aggregate = {"api_turns": len(turns), "usage_complete": bool(turns)}
         for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost"):
-            values = [turn["usage"].get(key) for turn in self.turns]
+            values = [turn["usage"].get(key) for turn in turns]
             aggregate[key] = (
                 sum(values) if values and all(isinstance(v, (int, float)) for v in values) else None
             )
         aggregate["usage_complete"] = all(
             aggregate[key] is not None
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+        # Cache write/storage charges and mixed-model compaction cannot be priced
+        # accurately using the benchmark model's ordinary input/output rates.
+        aggregate["cost_requires_provider"] = True
+        details = {}
+        for key in ("cached_tokens", "cache_write_tokens"):
+            values = [(turn["usage"].get("prompt_tokens_details") or {}).get(key) for turn in turns]
+            details[key] = sum(values) if values and all(type(v) is int for v in values) else None
+        aggregate["prompt_tokens_details"] = details
+        aggregate["cache_read_ratio"] = (
+            details["cached_tokens"] / aggregate["prompt_tokens"]
+            if details["cached_tokens"] is not None and aggregate["prompt_tokens"]
+            else None
         )
         return aggregate
 
@@ -179,6 +206,15 @@ class HarnessSession:
                 "lint": self.dispatcher.lint_results,
                 "setup": self.runtime.setup_results,
                 "turns": self.turns,
+                "cache_policy": self.cache_policy.family,
+                "compaction": {
+                    "threshold_tokens": COMPACTION_THRESHOLD,
+                    "model": COMPACTION_MODEL,
+                    "reasoning_effort": COMPACTION_EFFORT,
+                    "records": self.compactions,
+                    "usage": self.usage([t for t in self.turns if t["phase"] == "compacting"]),
+                },
+                "model_usage": self.usage([t for t in self.turns if t["phase"] != "compacting"]),
                 "events": self.events,
                 "validation": "runtime/startup only; project quality is not scored",
                 "timing": {
@@ -189,6 +225,7 @@ class HarnessSession:
                     "repair_s": self.repair_seconds,
                     "runtime_s": sum(a.get("time_s", 0) for a in self.attempts),
                     "setup_s": self.setup_seconds,
+                    "compaction_s": self.compaction_seconds,
                 },
                 "budget_tokens": self.budget_tokens,
                 "diagnostics": str(self.metadata),
@@ -209,6 +246,128 @@ class HarnessSession:
             json.dumps(self.messages, indent=2, ensure_ascii=False)
         )
 
+    async def compact(self, reason: str, before: int, timeout: float) -> None:
+        """Archive first; replace context only after a complete, useful Luna summary."""
+        try:
+            plan = plan_compaction(self.messages)
+        except ValueError as exc:
+            raise BudgetError(f"context cannot be compacted: {exc}") from exc
+        request = plan.request()
+        local_input = prompt_tokens(request, [])
+        input_bound = PromptEstimate().bound(local_input)
+        output_tokens = min(
+            COMPACTION_OUTPUT_TOKENS,
+            self.limits.total_tokens - self.budget_tokens - input_bound,
+        )
+        if output_tokens < 1024:
+            raise BudgetError(
+                "total token budget cannot fit Luna context compaction "
+                f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used; "
+                f"compaction input estimate {input_bound:,} tokens)"
+            )
+        number = len(self.compactions) + 1
+        archive = f"conversation-before-compaction-{number:03d}.json"
+        (self.metadata / archive).write_text(
+            json.dumps(self.messages, ensure_ascii=False, indent=2)
+        )
+        record = {
+            "number": number,
+            "reason": reason,
+            "before_tokens": before,
+            "model": COMPACTION_MODEL,
+            "reasoning_effort": COMPACTION_EFFORT,
+            "archive": archive,
+            "status": "pending",
+        }
+        self.compactions.append(record)
+        self.phase("compacting")
+        started = time.monotonic()
+        turn = None
+        failed_usage = {}
+        try:
+            # The caller owns the API slot and phase deadline. No wb tools are
+            # exposed to the compactor, and High must never negotiate down.
+            turn = await asyncio.wait_for(
+                call_conversation(
+                    self.client,
+                    self.api_key,
+                    COMPACTION_MODEL,
+                    request,
+                    [],
+                    max_tokens=output_tokens,
+                    reasoning_effort=COMPACTION_EFFORT,
+                    strict_reasoning=True,
+                    cache_reuse=False,
+                    input_tokens_bound=input_bound,
+                    on_retry=self.on_retry,
+                ),
+                timeout,
+            )
+            if turn.finish_reason != "stop" or turn.message.get("tool_calls"):
+                raise ValueError("compactor did not return a complete text summary")
+            if turn.model != COMPACTION_MODEL:
+                raise ValueError(f"compactor returned unexpected model {turn.model!r}")
+            replacement = plan.apply(turn.message.get("content"))
+            after = prompt_tokens(replacement, TOOL_SCHEMA)
+            replacement_estimate = self.prompt_estimate.after_compaction()
+            # Preserve everything on failure, including if required boundaries
+            # alone are too large. Never loop compacting an ineffective summary.
+            if replacement_estimate.estimate(after) >= before or compaction_reason(
+                replacement_estimate.estimate(after),
+                replacement_estimate.bound(after),
+                api._MODEL_CONTEXT_CACHE.get(self.model_id, 128_000),
+                min(
+                    self.limits.turn_tokens,
+                    api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+                ),
+            ):
+                raise BudgetError(
+                    "compaction cannot fit preserved messages and summary into the context budget"
+                )
+            charged = turn.usage.get("total_tokens") or (
+                input_bound + prompt_tokens([turn.message], [])
+            )
+            if self.budget_tokens + charged > self.limits.total_tokens:
+                raise BudgetError("total token budget exhausted during context compaction")
+            self.messages = replacement
+            self.prompt_estimate = replacement_estimate
+            self.cache_policy.reset()
+            record.update(status="completed", after_tokens=replacement_estimate.estimate(after))
+        except BaseException as exc:
+            failed_usage = getattr(exc, "usage", {})
+            record.update(status="failed", error=str(exc) or type(exc).__name__)
+            raise
+        finally:
+            elapsed = time.monotonic() - started
+            self.compaction_seconds += elapsed
+            usage = turn.usage if turn else failed_usage
+            self.turns.append(
+                {
+                    "phase": "compacting",
+                    "usage": usage,
+                    "model": turn.model if turn else COMPACTION_MODEL,
+                    "provider": turn.provider if turn else None,
+                    "adjustments": turn.adjustments if turn else {},
+                    "error": record.get("error"),
+                }
+            )
+            self.budget_tokens += usage.get("total_tokens") or (
+                input_bound + (prompt_tokens([turn.message], []) if turn else 0)
+            )
+            record.update(time_s=elapsed, usage=usage)
+            (self.metadata / f"compaction-{number:03d}.json").write_text(
+                json.dumps(
+                    {
+                        "record": record,
+                        "request": request,
+                        "response": turn.message if turn else None,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            self.save()
+
     async def conversation(self, repair: bool = False) -> None:
         max_turns = self.limits.repair_turns if repair else self.limits.build_turns
         max_seconds = self.limits.repair_seconds if repair else self.limits.build_seconds
@@ -217,23 +376,38 @@ class HarnessSession:
         try:
             for _ in range(max_turns):
                 self.phase(phase)
-                input_bytes = len(
-                    json.dumps(
-                        {"messages": self.messages, "tools": TOOL_SCHEMA}, ensure_ascii=False
-                    ).encode()
-                )
-                # Reuse measured token usage for the unchanged conversation prefix.
-                # Only newly appended messages need the conservative byte estimate.
-                input_bound = (
-                    input_bytes
-                    if self._known_prompt_tokens is None
-                    else self._known_prompt_tokens + max(0, input_bytes - self._known_prompt_bytes)
-                )
-                remaining_tokens = self.limits.total_tokens - self.budget_tokens - input_bound
+                local_input = await asyncio.to_thread(prompt_tokens, self.messages, TOOL_SCHEMA)
+                input_bound = self.prompt_estimate.bound(local_input)
                 if active >= max_seconds:
                     raise BudgetError(
                         f"{phase} active time budget exhausted ({active:.1f}s / {max_seconds}s)"
                     )
+                reason = compaction_reason(
+                    self.prompt_estimate.estimate(local_input),
+                    input_bound,
+                    api._MODEL_CONTEXT_CACHE.get(self.model_id, 128_000),
+                    min(
+                        self.limits.turn_tokens,
+                        api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+                    ),
+                )
+                if reason:
+                    async with self.api_slots:
+                        started = time.monotonic()
+                        try:
+                            await self.compact(
+                                reason,
+                                self.prompt_estimate.estimate(local_input),
+                                max_seconds - active,
+                            )
+                        finally:
+                            elapsed = time.monotonic() - started
+                            active += elapsed
+                            self.api_seconds += elapsed
+                    self.phase(phase)
+                    local_input = prompt_tokens(self.messages, TOOL_SCHEMA)
+                    input_bound = self.prompt_estimate.bound(local_input)
+                remaining_tokens = self.limits.total_tokens - self.budget_tokens - input_bound
                 if remaining_tokens <= 0:
                     raise BudgetError(
                         "total token budget cannot fit another request "
@@ -254,6 +428,7 @@ class HarnessSession:
                                 TOOL_SCHEMA,
                                 max_tokens=min(self.limits.turn_tokens, remaining_tokens),
                                 input_tokens_bound=input_bound,
+                                cache_policy=self.cache_policy,
                                 reasoning_effort=self.reasoning_effort,
                                 on_progress=(lambda chars: self.tracker.update(self.name, chars))
                                 if self.tracker and self.tracker.is_running
@@ -290,10 +465,12 @@ class HarnessSession:
                         "input_tokens_bound": input_bound,
                     }
                 )
-                prompt_tokens = turn.usage.get("prompt_tokens")
-                if type(prompt_tokens) is int and prompt_tokens >= 0:
-                    self._known_prompt_tokens = prompt_tokens
-                    self._known_prompt_bytes = input_bytes
+                explicit_cache = (turn.adjustments.get("cache") or {}).get("breakpoints")
+                measured_context = context_usage(
+                    turn.usage, self.cache_policy.family if explicit_cache else "automatic"
+                )
+                self.prompt_estimate.observe(local_input, measured_context)
+                self.turns[-1]["context_prompt_tokens"] = measured_context.get("prompt_tokens")
                 self.budget_tokens += turn.usage.get("total_tokens") or (
                     input_bound + len(json.dumps(turn.message).encode())
                 )

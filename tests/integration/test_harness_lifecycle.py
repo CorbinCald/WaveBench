@@ -10,9 +10,11 @@ import pytest
 
 from wavebench.harness import session as module
 from wavebench.harness.config import Limits
+from wavebench.harness.context import COMPACTION_MODEL
 from wavebench.harness.session import HarnessBatch, HarnessSession
 from wavebench.harness.transport import Turn, TurnError
 from wavebench.harness.workspace import allocate_run
+from wavebench.tokens import prompt_tokens
 
 
 @pytest.fixture
@@ -349,3 +351,233 @@ async def test_active_deadline_names_the_phase_and_time_limit(factory, monkeypat
     assert f"{phase} active time budget exhausted" in session.error
     assert "/ 1s)" in session.error
     assert len(session.attempts) == (1 if repair else 0)
+
+
+def seed_context(session):
+    session.messages.extend(
+        [
+            {"role": "assistant", "content": "Earlier implementation notes. " * 1000},
+            {"role": "user", "content": "Keep the helper module and print 42."},
+            {
+                "role": "assistant",
+                "content": "Latest full answer",
+                "tool_calls": [
+                    {
+                        "id": "old-ls",
+                        "type": "function",
+                        "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                    }
+                ],
+                "reasoning_details": [{"type": "reasoning.encrypted", "data": "retain-exactly"}],
+            },
+            {"role": "tool", "tool_call_id": "old-ls", "content": "[]"},
+        ]
+    )
+    # Provider-calibrated context exercises the automatic threshold without a
+    # giant fixture in each test. Unit/live tests also cover actual token sizes.
+    session.prompt_estimate.observe(
+        prompt_tokens(session.messages, module.TOOL_SCHEMA), {"prompt_tokens": 240_001}
+    )
+    return json.loads(json.dumps(session.messages))
+
+
+async def test_compaction_then_build_and_repair_preserves_history_budget_and_two_run_rule(
+    factory, monkeypatch
+):
+    calls, conversations = scripted(monkeypatch, fail_first=True)
+    original = module.call_conversation
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        if model_id != COMPACTION_MODEL:
+            return await original(client, key, model_id, messages, tools, **kwargs)
+        requests.append(kwargs)
+        assert tools == []
+        return Turn(
+            {"role": "assistant", "content": "Keep lib/helper.py. Main must print 42."},
+            {
+                "prompt_tokens": 5000,
+                "completion_tokens": 500,
+                "total_tokens": 5500,
+                "cost": 0.002,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            },
+            COMPACTION_MODEL,
+            "OpenAI",
+            "stop",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=900_000), auto_open="off")
+    before = seed_context(session)
+    key = session.cache_policy.key
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    assert len(session.attempts) == 2 and calls[session.model_id] == 6
+    assert len(requests) == 1
+    assert requests[0]["reasoning_effort"] == "high" and requests[0]["strict_reasoning"]
+    assert requests[0]["cache_reuse"] is False
+    resumed = conversations[session.model_id][0]
+    assert resumed[:2] == before[:2] and resumed[-2:] == before[-2:]
+    assert session.cache_policy.key == key
+    assert session.budget_tokens == 5500 + 6 * 15
+    result = session.result()
+    assert result["usage"]["cost"] == pytest.approx(0.008)
+    assert result["harness"]["model_usage"]["total_tokens"] == 90
+    assert result["harness"]["compaction"]["usage"]["total_tokens"] == 5500
+    assert session.compaction_seconds > 0
+    assert session.build_seconds >= session.compaction_seconds
+    record = session.compactions[0]
+    assert record["status"] == "completed" and record["after_tokens"] < 240_000
+    assert json.loads((session.metadata / record["archive"]).read_text()) == before
+    saved = json.loads((session.metadata / "compaction-001.json").read_text())
+    assert saved["response"]["content"].startswith("Keep lib")
+
+
+@pytest.mark.parametrize(
+    "failure", ["empty", "truncated", "tools", "wrong_model", "timeout", "cancelled"]
+)
+async def test_failed_compaction_never_replaces_or_executes_original_context(
+    factory, monkeypatch, failure
+):
+    async def model(*args, **kwargs):
+        if failure == "timeout":
+            await asyncio.sleep(2)
+        if failure == "cancelled":
+            raise asyncio.CancelledError()
+        return Turn(
+            {
+                "role": "assistant",
+                "content": "" if failure == "empty" else "Summary",
+                **({"tool_calls": [{"id": "malicious"}]} if failure == "tools" else {}),
+            },
+            {"prompt_tokens": 1000, "completion_tokens": 20, "total_tokens": 1020},
+            "other/model" if failure == "wrong_model" else COMPACTION_MODEL,
+            "OpenAI",
+            "length" if failure == "truncated" else "stop",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=900_000, build_seconds=1))
+    before = seed_context(session)
+    await session.build()
+    if failure == "cancelled":
+        assert session.generation == "cancelled"
+    assert session.messages == before
+    assert session.compactions[0]["status"] == "failed"
+    assert session.budget_tokens > 0
+    assert not session.attempts and not session.workspace.ls()
+    if failure not in {"timeout", "cancelled"}:
+        assert session.usage()["total_tokens"] == 1020
+    if failure == "timeout":
+        assert "active time budget exhausted" in session.error
+
+
+async def test_compaction_cannot_bypass_total_budget(factory, monkeypatch):
+    calls, _ = scripted(monkeypatch)
+    session = factory(limits=Limits(total_tokens=2000))
+    before = seed_context(session)
+    await session.build()
+    assert session.generation == "budget_exhausted"
+    assert "cannot fit Luna context compaction" in session.error
+    assert not calls and not session.compactions and session.messages == before
+
+
+async def test_cache_usage_totals_use_actual_reports_and_costs(factory):
+    session = factory()
+    session.turns = [
+        {
+            "phase": "building",
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 10,
+                "total_tokens": 110,
+                "prompt_tokens_details": {"cached_tokens": cached, "cache_write_tokens": writes},
+                "cost": 0.01,
+            },
+        }
+        for cached, writes in [(0, 100), (100, 0)]
+    ]
+    usage = session.usage()
+    assert usage["cache_read_ratio"] == 0.5
+    assert usage["prompt_tokens_details"] == {"cached_tokens": 100, "cache_write_tokens": 100}
+    assert usage["cost"] == 0.02
+    session.turns.append({"phase": "compacting", "usage": {}})
+    usage = session.usage()
+    assert usage["cache_read_ratio"] is None and usage["cost"] is None
+    from wavebench.tui.analytics.cost import compute_cost
+
+    assert compute_cost(usage, {"prompt": "0.01", "completion": "0.03"}) is None
+
+
+async def test_repeated_compaction_carries_previous_summary_and_newest_tool_tail(
+    factory, monkeypatch
+):
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(json.loads(messages[1]["content"]))
+        return Turn(
+            {
+                "role": "assistant",
+                "content": "Persistent fact: keep helper.py; implement newest correction.",
+            },
+            {"prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050},
+            COMPACTION_MODEL,
+            "OpenAI",
+            "stop",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=900_000))
+    original = seed_context(session)
+    await session.compact("test threshold", 240_001, 10)
+    session.messages.extend(
+        [
+            {"role": "user", "content": "Newest correction: print 43"},
+            {
+                "role": "assistant",
+                "content": "New final response",
+                "tool_calls": [
+                    {
+                        "id": "latest",
+                        "type": "function",
+                        "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "latest", "content": "[]"},
+        ]
+    )
+    before_second = json.loads(json.dumps(session.messages))
+    await session.compact("test threshold", 240_001, 10)
+    assert session.messages[:2] == original[:2]
+    assert session.messages[-2:] == before_second[-2:]
+    assert "Persistent fact" in json.dumps(requests[1]["history_to_summarize"])
+    assert "Newest correction" in json.dumps(requests[1]["history_to_summarize"])
+    assert len(session.compactions) == 2 and session.budget_tokens == 2100
+    assert (
+        json.loads((session.metadata / "conversation-before-compaction-002.json").read_text())
+        == before_second
+    )
+
+
+async def test_ineffective_compaction_retains_oversized_protected_message(factory, monkeypatch):
+    async def model(*args, **kwargs):
+        return Turn(
+            {"role": "assistant", "content": "Summary"}, {}, COMPACTION_MODEL, "OpenAI", "stop", {}
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(total_tokens=900_000))
+    seed_context(session)
+    session.messages[1]["content"] = "preserve " * 241_000
+    before = json.loads(json.dumps(session.messages))
+    await session.build()
+    assert session.generation == "budget_exhausted"
+    assert "cannot fit preserved messages" in session.error
+    assert session.messages == before and not session.attempts

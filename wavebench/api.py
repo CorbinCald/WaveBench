@@ -28,6 +28,7 @@ from typing import Any
 import aiohttp
 
 from wavebench.models import _model_score, is_image_model, is_stealth
+from wavebench.prompt_cache import affinity
 from wavebench.tui.styles import S, _tri
 
 API_URL = "https://openrouter.ai/api/v1"
@@ -511,6 +512,7 @@ async def call_model_async(
 
     base_data = {
         "model": model_id,
+        **affinity(model_id, prompt),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1 if temperature is None else temperature,
         "max_tokens": model_max_tokens,
@@ -682,6 +684,7 @@ async def call_model_streaming(
 
     base_data: dict[str, Any] = {
         "model": model_id,
+        **affinity(model_id, prompt),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
         "max_tokens": model_max_tokens,

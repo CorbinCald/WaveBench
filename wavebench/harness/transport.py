@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import aiohttp
 
 from wavebench import api
+from wavebench.prompt_cache import CachePolicy, affinity
 
 
 @dataclass
@@ -141,6 +142,9 @@ async def call_conversation(
     max_tokens: int,
     reasoning_effort: str | None,
     input_tokens_bound: int | None = None,
+    cache_policy: CachePolicy | None = None,
+    cache_reuse: bool = True,
+    strict_reasoning: bool = False,
     on_progress=None,
     on_retry=None,
 ) -> Turn:
@@ -163,24 +167,38 @@ async def call_conversation(
     reasoning = (
         api._reasoning_attempts(model_id, reasoning_effort, resolved) if reasoning_effort else []
     ) or [{}]
+    if strict_reasoning:
+        reasoning = [{"reasoning": {"effort": reasoning_effort}}]
+    if cache_reuse:
+        policy = cache_policy or CachePolicy(model_id, json.dumps(messages[:2], ensure_ascii=False))
+        cache_payload, cache_record = policy.prepare(messages, tools)
+    else:
+        cache_payload = {"messages": messages, **affinity(model_id, messages[0]["content"])}
+        if model_id == "openai/gpt-5.6-luna":
+            # A compactor's input is used once. Explicit mode with no breakpoints
+            # avoids a paid cache write that no later request will read.
+            cache_payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
+        cache_record = {"policy": "single_use", "breakpoints": []}
     reasoning_index = 0
     adjustments = {
         "requested_max_tokens": max_tokens,
         "max_tokens": resolved,
         "context_limit": context_limit,
         "context_bound": context_bound,
+        "cache": cache_record,
     }
     for request_index in range(api._MAX_RETRIES + 1):
         data = {
             "model": model_id,
-            "messages": messages,
-            "tools": tools,
             "stream": True,
             "stream_options": {"include_usage": True},
             "max_tokens": resolved,
             "provider": {"require_parameters": True},
             **reasoning[reasoning_index],
+            **cache_payload,
         }
+        if tools:
+            data["tools"] = tools
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

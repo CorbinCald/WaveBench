@@ -1,0 +1,326 @@
+{
+  "verified_date": "2026-09-06",
+  "live_script": {
+    "status": "success",
+    "usage": {
+      "api_turns": 4,
+      "usage_complete": true,
+      "prompt_tokens": 272580,
+      "completion_tokens": 511,
+      "total_tokens": 273091,
+      "cost": 0.0551292,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.0
+    },
+    "records": [
+      {
+        "number": 1,
+        "reason": "context exceeded 240,000 tokens",
+        "before_tokens": 270288,
+        "model": "openai/gpt-5.6-luna",
+        "reasoning_effort": "high",
+        "archive": "conversation-before-compaction-001.json",
+        "status": "completed",
+        "after_tokens": 840,
+        "time_s": 5.126553536974825,
+        "usage": {
+          "prompt_tokens": 270095,
+          "completion_tokens": 308,
+          "total_tokens": 270403,
+          "cost": 0.0543886,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0543886,
+            "upstream_inference_prompt_cost": 0.054019,
+            "upstream_inference_completions_cost": 0.0003696
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 148,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        }
+      }
+    ],
+    "turns": [
+      {
+        "phase": "compacting",
+        "usage": {
+          "prompt_tokens": 270095,
+          "completion_tokens": 308,
+          "total_tokens": 270403,
+          "cost": 0.0543886,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0543886,
+            "upstream_inference_prompt_cost": 0.054019,
+            "upstream_inference_completions_cost": 0.0003696
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 148,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "adjustments": {
+          "requested_max_tokens": 16384,
+          "max_tokens": 16384,
+          "context_limit": 1050000,
+          "context_bound": 307205,
+          "cache": {
+            "policy": "single_use",
+            "breakpoints": []
+          },
+          "reasoning": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        "error": null
+      },
+      {
+        "phase": "building",
+        "usage": {
+          "prompt_tokens": 669,
+          "completion_tokens": 84,
+          "total_tokens": 753,
+          "cost": 0.0002346,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0002346,
+            "upstream_inference_prompt_cost": 0.0001338,
+            "upstream_inference_completions_cost": 0.0001008
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 18,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "finish_reason": "tool_calls",
+        "adjustments": {
+          "requested_max_tokens": 8192,
+          "max_tokens": 8192,
+          "context_limit": 1050000,
+          "context_bound": 1948,
+          "cache": {
+            "policy": "openai_explicit",
+            "session_id": "wb-9553870cbb8779a7dc90a2f9e382c0729bcb08856bf20a23",
+            "breakpoints": [
+              1,
+              4
+            ],
+            "ttl": "30m"
+          },
+          "reasoning": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        "input_tokens_bound": 924
+      },
+      {
+        "phase": "building",
+        "usage": {
+          "prompt_tokens": 804,
+          "completion_tokens": 54,
+          "total_tokens": 858,
+          "cost": 0.0002256,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0002256,
+            "upstream_inference_prompt_cost": 0.0001608,
+            "upstream_inference_completions_cost": 6.48e-05
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "finish_reason": "tool_calls",
+        "adjustments": {
+          "requested_max_tokens": 8192,
+          "max_tokens": 8192,
+          "context_limit": 1050000,
+          "context_bound": 3324,
+          "cache": {
+            "policy": "openai_explicit",
+            "session_id": "wb-9553870cbb8779a7dc90a2f9e382c0729bcb08856bf20a23",
+            "breakpoints": [
+              1,
+              4,
+              6
+            ],
+            "ttl": "30m"
+          },
+          "reasoning": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        "input_tokens_bound": 2300
+      },
+      {
+        "phase": "building",
+        "usage": {
+          "prompt_tokens": 1012,
+          "completion_tokens": 65,
+          "total_tokens": 1077,
+          "cost": 0.0002804,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0002804,
+            "upstream_inference_prompt_cost": 0.0002024,
+            "upstream_inference_completions_cost": 7.8e-05
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 9,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "finish_reason": "tool_calls",
+        "adjustments": {
+          "requested_max_tokens": 8192,
+          "max_tokens": 8192,
+          "context_limit": 1050000,
+          "context_bound": 2140,
+          "cache": {
+            "policy": "openai_explicit",
+            "session_id": "wb-9553870cbb8779a7dc90a2f9e382c0729bcb08856bf20a23",
+            "breakpoints": [
+              1,
+              4,
+              6,
+              8
+            ],
+            "ttl": "30m"
+          },
+          "reasoning": {
+            "reasoning": {
+              "effort": "high"
+            }
+          }
+        },
+        "input_tokens_bound": 1116
+      }
+    ]
+  },
+  "interactive": {
+    "terminal": "30 rows by 100 columns, real wavebench --mode harness prompt",
+    "seed": "same synthetic long history as scripts/verify_context_live.py",
+    "preserved_messages_equal": true,
+    "status": "success",
+    "usage": {
+      "api_turns": 4,
+      "usage_complete": true,
+      "prompt_tokens": 272615,
+      "completion_tokens": 502,
+      "total_tokens": 273117,
+      "cost": 0.055125400000000005,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.0
+    },
+    "records": [
+      {
+        "number": 1,
+        "reason": "context exceeded 240,000 tokens",
+        "before_tokens": 270288,
+        "model": "openai/gpt-5.6-luna",
+        "reasoning_effort": "high",
+        "archive": "conversation-before-compaction-001.json",
+        "status": "completed",
+        "after_tokens": 830,
+        "time_s": 5.056619798997417,
+        "usage": {
+          "prompt_tokens": 270095,
+          "completion_tokens": 232,
+          "total_tokens": 270327,
+          "cost": 0.0542974,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0542974,
+            "upstream_inference_prompt_cost": 0.054019,
+            "upstream_inference_completions_cost": 0.0002784
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 83,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        }
+      }
+    ],
+    "attempts": 1,
+    "active_seconds": 12.242142343951855,
+    "phases": [
+      "preflight",
+      "building",
+      "compacting",
+      "building",
+      "building",
+      "linting",
+      "building",
+      "queued",
+      "setting up",
+      "running",
+      "finished"
+    ]
+  }
+}
