@@ -142,6 +142,7 @@ benchmarkResults/
     │   └── app.js
     └── metadata/<model-slot>/   # Controller-owned, outside model roots
         ├── result.json
+        ├── browser.log          # Browser output when opening a preview
         ├── conversation.json
         ├── tool-0001.json
         └── run-1-<id>.log
