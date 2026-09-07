@@ -16,7 +16,7 @@ permissions:
 jobs:
   assign-wavebench-project:
     name: Assign synced Linear issue to the configured project
-    if: vars.LINEAR_SYNC_ENABLED == 'true'
+    if: vars.LINEAR_SYNC_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.event.issue.state == 'open')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
@@ -43,4 +43,5 @@ jobs:
           python .github/scripts/sync_linear_issue_project.py \
             --issue-url "$issue_url" \
             --team-key "$LINEAR_TEAM_KEY" \
-            --project-id "$LINEAR_PROJECT_ID"
+            --project-id "$LINEAR_PROJECT_ID" \
+            ${{ github.event_name == 'issues' && '--allow-missing' || '' }}
