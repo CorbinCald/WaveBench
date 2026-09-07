@@ -14,12 +14,8 @@ import shutil
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 
-try:
-    import readline
-except ImportError:
-    readline = None  # type: ignore[assignment]
-
 import wavebench.tui.styles as _styles
+from wavebench import query_history
 from wavebench.api import fetch_top_models, load_api_key
 from wavebench.core import main_async
 from wavebench.models import (
@@ -64,47 +60,33 @@ QUERY_HISTORY_FILE = ".benchmark_query_history"
 def _query_history_path(mode_name: str = "code") -> str:
     if mode_name == "harness":
         mode_name = "code"
-    return os.path.join(os.getcwd(), f"{QUERY_HISTORY_FILE}.{mode_name}")
+    return os.path.join(os.getcwd(), f"{QUERY_HISTORY_FILE}.{mode_name}.json")
 
 
 def _query_history_load_path(mode_name: str = "code") -> str:
     if mode_name == "harness":
         mode_name = "code"
     path = _query_history_path(mode_name)
-    if mode_name == "code" and not os.path.exists(path):
+    if os.path.exists(path):
+        return path
+    mode_path = os.path.join(os.getcwd(), f"{QUERY_HISTORY_FILE}.{mode_name}")
+    if os.path.exists(mode_path):
+        return mode_path
+    if mode_name == "code":
         legacy_path = os.path.join(os.getcwd(), QUERY_HISTORY_FILE)
         if os.path.exists(legacy_path):
             return legacy_path
     return path
 
 
-def _load_query_history(mode_name: str = "code") -> None:
-    if readline is None:
-        return
-    path = _query_history_load_path(mode_name)
-    try:
-        readline.clear_history()
-    except Exception:
-        pass
-    if os.path.exists(path):
-        try:
-            readline.read_history_file(path)
-        except Exception:
-            pass
-    try:
-        readline.set_history_length(500)
-    except Exception:
-        pass
+def _load_query_history(mode_name: str = "code") -> list[str]:
+    return query_history.load(_query_history_load_path(mode_name))
 
 
 def _save_query_history(query: str, mode_name: str = "code") -> None:
-    if readline is None or not query:
-        return
-    try:
-        readline.add_history(query)
-        readline.write_history_file(_query_history_path(mode_name))
-    except Exception:
-        pass
+    query_history.save(
+        _query_history_path(mode_name), query, source=_query_history_load_path(mode_name)
+    )
 
 
 def main() -> None:
@@ -482,13 +464,7 @@ def main() -> None:
 
             # ── Prompt input ──────────────────────────────────────────
             try:
-                _load_query_history(mode_name)
-                history_entries: list[str] = []
-                if readline:
-                    for i in range(readline.get_current_history_length()):
-                        entry = readline.get_history_item(i + 1)
-                        if entry:
-                            history_entries.append(entry)
+                history_entries = _load_query_history(mode_name)
 
                 rl_prompt = f"  {_styles.ACCENT_HI}›{S.RST} "
                 user_prompt = _read_line(rl_prompt, history=history_entries, on_idle=_wave_idle)

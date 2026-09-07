@@ -158,6 +158,7 @@ wavebench/
 ├── models.py                   # Default model mapping and catalog scoring
 ├── parsers.py                  # Code extraction and prompt-derived directory names
 ├── storage.py                  # JSON persistence for models/config/history
+├── query_history.py            # Portable prompt history and legacy import
 ├── modes/                      # Response modes and registry
 │   ├── __init__.py             # Mode protocol, ParsedOutput, MODES
 │   ├── code.py                 # CodeMode prompt framing + parser wrapper
@@ -198,9 +199,9 @@ These are created in the current working directory and are gitignored:
 | `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
 | `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, and TTS voice/format/speed |
 | `.benchmark_history.json` | Lifetime run history for analytics |
-| `.benchmark_query_history.<mode>` | Mode-specific readline-style prompt history for `code`, `text`, `tts`, and `image` prompts |
+| `.benchmark_query_history.<mode>.json` | Portable prompt history (last 500 entries per mode); Harness uses `code`, alongside `text`, `tts`, and `image` |
 
-If a legacy `.benchmark_query_history` file exists, Code mode reads it until `.benchmark_query_history.code` is created on the first new Code prompt.
+Existing `.benchmark_query_history.<mode>` files from GNU Readline or libedit are imported automatically, including escaped spaces and Unicode. Harness also supports the older `.benchmark_query_history` fallback. The next submitted prompt saves that mode's history as JSON; original files are kept. History works across Python installations without requiring either readline backend.
 
 Because state paths are based on `os.getcwd()`, running WaveBench from different directories creates separate project-local state. TTS mode automatically uses selected TTS-capable models, falling back to the bundled TTS defaults when none are selected.
 
