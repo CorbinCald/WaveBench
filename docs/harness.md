@@ -161,7 +161,7 @@ same prepared payload. This is **prompt caching**; responses are freshly generat
 
 | Provider/model | Policy |
 |---|---|
-| OpenAI GPT-5.6 and later | Explicit content breakpoints, stable `prompt_cache_key`, and 30-minute TTL. Keep the original prompt boundary and recent request boundaries, up to four. |
+| OpenAI GPT-5.6 and later | Automatic caching of the growing conversation, stable `prompt_cache_key`, and 30-minute TTL. Up to three explicit anchors on the original prompt and recent non-tool message boundaries leave one write slot for the automatic breakpoint. |
 | Earlier OpenAI models | Automatic caching with a stable `prompt_cache_key`; no unsupported explicit controls. |
 | Anthropic | Explicit `cache_control` breakpoints on the original prompt and recent request boundaries, up to four. Retaining the previous boundary supports batches beyond the 20-block lookback. Start with 5-minute TTL; promote to 1 hour when request spacing reaches 4 minutes. |
 | Google Gemini 2.5 and later | Implicit caching for short prompts. At a locally estimated 4,096-token prefix, add one explicit checkpoint and keep it fixed until its 5-minute TTL expires. Advancing it every turn would repeatedly pay creation/storage costs. |
@@ -174,6 +174,14 @@ The provider's actual cost includes cache-write and storage charges. Unknown
 cost stays unknown rather than being estimated using an incorrect uncached rate.
 Single-shot text calls use deterministic prompt affinity for repeated prompts;
 they do not explicitly provision a cache for an unknown future conversation.
+
+OpenAI harness requests use `prompt_cache_options.mode: "implicit"`, recorded as
+`openai_hybrid`. OpenRouter converts tool results to plain function-call output
+strings and drops their explicit content markers. Explicit-only mode therefore
+cannot cache a conversation that starts short and grows through tool calls.
+Automatic breakpoints cover that history without inserting user messages or
+rewriting tool results. [Failure analysis and live verification](cache-context-verification.md#tool-result-caching-fix)
+include upstream request evidence and actual cache reads.
 
 Before each build/repair request, Harness checks the active context. It compacts
 when the estimated input **exceeds 240,000 tokens**, or earlier to reserve output
