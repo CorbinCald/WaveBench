@@ -272,6 +272,13 @@ repair time; an `after_all` wait does not inflate model performance time.
 Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
+Browser stdout/stderr from opening a preview is saved separately in
+`metadata/<model-slot>/browser.log`, including messages written after the
+launcher returns. The execution attempt records this path as `browser_log`.
+WaveBench keeps the platform's default browser and `BROWSER` preference. A
+failed browser launch leaves the successful runtime result intact and shows
+the preview URL for manual opening, along with the browser log path.
+
 ## Verification
 
 The default suite is offline. Lifecycle tests use scripted conversations and

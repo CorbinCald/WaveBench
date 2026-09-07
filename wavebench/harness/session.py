@@ -6,9 +6,7 @@ import asyncio
 import json
 import os
 import sys
-import threading
 import time
-import webbrowser
 from pathlib import Path
 
 from wavebench import api
@@ -17,6 +15,7 @@ from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
 from . import HARNESS_VERSION
+from .browser import open_preview
 from .commands import TOOL_SCHEMA, Dispatcher
 from .config import Limits
 from .context import (
@@ -30,14 +29,6 @@ from .context import (
 from .runtime import Runtime, SetupError
 from .transport import TurnError, capability
 from .workspace import allocate_project
-
-_BROWSER_LOCK = threading.Lock()
-
-
-def open_preview(url: str) -> bool:
-    # webbrowser initializes a process-global registry lazily; it is not thread-safe.
-    with _BROWSER_LOCK:
-        return webbrowser.open(url)
 
 
 def system_prompt(auto_install: str) -> str:
@@ -598,10 +589,13 @@ class HarnessSession:
                                     self.preview, self.descriptor["preview"]
                                 )
                                 attempt["preview_url"] = url
-                                opened = await asyncio.to_thread(open_preview, url)
+                                browser_log = self.metadata / "browser.log"
+                                attempt["browser_log"] = str(browser_log)
+                                opened = await asyncio.to_thread(open_preview, url, browser_log)
                                 if not opened:
                                     attempt["presentation_error"] = (
-                                        f"browser unavailable; open {url}"
+                                        f"browser unavailable; open {url} manually. "
+                                        f"Browser log: {browser_log} (if created)"
                                     )
                         elif self.auto_open != "off" and attempt.get("diagnostics"):
                             # Show output from the completed managed run; no terminal relaunch.
@@ -706,6 +700,8 @@ class HarnessBatch:
             seconds = self.sessions[0].limits.review_seconds
             for session in previews:
                 print(f"  {session.name} preview: {session.preview.url}")
+                if session.attempts and session.attempts[-1].get("presentation_error"):
+                    print(f"  {session.name}: {session.attempts[-1]['presentation_error']}")
             print(
                 f"  Managed previews remain open for up to {seconds}s. Press Enter or Ctrl-C to stop.",
                 flush=True,

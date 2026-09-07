@@ -5,10 +5,12 @@ import json
 import os
 import shutil
 import sys
+import time
 
 import pytest
 
 from wavebench.harness import session as module
+from wavebench.harness.commands import launch_descriptor
 from wavebench.harness.config import Limits
 from wavebench.harness.context import COMPACTION_MODEL
 from wavebench.harness.session import HarnessBatch, HarnessSession
@@ -28,7 +30,7 @@ async def factory(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(module, "capability", capable)
-    monkeypatch.setattr(module.webbrowser, "open", lambda url: True)
+    monkeypatch.setattr(module, "open_preview", lambda url, log_path: True)
     run = allocate_run(tmp_path, "lifecycle", "test")
     sessions = []
     api_slots = asyncio.Semaphore(1)
@@ -173,6 +175,49 @@ async def test_abandoned_repair_keeps_failure_without_fabricated_retry(factory, 
     assert session.status == "failed" and len(session.attempts) == 1
     assert session.repair == "abandoned" and "abandoned" in session.error
     assert session.usage()["total_tokens"] is None
+
+
+@pytest.mark.parametrize("policy", ["off", "incremental", "after_all"])
+@pytest.mark.parametrize("opened", [True, False])
+async def test_preview_log_path_and_launch_failure_preserve_runtime_success(
+    factory, monkeypatch, capsys, policy, opened
+):
+    launches = []
+
+    def open_browser(url, log_path):
+        launches.append(url)
+        log_path.write_text("browser diagnostic\n")
+        return opened
+
+    monkeypatch.setattr(module, "open_preview", open_browser)
+    session = factory(auto_open=policy)
+    session.workspace.write("index.html", "<!doctype html><h1>Preview ready</h1>")
+    session.descriptor = launch_descriptor(
+        {"runtime": "static", "entry": "index.html"}, session.workspace
+    )
+    session.generation = "submitted"
+    session.submitted_at = time.monotonic()
+    await session.execute()
+
+    stored = json.loads((session.metadata / "result.json").read_text())
+    assert stored["status"] == "success"
+    attempt = stored["harness"]["attempts"][0]
+    assert attempt["outcome"] == "success"
+    if policy == "off":
+        assert not launches
+        assert "browser_log" not in attempt
+        assert not (session.metadata / "browser.log").exists()
+    else:
+        assert launches == [attempt["preview_url"]]
+        assert attempt["browser_log"] == str(session.metadata / "browser.log")
+        assert ("presentation_error" in attempt) == (not opened)
+        await HarnessBatch([session], policy, {}).review()
+        output = capsys.readouterr().out
+        assert "browser diagnostic" not in output
+        assert attempt["preview_url"] in output
+        if not opened:
+            assert "browser unavailable" in output
+            assert attempt["browser_log"] in output
 
 
 @pytest.mark.parametrize("policy", ["off", "incremental", "after_all"])
