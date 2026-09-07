@@ -192,3 +192,31 @@ def test_editor_restores_text_and_cursor_after_an_idle_screen_redraw(pty_stdin, 
     # Repaint the existing text, then move left to the original edit position.
     assert "\033[2J\033[9;1H\r> wave\033[K\033[1D" in capsys.readouterr().out
     assert termios.tcgetattr(slave) == before
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        (b"\033[A\r", " halo piston"),
+        (b"\033[A\033[A\r", "older prompt"),
+        (b"draft\033[A\033[B\r", "draft"),
+    ],
+)
+def test_editor_recalls_legacy_history_with_arrow_keys(
+    pty_stdin, tmp_state_dir, capsys, keys, expected
+) -> None:
+    from wavebench.__main__ import _load_query_history
+
+    (tmp_state_dir / ".benchmark_query_history.code").write_bytes(
+        b"_HiStOrY_V2_\nolder\\040prompt\n\\040halo\\040piston\n"
+    )
+    master, _ = pty_stdin
+    with hold_raw():
+        os.write(master, keys)
+        result = _read_line("> ", history=_load_query_history("harness"))
+
+    output = capsys.readouterr().out
+    assert result == expected
+    assert " halo piston" in output
+    assert r"\040" not in output
+    assert "_HiStOrY_V2_" not in output
