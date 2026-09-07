@@ -5,39 +5,57 @@ A terminal-based tool for benchmarking Large Language Models side-by-side via th
 ## Prerequisites
 
 - Python 3.10+
+- Git and [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html)
 - An [OpenRouter API key](https://openrouter.ai/keys)
 
 ## Installation
 
+Install once with pipx, then launch with `wavebench`. Pipx manages a private
+Python environment and all dependencies automatically; no environment activation
+is needed, and your system Python stays unchanged.
+
 ```bash
-git clone <repository-url>
-cd WaveBench
-
-python -m venv .venv
-source .venv/bin/activate   # macOS / Linux
-# .venv\Scripts\activate    # Windows
-
-pip install .
+pipx install git+https://github.com/CorbinCald/WaveBench.git
 ```
+
+If pipx is new to your machine, run `pipx ensurepath` once and open a new terminal
+so the `wavebench` command is available. On Ubuntu, install pipx with
+`sudo apt install pipx`; on macOS, use `brew install pipx`. Other platforms are
+covered in the [pipx installation guide](https://pipx.pypa.io/stable/how-to/install-pipx.html).
+
+Update with `pipx upgrade wavebench`, or remove it with `pipx uninstall wavebench`.
+
+For an existing checkout that should pick up source changes immediately:
+
+```bash
+cd WaveBench
+pipx install --editable .
+wavebench
+```
+
+After dependency changes, run `pipx reinstall wavebench` to refresh that
+installation. Contributors who need test/lint tools can use the separate
+[development setup](docs/CONTRIBUTING.md#local-setup).
 
 Runtime dependencies are `aiohttp` and `tiktoken` (for context-size estimates). The tokenizer downloads its public vocabulary on first use and caches it locally. WaveBench plays TTS outputs natively through the OS audio backend without launching external apps.
 
 ## Configuration
 
-Provide your OpenRouter API key via **environment variable** or a **`.env` file** in the project root:
+Provide your OpenRouter API key via **environment variable** or a **`.env` file** in the directory where you launch WaveBench:
 
 ```env
 OPENROUTER_API_KEY=your_key_here
 ```
 
-WaveBench stores model selection, user settings, analytics history, and prompt history in gitignored files in the current working directory. See [Persistent Files](#persistent-files).
+WaveBench stores model selection, user settings, analytics history, prompt history,
+and generated projects in the current working directory. Launch from your existing
+WaveBench directory to keep using its `.env`, settings, and history; new users can
+choose any working directory. See [Persistent Files](#persistent-files).
 
 ## Quick Start
 
 ```bash
 wavebench
-# or
-python -m wavebench
 ```
 
 Interactive startup shows a **Harness / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific history. Harness replaces one-shot code generation with isolated, multi-file projects. Type `c` at the mode prompt to open the configuration menu.
