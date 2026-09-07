@@ -281,12 +281,29 @@ Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
 The live dashboard and final results show each model's status, total tokens,
-output tokens per second (`tk/s`), cost, turns, and elapsed time on one line.
-Model names and optional path/error details shorten as needed to fit. Totals accumulate
-across build, repair, and context-compaction calls, including failed calls with
-reported usage. A turn is one model API call, including the current call; HTTP
+output tokens per second (`tk/s`), cost, turns, elapsed time, cache hit percentage,
+tools used, and tool failure percentage. Cache/tool metrics move to an indented
+second line when they would crowd the model name and status. Short terminals
+reserve space for a count of hidden models. Model names and optional path/error
+details shorten as needed to fit. Totals accumulate across build, repair, and
+context-compaction calls, including failed calls with reported usage.
+A turn is one model API call, including the current call; HTTP
 retries and individual tools within a call do not add turns.
 The elapsed timer beside the phase runs continuously for that model.
+
+`cache hit` is total reported cached input tokens divided by total reported
+prompt tokens, including compaction. It updates when a provider reports cache
+usage during or after a call; between reports it retains the settled percentage.
+Missing counts or no reported input show `—`. Cache writes and estimated tokens
+do not count as hits.
+
+`tools used` counts completed tool calls across build and repair, including
+failed, rejected, and cancelled calls. Each result updates the count immediately,
+even while other tools in a batch are still running. An identical call-ID replay
+does not count again. `tool fail` is failed results divided by completed calls;
+it shows `—` before the first result. Failed lint checks count as tool failures;
+API retries and program execution failures do not. Final counts are saved as
+`harness.tool_usage.calls` and `harness.tool_usage.failures`.
 
 While a call streams, `~` marks estimated tokens, output speed, and cost. Output
 estimates tokenize the assembled text, tool arguments, and exposed reasoning;

@@ -16,7 +16,7 @@ from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
 from . import HARNESS_VERSION
-from .accounting import reported_total
+from .accounting import cache_read_ratio, reported_total
 from .browser import open_preview
 from .commands import TOOL_SCHEMA, Dispatcher
 from .config import Limits
@@ -86,7 +86,7 @@ class HarnessSession:
             raise
         self.runtime.process_slots = process_slots
         self.dispatcher = Dispatcher(
-            self.workspace, self.runtime, self.metadata, limits, self.phase
+            self.workspace, self.runtime, self.metadata, limits, self.phase, self.on_tool_result
         )
         self.tracker = tracker
         self.messages = [
@@ -128,11 +128,16 @@ class HarnessSession:
         if self.tracker and self.tracker.is_running:
             self.tracker.update_harness_stream(self.name, usage, output_tokens)
 
+    def on_tool_result(self, usage: dict) -> None:
+        if self.tracker and self.tracker.is_running:
+            self.tracker.update_harness_tools(self.name, usage)
+
     def phase(self, phase: str) -> None:
         self.phase_name = phase
         self.events.append({"phase": phase, "timestamp": time.time()})
         if self.tracker and self.tracker.is_running:
             self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
+            self.tracker.update_harness_tools(self.name, self.dispatcher.tool_usage)
             self.tracker.set_phase(self.name, phase)
         else:
             print(f"  {self.name}: {phase}", flush=True)
@@ -178,13 +183,11 @@ class HarnessSession:
         details = {}
         for key in ("cached_tokens", "cache_write_tokens"):
             values = [(turn["usage"].get("prompt_tokens_details") or {}).get(key) for turn in turns]
-            details[key] = sum(values) if values and all(type(v) is int for v in values) else None
+            details[key] = (
+                sum(values) if values and all(type(v) is int and v >= 0 for v in values) else None
+            )
         aggregate["prompt_tokens_details"] = details
-        aggregate["cache_read_ratio"] = (
-            details["cached_tokens"] / aggregate["prompt_tokens"]
-            if details["cached_tokens"] is not None and aggregate["prompt_tokens"]
-            else None
-        )
+        aggregate["cache_read_ratio"] = cache_read_ratio(aggregate)
         return aggregate
 
     def result(self) -> dict:
@@ -207,6 +210,7 @@ class HarnessSession:
                 "dependency_policy": self.auto_install,
                 "model_id": self.model_id,
                 "tool_capability": self.tool_capability,
+                "tool_usage": self.dispatcher.tool_usage.copy(),
                 "generation": self.generation,
                 "repair": self.repair,
                 "phase": self.phase_name,
