@@ -171,6 +171,64 @@ async def test_compaction_high_effort_never_negotiates_down(monkeypatch):
         await runner.cleanup()
 
 
+async def test_every_text_batch_is_counted_before_waiting_for_more_data(monkeypatch):
+    received = asyncio.Event()
+    updates = []
+    native = {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140, "cost": 2.0}
+
+    async def handler(request):
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        # The server waits for the displayed count before sending the next batch.
+        # A time throttle without a trailing update strands the second batch.
+        for obj in [
+            {"choices": [{"delta": {"content": " red"}}]},
+            {"choices": [{"delta": {"content": " blue"}}]},
+            {"choices": [], "usage": native},
+            {"choices": [{"delta": {"content": " green"}}]},
+        ]:
+            received.clear()
+            await response.write(f"data: {json.dumps(obj)}\n\n".encode())
+            await asyncio.wait_for(received.wait(), 2)
+        await response.write(
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+        )
+        await response.write_eof()
+        return response
+
+    def on_usage(usage, output_tokens):
+        updates.append((usage, output_tokens))
+        received.set()
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    monkeypatch.setattr(
+        api, "API_URL", f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+    )
+    monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
+    try:
+        async with aiohttp.ClientSession() as session:
+            turn = await call_conversation(
+                session,
+                "offline",
+                "vendor/model",
+                [{"role": "user", "content": "build"}],
+                [],
+                max_tokens=100,
+                reasoning_effort=None,
+                on_usage=on_usage,
+            )
+        assert updates[:4] == [({}, 1), ({}, 2), (native, 2), (native, 3)]
+        assert turn.usage == native  # Local estimates never contaminate saved billing.
+        assert turn.message["content"] == " red blue green"
+    finally:
+        await runner.cleanup()
+
+
 def test_fragments_ids_reasoning_signatures_and_provider_fields():
     assembly = StreamAssembly()
     feed(
@@ -310,7 +368,10 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
                 on_retry=lambda *args: retries.append(args),
                 on_usage=lambda usage, tokens: usage_updates.append((usage, tokens)),
             )
-            assert usage_updates[-1] == (turn.usage, 20)
+            assert usage_updates[-1] == (
+                turn.usage,
+                count_tokens('café 🎉\nwb\n{"command":"ls"}'),
+            )
             assert turn.message["content"] == "café 🎉"
             assert len(retries) == 1 and retries[0][0] == 503
             messages.extend(
