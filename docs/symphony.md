@@ -116,6 +116,9 @@ it, add repository secrets `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, and
 `true`. Use a key scoped to the intended team/project. Public workflow output
 does not print Linear project names or workspace URLs.
 
+Automatic GitHub issue sync skips closed or unsynced issues. Manual dispatch
+still reports a missing Linear counterpart as an error.
+
 An issue gets at most `agent.max_attempts` execution/retry cycles (default: 3),
 with exponential backoff. Reaching the limit leaves its workspace intact and
 stops dispatching it for the lifetime of the daemon. Fix the issue or configuration

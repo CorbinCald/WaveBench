@@ -87,13 +87,11 @@ class LinearClient:
             with urllib.request.urlopen(request, timeout=30) as response:
                 response_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            response_body = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(f"Linear API HTTP {exc.code}: {response_body}") from exc
+            raise RuntimeError(f"Linear API HTTP {exc.code}") from exc
 
         payload = json.loads(response_body)
         if payload.get("errors"):
-            errors = json.dumps(payload["errors"], indent=2)
-            raise RuntimeError(f"Linear API errors: {errors}")
+            raise RuntimeError("Linear API reported GraphQL errors")
 
         return payload["data"]
 
@@ -158,6 +156,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retries", type=int, default=12, help="Number of Linear lookup attempts")
     parser.add_argument("--delay", type=float, default=5.0, help="Seconds between lookup attempts")
     parser.add_argument("--max-pages", type=int, default=3, help="Linear issue pages to scan")
+    parser.add_argument(
+        "--allow-missing", action="store_true", help="Skip issues without a Linear counterpart"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Find the issue without updating it")
     parser.add_argument("--linear-api-url", default=LINEAR_API_URL, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -189,6 +190,9 @@ def main() -> int:
             time.sleep(args.delay)
 
     if not issue:
+        if args.allow_missing:
+            print("No synced Linear counterpart; skipping this GitHub issue.")
+            return 0
         print(f"No synced Linear issue found for {github_issue_url}", file=sys.stderr)
         return 1
 
