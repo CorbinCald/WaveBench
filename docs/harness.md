@@ -280,6 +280,20 @@ repair time; an `after_all` wait does not inflate model performance time.
 Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
+The live dashboard and final results show a separate metrics line per model:
+total tokens, output tokens per second (`tk/s`), cost, and turns. Totals accumulate
+across build, repair, and context-compaction calls, including failed calls with
+reported usage. A turn is one model API call, including the current call; HTTP
+retries and individual tools within a call do not add turns.
+The elapsed timer beside the phase runs continuously for that model.
+
+While a call streams, `~` marks estimated input/output tokens and output speed.
+After the call, token totals and cost use provider reports; cost updates when
+each call finishes. Between calls and in final results, speed is reported output
+tokens divided by total API time, excluding tools, execution, and review waits.
+Missing provider usage or cost stays unknown. Metrics remain visible during
+linting, execution, repair, retries, and after failure or cancellation.
+
 Browser stdout/stderr from opening a preview is saved separately in
 `metadata/<model-slot>/browser.log`, including messages written after the
 launcher returns. The execution attempt records this path as `browser_log`.

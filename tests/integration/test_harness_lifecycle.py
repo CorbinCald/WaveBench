@@ -17,6 +17,7 @@ from wavebench.harness.session import HarnessBatch, HarnessSession
 from wavebench.harness.transport import Turn, TurnError
 from wavebench.harness.workspace import allocate_run
 from wavebench.tokens import prompt_tokens
+from wavebench.tui.progress import ProgressTracker
 
 
 @pytest.fixture
@@ -145,7 +146,18 @@ async def test_attempt_invariant_and_usage_across_repair(
     factory, monkeypatch, fail_first, fail_second, expected
 ):
     calls, conversations = scripted(monkeypatch, fail_first=fail_first, fail_second=fail_second)
-    session = factory(auto_open="off")
+    tracker = ProgressTracker(1, {})
+    tracker._running = True
+    session = factory(auto_open="off", tracker=tracker)
+    original = module.call_conversation
+    live_turns = []
+
+    async def streaming(*args, **kwargs):
+        kwargs["on_progress"](400)
+        live_turns.append(tracker._format_harness_metrics(session.name))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "call_conversation", streaming)
     await session.build()
     assert len(session.attempts) == 0 and session.generation == "submitted"
     await asyncio.gather(session.execute(), session.execute(), session.execute())
@@ -154,6 +166,12 @@ async def test_attempt_invariant_and_usage_across_repair(
     assert calls[session.model_id] == (6 if fail_first else 3)
     assert session.usage()["total_tokens"] == calls[session.model_id] * 15
     assert session.usage()["cost"] == pytest.approx(calls[session.model_id] * 0.001)
+    count = calls[session.model_id]
+    assert all(f"{i} turn" in row for i, row in enumerate(live_turns, 1))
+    metrics = tracker._format_harness_metrics(session.name)
+    assert f"{count * 15} tk" in metrics and f"{count} turns" in metrics
+    assert f"$0.00{count}" in metrics
+    assert tracker._harness[session.name]["api_s"] == session.api_seconds
     if fail_first:
         repair_message = conversations[session.model_id][3][-1]
         assert (
@@ -454,7 +472,9 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
         )
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=900_000), auto_open="off")
+    tracker = ProgressTracker(1, {})
+    tracker._running = True
+    session = factory(limits=Limits(total_tokens=900_000), auto_open="off", tracker=tracker)
     before = seed_context(session)
     key = session.cache_policy.key
     await session.build()
@@ -472,6 +492,9 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
     assert result["usage"]["cost"] == pytest.approx(0.008)
     assert result["harness"]["model_usage"]["total_tokens"] == 90
     assert result["harness"]["compaction"]["usage"]["total_tokens"] == 5500
+    metrics = tracker._format_harness_metrics(session.name)
+    assert "5,590 tk" in metrics and "$0.008" in metrics and "7 turns" in metrics
+    assert tracker._harness[session.name]["api_s"] == session.api_seconds
     assert session.compaction_seconds > 0
     assert session.build_seconds >= session.compaction_seconds
     record = session.compactions[0]

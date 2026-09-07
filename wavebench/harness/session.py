@@ -124,6 +124,7 @@ class HarnessSession:
         self.phase_name = phase
         self.events.append({"phase": phase, "timestamp": time.time()})
         if self.tracker and self.tracker.is_running:
+            self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
             self.tracker.set_phase(self.name, phase)
         else:
             print(f"  {self.name}: {phase}", flush=True)
@@ -273,6 +274,8 @@ class HarnessSession:
         self.compactions.append(record)
         self.phase("compacting")
         started = time.monotonic()
+        if self.tracker and self.tracker.is_running:
+            self.tracker.start_harness_turn(self.name, local_input)
         turn = None
         failed_usage = {}
         try:
@@ -290,6 +293,9 @@ class HarnessSession:
                     strict_reasoning=True,
                     cache_reuse=False,
                     input_tokens_bound=input_bound,
+                    on_progress=(lambda chars: self.tracker.update(self.name, chars))
+                    if self.tracker and self.tracker.is_running
+                    else None,
                     on_retry=self.on_retry,
                 ),
                 timeout,
@@ -342,6 +348,8 @@ class HarnessSession:
                     "error": record.get("error"),
                 }
             )
+            if self.tracker and self.tracker.is_running:
+                self.tracker.update_harness(self.name, self.usage(), self.api_seconds + elapsed)
             self.budget_tokens += usage.get("total_tokens") or (
                 input_bound + (prompt_tokens([turn.message], []) if turn else 0)
             )
@@ -410,6 +418,10 @@ class HarnessSession:
                 try:
                     async with self.api_slots:
                         started = time.monotonic()
+                        if self.tracker and self.tracker.is_running:
+                            self.tracker.start_harness_turn(
+                                self.name, self.prompt_estimate.estimate(local_input)
+                            )
                         turn = await asyncio.wait_for(
                             call_conversation(
                                 self.client,
@@ -428,6 +440,17 @@ class HarnessSession:
                             ),
                             max_seconds - active,
                         )
+                        self.turns.append(
+                            {
+                                "phase": phase,
+                                "usage": turn.usage,
+                                "model": turn.model,
+                                "provider": turn.provider,
+                                "finish_reason": turn.finish_reason,
+                                "adjustments": turn.adjustments,
+                                "input_tokens_bound": input_bound,
+                            }
+                        )
                 except BaseException as exc:
                     if started is not None:
                         usage = getattr(exc, "usage", {})
@@ -445,17 +468,8 @@ class HarnessSession:
                         elapsed = time.monotonic() - started
                         active += elapsed
                         self.api_seconds += elapsed
-                self.turns.append(
-                    {
-                        "phase": phase,
-                        "usage": turn.usage,
-                        "model": turn.model,
-                        "provider": turn.provider,
-                        "finish_reason": turn.finish_reason,
-                        "adjustments": turn.adjustments,
-                        "input_tokens_bound": input_bound,
-                    }
-                )
+                        if self.tracker and self.tracker.is_running:
+                            self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
                 explicit_cache = (turn.adjustments.get("cache") or {}).get("breakpoints")
                 measured_context = context_usage(
                     turn.usage, self.cache_policy.family if explicit_cache else "automatic"
