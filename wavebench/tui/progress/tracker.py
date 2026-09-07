@@ -395,32 +395,37 @@ class ProgressTracker:
         if not self._entered_alt_screen:
             return
         self._drawn_lines = 0
-        sys.stdout.write("\033[?25h\033[?1049l")
-        sys.stdout.flush()
         self._entered_alt_screen = False
-        if self._saved_termios is not None and termios is not None:
-            try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, self._saved_termios)
-            except Exception:
-                pass
-            self._saved_termios = None
+        try:
+            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.flush()
+        finally:
+            if self._saved_termios is not None and termios is not None:
+                try:
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, self._saved_termios)
+                except Exception:
+                    pass
+                self._saved_termios = None
 
     async def stop(self) -> None:
-        if not self._running:
-            self._exit_alt_screen()
-            return
+        was_running = self._running
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        try:
+            if self._task:
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+        finally:
             self._task = None
-        self._exit_alt_screen()
-        self._render_final()
-        sys.stdout.flush()
-        self._uninstall_hook()
+            try:
+                self._exit_alt_screen()
+            finally:
+                self._uninstall_hook()
+        if was_running:
+            self._render_final()
+            sys.stdout.flush()
 
     # ── internal rendering ────────────────────────────────────────────────
 

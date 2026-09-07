@@ -8,7 +8,7 @@ import binascii
 import html
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -303,7 +303,9 @@ class LinearClient:
 
         headers = _image_request_headers(url, self.config.api_key)
         try:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(
+                url, headers=headers, allow_redirects="Authorization" not in headers
+            ) as response:
                 if response.status != 200:
                     _LOG.info(
                         "linear_image_download_skipped status=%s source=%s url=%s",
@@ -618,14 +620,13 @@ def _is_likely_image_url(url: str) -> bool:
 
 def _is_linear_image_host(host: str) -> bool:
     normalized = host.lower().split(":", 1)[0]
-    return normalized in _LINEAR_IMAGE_HOSTS or any(
-        normalized.endswith(f".{suffix}") for suffix in _LINEAR_IMAGE_HOSTS
-    )
+    return normalized in _LINEAR_IMAGE_HOSTS
 
 
 def _image_request_headers(url: str, api_key: str | None) -> dict[str, str]:
     headers = {"User-Agent": "WaveBench-Symphony/1.0"}
-    if api_key and _is_linear_image_host(urlparse(url).netloc):
+    parsed = urlparse(url)
+    if api_key and parsed.scheme == "https" and _is_linear_image_host(parsed.netloc):
         headers["Authorization"] = api_key
     return headers
 
@@ -740,7 +741,7 @@ def _normalize_comments(node: dict[str, Any]) -> list[IssueComment]:
             )
         )
     comments.sort(
-        key=lambda comment: comment.created_at or datetime.min.replace(tzinfo=UTC),
+        key=lambda comment: comment.created_at or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
     return comments[:_COMMENT_LIMIT]

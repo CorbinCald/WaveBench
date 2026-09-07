@@ -15,7 +15,7 @@ to review.
 ## Local setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/CorbinCald/WaveBench.git
 cd WaveBench
 python -m venv .venv
 source .venv/bin/activate            # macOS / Linux
@@ -40,9 +40,21 @@ python -m pytest -x --lf               # stop on first failure; re-run last-fail
 python -m pytest --cov=wavebench       # coverage report (HTML in htmlcov/)
 ```
 
-The suite is intentionally fast; it currently runs in well under a second in
-the project venv. If your shell's default Python does not have the dev extras
-installed, use `.venv/bin/python -m pytest ...`.
+The full suite normally takes tens of seconds on Linux. If your shell's default
+Python does not have the dev extras installed, use `.venv/bin/python -m pytest ...`.
+
+Harness integration tests need Linux, Bubblewrap, system Python and Node, and
+working user namespaces. Follow the [sandbox setup](harness.md#isolation-and-dependency-policy).
+Prepare the tokenizer vocabulary once while online:
+
+```bash
+python -c 'import tiktoken; tiktoken.get_encoding("o200k_base")'
+WAVEBENCH_REQUIRE_SANDBOX_TESTS=1 python -m pytest
+```
+
+The environment variable makes missing sandbox support fail instead of skipping
+those tests. CI checks Python 3.10, 3.12, and 3.14. The remaining tests can be run
+on systems without the Harness runtime.
 
 Tests marked `@pytest.mark.slow` are **deselected by default** (via `addopts`
 in `pyproject.toml`). This marker gates live tests that make real OpenRouter
@@ -71,6 +83,10 @@ Ruff is configured in `pyproject.toml`. We use line-length 100 and the rule
 set `E, F, I, B, UP, SIM, RUF`. If a warning is wrong for a specific line,
 use `# noqa: <rule>` with a short explanation rather than disabling the rule
 globally.
+
+The dev extra and pre-commit pin the same Ruff version. After a toolchain update,
+reinstall `.[dev]` so local checks agree with CI. Keep the Ruff dev dependency and
+`.pre-commit-config.yaml` version together when upgrading.
 
 ## Where code lives
 
@@ -184,6 +200,7 @@ To add a new mode, for example `JsonMode`:
 
    ```python
    from .json import JSON_MODE  # noqa: E402
+
    register(JSON_MODE)
    ```
 

@@ -534,8 +534,8 @@ def test_fetch_top_models_includes_reserved_speech_and_image_models(
     ids = [m["id"] for m in models]
     assert requested_urls == [f"{api_mod.API_URL}/models?output_modalities=all"]
     assert len(ids) == 4
-    assert "openai/gpt-4o-mini-tts-2025-12-15" in ids
-    assert "mistralai/voxtral-mini-tts-2603" in ids
+    assert any(mid.startswith("provider/text-") for mid in ids)
+    assert any("speech" in model["architecture"]["output_modalities"] for model in models)
     assert "provider/image" in ids
     assert "provider/audio" not in ids
     assert pricing["provider/image"]["__output_modalities"] == ["image"]

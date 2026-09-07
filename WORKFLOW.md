@@ -2,7 +2,7 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  project_slug: "wavebench-9ecefbaf337c"
+  project_slug: $LINEAR_PROJECT_SLUG
   active_states:
     - Todo
     - In Progress
@@ -43,6 +43,7 @@ hooks:
 agent:
   max_concurrent_agents: 2
   max_turns: 3
+  max_attempts: 3
   max_retry_backoff_ms: 300000
 pi:
   command: pi --mode rpc --no-session --model openai/gpt-5.5 --thinking high

@@ -205,6 +205,15 @@ async def main_async(
                 mapping = MODEL_MAPPING
     pad = max((len(n) for n in mapping), default=12) + 1
 
+    if pricing_lookup:
+        missing = [mid for mid in mapping.values() if mid not in pricing_lookup]
+        if missing:
+            print(f"  {_skip} Models absent from the current OpenRouter catalog:")
+            for mid in missing:
+                print(f"    {mid}")
+            print("    They may be retired. Run wavebench --config to update your selection.")
+            print("    Continuing with your selection; private model IDs may still work.\n")
+
     if tts_mode:
         default_ext = f".{getattr(mode, 'response_format', 'mp3')}"
     elif image_mode:

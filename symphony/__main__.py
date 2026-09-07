@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Run one reconciliation/dispatch tick and exit (useful for smoke tests).",
+        help="Run one dispatch tick and exit. This can start real agent work; it is not a dry run.",
     )
     parser.add_argument(
         "--log-level",
@@ -110,10 +110,10 @@ async def _reload_if_changed(orchestrator: Orchestrator, workflow_path: Path) ->
     try:
         workflow = load_workflow(workflow_path)
         config = resolve_config(workflow)
+        orchestrator.update_config(config, workflow)
     except Exception as exc:
         _LOG.error("workflow_reload_failed keep_last_good=true error=%s", exc)
         return
-    orchestrator.update_config(config, workflow)
     _LOG.info("workflow_reload_completed workflow=%s", workflow_path)
 
 

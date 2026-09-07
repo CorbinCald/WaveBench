@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,9 +54,7 @@ class PiRpcClient:
         self._assert_workspace(workspace)
         try:
             self.process = await asyncio.create_subprocess_exec(
-                "bash",
-                "-lc",
-                self.config.command,
+                *shlex.split(self.config.command),
                 cwd=str(workspace),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
@@ -63,7 +62,7 @@ class PiRpcClient:
                 limit=10 * 1024 * 1024,
             )
         except FileNotFoundError as exc:
-            raise AgentError("pi_not_found", "bash or pi command was not found") from exc
+            raise AgentError("pi_not_found", "pi command was not found") from exc
         except OSError as exc:
             raise AgentError("startup_failed", f"failed to start pi RPC process: {exc}") from exc
 
@@ -627,4 +626,4 @@ def _event_error(update: dict[str, Any]) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()

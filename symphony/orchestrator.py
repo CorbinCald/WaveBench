@@ -8,11 +8,12 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from symphony.config import validate_dispatch_config
+from symphony.errors import ConfigError
 from symphony.models import (
     Issue,
     OrchestratorState,
@@ -49,8 +50,19 @@ class Orchestrator:
             max_concurrent_agents=config.agent.max_concurrent_agents,
         )
         self._stop = asyncio.Event()
+        self._pending: set[asyncio.Task] = set()
 
     def update_config(self, config: ServiceConfig, workflow: WorkflowDefinition) -> None:
+        if (
+            config.hooks != self.config.hooks
+            or config.pi.command != self.config.pi.command
+            or config.workspace_root != self.config.workspace_root
+            or config.git != self.config.git
+        ):
+            raise ConfigError(
+                "restart_required",
+                "hooks, pi.command, workspace.root, and git settings require a daemon restart",
+            )
         self.config = config
         self.workflow = workflow
         self.state.poll_interval_ms = config.polling_interval_ms
@@ -176,7 +188,7 @@ class Orchestrator:
         try:
             refreshed = await self.tracker.fetch_issue_states_by_ids(issue_ids)
         except Exception as exc:
-            _LOG.debug("state_refresh_failed keep_workers_running=true error=%s", exc)
+            _LOG.warning("state_refresh_failed keep_workers_running=true error=%s", exc)
             return
         refreshed_by_id = {issue.id: issue for issue in refreshed}
         active = _state_set(self.config.tracker.active_states)
@@ -206,8 +218,11 @@ class Orchestrator:
         if issue.id in self.state.review_blocked:
             if normalized == "todo":
                 self.state.review_blocked.discard(issue.id)
+                self.state.completed.discard(issue.id)
             else:
                 return False
+        if issue.id in self.state.completed:
+            return False
         if normalized != "todo" and _latest_comment_is_no_reviewable_changes_notice(issue):
             return False
         if self.available_slots() <= 0:
@@ -233,15 +248,19 @@ class Orchestrator:
             task=task,
             identifier=issue.identifier,
             retry_attempt=attempt,
-            started_at=datetime.now(UTC),
+            started_at=datetime.now(timezone.utc),
         )
         self.state.claimed.add(issue.id)
         retry = self.state.retry_attempts.pop(issue.id, None)
         if retry and retry.timer_task:
             retry.timer_task.cancel()
-        task.add_done_callback(
-            lambda done, issue_id=issue.id: asyncio.create_task(self._worker_done(issue_id, done))
-        )
+
+        def completed(done):
+            pending = asyncio.create_task(self._worker_done(issue.id, done))
+            self._pending.add(pending)
+            pending.add_done_callback(self._pending.discard)
+
+        task.add_done_callback(completed)
         _LOG.info(
             "dispatch_started issue_id=%s issue_identifier=%s attempt=%s",
             issue.id,
@@ -284,11 +303,16 @@ class Orchestrator:
         previous = self.state.retry_attempts.pop(issue_id, None)
         if previous and previous.timer_task:
             previous.timer_task.cancel()
-        delay_ms = (
-            1000
-            if continuation
-            else min(10_000 * (2 ** max(attempt - 1, 0)), self.config.agent.max_retry_backoff_ms)
-        )
+        if attempt >= self.config.agent.max_attempts:
+            self.state.completed.add(issue_id)
+            self.state.claimed.discard(issue_id)
+            _LOG.error(
+                "retry_limit_reached issue_identifier=%s max_attempts=%s; fix the issue and restart",
+                identifier,
+                self.config.agent.max_attempts,
+            )
+            return
+        delay_ms = min(10_000 * (2 ** max(attempt - 1, 0)), self.config.agent.max_retry_backoff_ms)
         due_at_ms = time.monotonic() * 1000 + delay_ms
         timer_task = asyncio.create_task(self._retry_after(issue_id, delay_ms / 1000))
         self.state.retry_attempts[issue_id] = RetryEntry(
@@ -330,16 +354,30 @@ class Orchestrator:
                 self.state.completed.add(issue_id)
                 self.state.claimed.discard(issue_id)
             else:
-                self.schedule_retry(issue_id, entry.identifier, 1, None, continuation=True)
+                next_attempt = (entry.retry_attempt or 0) + 1
+                if next_attempt >= self.config.agent.max_attempts:
+                    await self._post_status_comment(
+                        entry.issue,
+                        "Symphony reached its attempt limit while preparing review. "
+                        "Check the review state and workspace, then restart Symphony to retry.",
+                    )
+                self.schedule_retry(
+                    issue_id, entry.identifier, next_attempt, None, continuation=True
+                )
         else:
+            next_attempt = (entry.retry_attempt or 0) + 1
+            retry_note = (
+                "Attempt limit reached; fix the issue and restart Symphony to retry."
+                if next_attempt >= self.config.agent.max_attempts
+                else "Retrying with backoff."
+            )
             await self._post_status_comment(
                 entry.issue,
                 (
                     f"Symphony run failed for {entry.identifier}: "
-                    f"{result.error or result.status}. Retrying with backoff."
+                    f"{result.error or result.status}. {retry_note}"
                 ),
             )
-            next_attempt = (entry.retry_attempt or 0) + 1
             self.schedule_retry(
                 issue_id, entry.identifier, next_attempt, result.error or result.status
             )
@@ -369,7 +407,7 @@ class Orchestrator:
 
     async def _mark_issue_ready_for_review(self, entry: RunningEntry, result: RunResult) -> bool:
         if not self.config.tracker.auto_transition:
-            return False
+            return True
         review_state = self.config.tracker.review_state
         if not review_state:
             return False
@@ -564,7 +602,7 @@ class Orchestrator:
         stall_timeout_ms = self.config.pi.stall_timeout_ms
         if stall_timeout_ms <= 0:
             return
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         for issue_id, entry in list(self.state.running.items()):
             anchor = entry.last_agent_timestamp or entry.started_at
             elapsed_ms = (now - anchor).total_seconds() * 1000
@@ -585,7 +623,7 @@ class Orchestrator:
             entry = self.state.running.get(issue_id)
             if entry is None:
                 return
-            entry.last_agent_timestamp = datetime.now(UTC)
+            entry.last_agent_timestamp = datetime.now(timezone.utc)
             message = payload.get("message") or payload.get("event")
             if name == "agent_step":
                 _record_agent_step(entry, payload)
@@ -659,11 +697,11 @@ class Orchestrator:
         return running_for_state < limit
 
     def _add_runtime(self, entry: RunningEntry) -> None:
-        elapsed = (datetime.now(UTC) - entry.started_at).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - entry.started_at).total_seconds()
         self.state.agent_totals["seconds_running"] += max(elapsed, 0)
 
     def snapshot(self) -> dict[str, Any]:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         running = []
         for issue_id, entry in self.state.running.items():
             running.append(
@@ -717,7 +755,7 @@ class Orchestrator:
 def sort_for_dispatch(issues: list[Issue]) -> list[Issue]:
     def key(issue: Issue) -> tuple[int, datetime, str]:
         priority = issue.priority if issue.priority is not None else 999_999
-        created_at = issue.created_at or datetime.max.replace(tzinfo=UTC)
+        created_at = issue.created_at or datetime.max.replace(tzinfo=timezone.utc)
         return priority, created_at, issue.identifier
 
     return sorted(issues, key=key)
