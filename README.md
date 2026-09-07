@@ -232,3 +232,7 @@ pip install -e '.[dev]'
 pre-commit install
 pytest
 ```
+
+## License
+
+Licensed under the [MIT License](LICENSE).
