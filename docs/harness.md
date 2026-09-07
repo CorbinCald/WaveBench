@@ -288,11 +288,28 @@ reported usage. A turn is one model API call, including the current call; HTTP
 retries and individual tools within a call do not add turns.
 The elapsed timer beside the phase runs continuously for that model.
 
-While a call streams, `~` marks estimated input/output tokens and output speed.
-After the call, token totals and cost use provider reports; cost updates when
-each call finishes. Between calls and in final results, speed is reported output
+While a call streams, `~` marks estimated tokens, output speed, and cost. Output
+estimates tokenize the assembled text, tool arguments, and exposed reasoning;
+SSE framing, opaque signatures, and duplicate reasoning fields do not add tokens.
+Live cost combines measured charges from earlier calls with the current call's
+estimated input/output charge at its model's catalog rates. Compaction uses the
+compactor's rates. Cache discounts, hidden reasoning, and provider-specific
+charges can make estimates differ from the final bill.
+
+Provider usage replaces estimates as soon as it arrives. Token totals include
+every call's input and output; reasoning and cache-detail counts are subsets,
+not extra tokens to add again. Cost uses `usage.cost`, not the upstream cost or
+catalog pricing when provider billing is available. The global total adds the
+same unrounded values shown per model, including queued and finished models;
+rounding each displayed row separately can produce small display differences.
+
+If a failed or interrupted call omits usage, known subtotals remain visible with
+`≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
+unknown cost is never shown as zero. Locally rejected requests that never reach
+the API do not add turns. HTTP retries and tool calls do not add extra turns.
+Between calls and in final results, speed is reported output
 tokens divided by total API time, excluding tools, execution, and review waits.
-Missing provider usage or cost stays unknown. Metrics remain visible during
+Missing provider usage or cost remains explicitly incomplete. Metrics remain visible during
 linting, execution, repair, retries, and after failure or cancellation.
 
 Browser stdout/stderr from opening a preview is saved separately in

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from wavebench.harness.accounting import Measurement, reported_total
 from wavebench.tui.progress import ProgressTracker
 from wavebench.tui.progress import tracker as module
 
@@ -32,6 +33,7 @@ def tracker(monkeypatch):
 def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracker, monkeypatch):
     tracker.start_harness_turn("model", 500)
     tracker.update("model", 400)
+    tracker.update_harness_stream("model", {}, 100)
     monkeypatch.setattr(module.time, "monotonic", lambda: 12.0)
     row = plain(tracker._format_harness_metrics("model"))
     assert "~1,800 tk" in row and "~50 tk/s" in row
@@ -48,6 +50,7 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
     assert "$0.020" in row and "3 turns" in row
     tracker.start_harness_turn("model", 1000)
     tracker.update("model", 40)
+    tracker.update_harness_stream("model", {}, 10)
     row = plain(tracker._format_harness_metrics("model"))
     assert "~2,910 tk" in row and "4 turns" in row
     assert tracker._wave_completed_chars + tracker._active["model"]["chars"] == 440
@@ -138,3 +141,80 @@ async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypat
     else:
         assert "more…" not in frames[0]
     assert len(frames[0].splitlines()) <= 10
+
+
+def test_first_turn_cost_is_live_and_settles_without_double_counting(tracker):
+    tracker._pricing_lookup = {"vendor/expensive": {"prompt": "0.00001", "completion": "0.00005"}}
+    tracker._model_id_map = {"model": "vendor/expensive"}
+    tracker.update_harness("model", {"api_turns": 0}, 0)
+    tracker.start_harness_turn("model", 1000)
+    tracker.update_harness_stream("model", {}, 9000)
+    live = tracker._harness_metrics("model")
+    assert live["tokens"] == Measurement(10000, estimated=True)
+    assert live["cost"].value == pytest.approx(0.46)
+    assert live["cost"].estimated and live["turns"] == 1
+    assert "~$0.46" in tracker._format_harness_metrics("model")
+    assert tracker._cost_summary(live=True) == "~$0.46"
+    tracker.note_retry("model", 503, 1, 3, 1)
+    assert tracker._harness_metrics("model")["turns"] == 1
+
+    # Native counts include hidden reasoning; the provider's cached-input bill
+    # replaces the catalog estimate, rather than being added to it.
+    usage = {"prompt_tokens": 1000, "completion_tokens": 12000, "total_tokens": 13000, "cost": 0.60}
+    tracker.update_harness_stream("model", usage, 9000)
+    assert tracker._harness_metrics("model")["cost"] == Measurement(0.60)
+    assert tracker._harness_metrics("model")["tokens"] == Measurement(13000)
+    tracker.update_harness("model", {**usage, "api_turns": 1}, 10)
+    assert tracker._cost_summary(live=True) == "$0.60"
+    assert tracker._harness_metrics("model")["turns"] == 1
+    tracker._results["model"] = {
+        "usage": {**usage, "api_turns": 1},
+        "harness": {"timing": {"api_s": 10}},
+    }
+    assert tracker._cost_summary(live=True) == tracker._cost_summary() == "$0.60"
+
+
+def test_summary_includes_queued_models_and_marks_unknown_costs(tracker):
+    tracker.update_harness("queued", {"api_turns": 1, "cost": 1.5}, 2)
+    tracker.update_harness("unknown", {"api_turns": 1, "cost": None}, 2)
+    assert "cost unknown" in tracker._format_harness_metrics("unknown")
+    assert tracker._cost_summary(live=True) == "≥$1.51"
+    tracker.update_harness("unknown", {"api_turns": 1, "cost": 0}, 2)
+    assert "$0.000" in tracker._format_harness_metrics("unknown")
+    assert tracker._cost_summary(live=True) == "$1.51"
+
+
+def test_failed_call_keeps_known_subtotals_and_never_fabricates_full_usage(tracker):
+    usage = {
+        "api_turns": 3,
+        "total_tokens": None,
+        "cost": None,
+        "known_total_tokens": 1200,
+        "known_cost": 0.015,
+    }
+    tracker.update_harness("model", usage, 5)
+    row = tracker._format_harness_metrics("model")
+    assert "≥1,200 tk" in row and "≥$0.015" in row and "3 turns" in row
+    assert tracker._cost_summary(live=True) == "≥$0.015"
+
+
+def test_compaction_estimate_uses_the_compactor_price(tracker):
+    tracker._pricing_lookup = {
+        "expensive": {"prompt": "1", "completion": "10"},
+        "compactor": {"prompt": "0.00001", "completion": "0.00002"},
+    }
+    tracker._model_id_map = {"model": "expensive"}
+    tracker.start_harness_turn("model", 1000, model_id="compactor")
+    tracker.update_harness_stream("model", {}, 100)
+    assert tracker._harness_metrics("model")["cost"].value == pytest.approx(0.027)
+    assert tracker._harness_metrics("model")["turns"] == 3
+
+
+def test_total_tokens_do_not_add_cache_or_reasoning_twice():
+    usage = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 100,
+        "prompt_tokens_details": {"cached_tokens": 900, "cache_write_tokens": 10},
+        "completion_tokens_details": {"reasoning_tokens": 80},
+    }
+    assert reported_total(usage) == 1100

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import sys
 import time
@@ -15,6 +16,7 @@ from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
 from . import HARNESS_VERSION
+from .accounting import reported_total
 from .browser import open_preview
 from .commands import TOOL_SCHEMA, Dispatcher
 from .config import Limits
@@ -119,6 +121,12 @@ class HarnessSession:
         self._execution_started = False
         self._closed = False
         self.tool_capability = None
+        self._turn_usage: dict = {}
+
+    def on_usage(self, usage: dict, output_tokens: int) -> None:
+        self._turn_usage = usage
+        if self.tracker and self.tracker.is_running:
+            self.tracker.update_harness_stream(self.name, usage, output_tokens)
 
     def phase(self, phase: str) -> None:
         self.phase_name = phase
@@ -147,10 +155,19 @@ class HarnessSession:
         turns = self.turns if turns is None else turns
         aggregate = {"api_turns": len(turns), "usage_complete": bool(turns)}
         for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost"):
-            values = [turn["usage"].get(key) for turn in turns]
-            aggregate[key] = (
-                sum(values) if values and all(isinstance(v, (int, float)) for v in values) else None
-            )
+            values = [
+                reported_total(turn["usage"]) if key == "total_tokens" else turn["usage"].get(key)
+                for turn in turns
+            ]
+            known = [
+                value
+                for value in values
+                if type(value) in ((int, float) if key == "cost" else (int,))
+                and math.isfinite(value)
+                and value >= 0
+            ]
+            aggregate[f"known_{key}"] = sum(known) if known else None
+            aggregate[key] = sum(known) if values and len(known) == len(values) else None
         aggregate["usage_complete"] = all(
             aggregate[key] is not None
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
@@ -274,10 +291,12 @@ class HarnessSession:
         self.compactions.append(record)
         self.phase("compacting")
         started = time.monotonic()
+        self._turn_usage = {}
         if self.tracker and self.tracker.is_running:
-            self.tracker.start_harness_turn(self.name, local_input)
+            self.tracker.start_harness_turn(self.name, local_input, model_id=COMPACTION_MODEL)
         turn = None
         failed_usage = {}
+        request_sent = True
         try:
             # The caller owns the API slot and phase deadline. No wb tools are
             # exposed to the compactor, and High must never negotiate down.
@@ -297,6 +316,7 @@ class HarnessSession:
                     if self.tracker and self.tracker.is_running
                     else None,
                     on_retry=self.on_retry,
+                    on_usage=self.on_usage,
                 ),
                 timeout,
             )
@@ -321,9 +341,9 @@ class HarnessSession:
                 raise BudgetError(
                     "compaction cannot fit preserved messages and summary into the context budget"
                 )
-            charged = turn.usage.get("total_tokens") or (
-                input_bound + prompt_tokens([turn.message], [])
-            )
+            charged = reported_total(turn.usage)
+            if charged is None:
+                charged = input_bound + prompt_tokens([turn.message], [])
             if self.budget_tokens + charged > self.limits.total_tokens:
                 raise BudgetError("total token budget exhausted during context compaction")
             self.messages = replacement
@@ -331,28 +351,33 @@ class HarnessSession:
             self.cache_policy.reset()
             record.update(status="completed", after_tokens=replacement_estimate.estimate(after))
         except BaseException as exc:
-            failed_usage = getattr(exc, "usage", {})
+            failed_usage = getattr(exc, "usage", None) or self._turn_usage
+            request_sent = getattr(exc, "request_sent", True)
             record.update(status="failed", error=str(exc) or type(exc).__name__)
             raise
         finally:
             elapsed = time.monotonic() - started
             self.compaction_seconds += elapsed
             usage = turn.usage if turn else failed_usage
-            self.turns.append(
-                {
-                    "phase": "compacting",
-                    "usage": usage,
-                    "model": turn.model if turn else COMPACTION_MODEL,
-                    "provider": turn.provider if turn else None,
-                    "adjustments": turn.adjustments if turn else {},
-                    "error": record.get("error"),
-                }
-            )
+            if request_sent:
+                self.turns.append(
+                    {
+                        "phase": "compacting",
+                        "usage": usage,
+                        "model": turn.model if turn else COMPACTION_MODEL,
+                        "provider": turn.provider if turn else None,
+                        "adjustments": turn.adjustments if turn else {},
+                        "error": record.get("error"),
+                    }
+                )
+                charged = reported_total(usage)
+                self.budget_tokens += (
+                    charged
+                    if charged is not None
+                    else (input_bound + (prompt_tokens([turn.message], []) if turn else 0))
+                )
             if self.tracker and self.tracker.is_running:
                 self.tracker.update_harness(self.name, self.usage(), self.api_seconds + elapsed)
-            self.budget_tokens += usage.get("total_tokens") or (
-                input_bound + (prompt_tokens([turn.message], []) if turn else 0)
-            )
             record.update(time_s=elapsed, usage=usage)
             (self.metadata / f"compaction-{number:03d}.json").write_text(
                 json.dumps(
@@ -418,6 +443,7 @@ class HarnessSession:
                 try:
                     async with self.api_slots:
                         started = time.monotonic()
+                        self._turn_usage = {}
                         if self.tracker and self.tracker.is_running:
                             self.tracker.start_harness_turn(
                                 self.name, self.prompt_estimate.estimate(local_input)
@@ -437,6 +463,7 @@ class HarnessSession:
                                 if self.tracker and self.tracker.is_running
                                 else None,
                                 on_retry=self.on_retry,
+                                on_usage=self.on_usage,
                             ),
                             max_seconds - active,
                         )
@@ -452,8 +479,8 @@ class HarnessSession:
                             }
                         )
                 except BaseException as exc:
-                    if started is not None:
-                        usage = getattr(exc, "usage", {})
+                    if started is not None and getattr(exc, "request_sent", True):
+                        usage = getattr(exc, "usage", None) or self._turn_usage
                         self.turns.append(
                             {
                                 "phase": phase,
@@ -461,7 +488,8 @@ class HarnessSession:
                                 "error": str(exc) or type(exc).__name__,
                             }
                         )
-                        self.budget_tokens += usage.get("total_tokens") or input_bound
+                        charged = reported_total(usage)
+                        self.budget_tokens += charged if charged is not None else input_bound
                     raise
                 finally:
                     if started is not None:
@@ -476,8 +504,11 @@ class HarnessSession:
                 )
                 self.prompt_estimate.observe(local_input, measured_context)
                 self.turns[-1]["context_prompt_tokens"] = measured_context.get("prompt_tokens")
-                self.budget_tokens += turn.usage.get("total_tokens") or (
-                    input_bound + len(json.dumps(turn.message).encode())
+                charged = reported_total(turn.usage)
+                self.budget_tokens += (
+                    charged
+                    if charged is not None
+                    else (input_bound + prompt_tokens([turn.message], []))
                 )
                 self.messages.append(turn.message)
                 if self.budget_tokens > self.limits.total_tokens:

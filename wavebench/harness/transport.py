@@ -6,12 +6,16 @@ import asyncio
 import codecs
 import copy
 import json
+import time
 from dataclasses import dataclass
 
 import aiohttp
 
 from wavebench import api
 from wavebench.prompt_cache import CachePolicy, affinity
+from wavebench.tokens import count_tokens
+
+from .accounting import valid_number
 
 
 @dataclass
@@ -25,9 +29,10 @@ class Turn:
 
 
 class TurnError(RuntimeError):
-    def __init__(self, message: str, usage: dict | None = None):
+    def __init__(self, message: str, usage: dict | None = None, *, request_sent: bool = True):
         super().__init__(message)
         self.usage = usage or {}
+        self.request_sent = request_sent
 
 
 class StreamAssembly:
@@ -42,7 +47,34 @@ class StreamAssembly:
         self.provider = None
         self.finish = ""
         self.done = False
-        self.chars = 0
+
+    def output_text(self) -> str:
+        """Count generated text once, excluding SSE framing and opaque signatures."""
+        reasoning = self.message.get("reasoning") or "".join(
+            detail.get("text") or detail.get("summary") or ""
+            for detail in self.details.values()
+            if detail.get("type") in {"reasoning.text", "reasoning.summary"}
+        )
+        parts = [self.message.get("content") or "", reasoning]
+        for call in self.calls.values():
+            function = call.get("function") or {}
+            parts.extend([function.get("name") or "", function.get("arguments") or ""])
+        return "\n".join(part for part in parts if part)
+
+    @property
+    def chars(self) -> int:
+        return len(self.output_text())
+
+    @staticmethod
+    def merge_usage(target: dict, update: dict) -> None:
+        """Usage chunks are cumulative snapshots, never additive deltas."""
+        for key, value in update.items():
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                StreamAssembly.merge_usage(target.setdefault(key, {}), value)
+            else:
+                target[key] = value
 
     @staticmethod
     def merge(target: dict, delta: dict) -> None:
@@ -64,13 +96,13 @@ class StreamAssembly:
             obj = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise TurnError("malformed SSE JSON; no tools executed", self.usage) from exc
+        if obj.get("usage"):
+            self.merge_usage(self.usage, obj["usage"])
         if obj.get("error"):
             raise TurnError(f"mid-stream error: {str(obj['error'])[:500]}", self.usage)
-        if obj.get("usage"):
-            self.usage = obj["usage"]
         self.model = obj.get("model") or self.model
         self.provider = obj.get("provider") or self.provider
-        for choice in obj.get("choices", []):
+        for choice in obj.get("choices") or []:
             if choice.get("index", 0) != 0:
                 continue
             self.finish = choice.get("finish_reason") or self.finish
@@ -87,10 +119,6 @@ class StreamAssembly:
                 index = detail.get("index", len(self.details))
                 self.merge(self.details.setdefault(index, {}), detail)
             self.merge(self.message, delta)
-            self.chars += len(json.dumps(delta)) + sum(
-                len(c.get("function", {}).get("arguments", ""))
-                for c in choice.get("delta", {}).get("tool_calls", []) or []
-            )
 
     def complete(self) -> Turn:
         if not self.done or self.finish not in {"stop", "tool_calls"}:
@@ -146,6 +174,7 @@ async def call_conversation(
     cache_reuse: bool = True,
     strict_reasoning: bool = False,
     on_progress=None,
+    on_usage=None,
     on_retry=None,
 ) -> Turn:
     """Retry rejected HTTP requests only; never replay a partially received turn."""
@@ -163,7 +192,9 @@ async def call_conversation(
         api._MODEL_MAX_COMPLETION_CACHE.get(model_id, max_tokens),
     )
     if resolved < 1:
-        raise TurnError("conversation context budget exhausted; no request sent")
+        raise TurnError(
+            "conversation context budget exhausted; no request sent", request_sent=False
+        )
     reasoning = (
         api._reasoning_attempts(model_id, reasoning_effort, resolved) if reasoning_effort else []
     ) or [{}]
@@ -243,6 +274,26 @@ async def call_conversation(
                 decoder = codecs.getincrementaldecoder("utf-8")("strict")
                 buffer = ""
                 received = 0
+                last_update = 0.0
+                output_tokens = 0
+                last_usage = {}
+
+                async def report_usage(force=False, assembly=assembly):
+                    nonlocal last_update, output_tokens, last_usage
+                    now = time.monotonic()
+                    if on_usage and (
+                        force or assembly.usage != last_usage or now - last_update >= 0.25
+                    ):
+                        if valid_number(assembly.usage.get("completion_tokens")):
+                            output_tokens = assembly.usage["completion_tokens"]
+                        else:
+                            output_tokens = await asyncio.to_thread(
+                                count_tokens, assembly.output_text()
+                            )
+                        on_usage(copy.deepcopy(assembly.usage), output_tokens)
+                        last_usage = copy.deepcopy(assembly.usage)
+                        last_update = now
+
                 try:
                     async for raw in response.content.iter_any():
                         received += len(raw)
@@ -255,12 +306,18 @@ async def call_conversation(
                                 assembly.feed(line[5:].strip())
                         if on_progress:
                             on_progress(assembly.chars)
+                        await report_usage()
                     buffer += decoder.decode(b"", final=True)
                     if buffer.startswith("data:"):
                         assembly.feed(buffer[5:].strip())
+                    await report_usage(force=True)
                     turn = assembly.complete()
                 except (aiohttp.ClientError, UnicodeError) as exc:
                     raise TurnError(f"incomplete stream: {exc}", assembly.usage) from exc
+                finally:
+                    # Preserve any reported billable usage even on timeout/cancellation.
+                    if on_usage:
+                        on_usage(copy.deepcopy(assembly.usage), output_tokens)
                 turn.adjustments = {**adjustments, "reasoning": reasoning[reasoning_index]}
                 return turn
         await asyncio.sleep(wait)
