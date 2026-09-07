@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -200,7 +200,7 @@ def make_workflow(tmp_path: Path) -> WorkflowDefinition:
 
 
 def test_sort_for_dispatch_priority_created_identifier() -> None:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     issues = [
         Issue("2", "WB-2", "B", "Todo", priority=None, created_at=now),
         Issue("3", "WB-3", "C", "Todo", priority=1, created_at=now),

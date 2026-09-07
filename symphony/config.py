@@ -107,7 +107,7 @@ def resolve_config(
     api_key = _resolve_env_ref(_optional_str(tracker_raw.get("api_key")), env)
     if not api_key and tracker_kind == "linear":
         api_key = env.get("LINEAR_API_KEY") or None
-    project_slug = _optional_str(tracker_raw.get("project_slug"))
+    project_slug = _resolve_env_ref(_optional_str(tracker_raw.get("project_slug")), env)
     tracker = TrackerConfig(
         kind=tracker_kind,
         endpoint=endpoint,
@@ -139,6 +139,7 @@ def resolve_config(
             agent_raw.get("max_concurrent_agents"), 10, "agent.max_concurrent_agents"
         ),
         max_turns=_positive_int(agent_raw.get("max_turns"), 20, "agent.max_turns"),
+        max_attempts=_positive_int(agent_raw.get("max_attempts"), 3, "agent.max_attempts"),
         max_retry_backoff_ms=_positive_int(
             agent_raw.get("max_retry_backoff_ms"), 300_000, "agent.max_retry_backoff_ms"
         ),

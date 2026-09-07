@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       issue_url:
-        description: GitHub issue URL to assign to the Wavebench Linear project
+        description: GitHub issue URL to assign to the configured Linear project
         required: true
         type: string
 
@@ -15,20 +15,23 @@ permissions:
 
 jobs:
   assign-wavebench-project:
-    name: Assign synced Linear issue to Wavebench project
+    name: Assign synced Linear issue to the configured project
+    if: vars.LINEAR_SYNC_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
-      LINEAR_TEAM_KEY: COR
-      LINEAR_PROJECT_ID: d728667c-00ae-40a8-9f8b-122525275109
+      LINEAR_TEAM_KEY: ${{ secrets.LINEAR_TEAM_KEY }}
+      LINEAR_PROJECT_ID: ${{ secrets.LINEAR_PROJECT_ID }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Assign Linear project
         env:

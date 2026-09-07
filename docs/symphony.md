@@ -3,10 +3,14 @@
 This repo includes a small Python implementation of the OpenAI Symphony service specification:
 <https://github.com/openai/symphony/blob/main/SPEC.md>.
 
-This version uses [Pi](https://pi.dev) as the worker coding agent through Pi RPC mode instead of OpenAI Codex app-server. The relevant local Pi docs are:
+This version uses [Pi](https://pi.dev) as the worker coding agent through Pi RPC mode instead of OpenAI Codex app-server. To find the documentation shipped with your global Pi installation:
 
-- `/home/corbin/.npm-global/lib/node_modules/@mariozechner/pi-coding-agent/docs/rpc.md`
-- `/home/corbin/.npm-global/lib/node_modules/@mariozechner/pi-coding-agent/docs/sdk.md`
+```bash
+npm root -g
+```
+
+Look under `@mariozechner/pi-coding-agent/docs/` in that directory for `rpc.md`
+and `sdk.md`. Symphony supports Python 3.10 and later, like the WaveBench CLI.
 
 The Symphony package lives under `symphony/` and exposes a `symphony` console script.
 
@@ -30,8 +34,9 @@ This implementation is for trusted local automation experiments. Workspace path 
 Implementation-defined policies:
 
 - Native git automation is trusted repo configuration. It clones `git.repo`, creates/switches per-issue branches, skips rebases while the worktree is dirty, and uses `gh pr` for pull requests when configured.
-- Hook scripts are trusted repo configuration and run with `sh -lc` inside the per-issue workspace.
-- Pi is launched with `bash -lc <pi.command>` in the per-issue workspace.
+- Hook scripts are trusted startup configuration and run with `sh -lc` inside the per-issue workspace.
+- Pi is launched directly from the quoted executable and arguments in `pi.command`; shell operators and shell startup files are not evaluated. Put required environment variables in the daemon's environment or `.env`.
+- Changes to hooks, `pi.command`, workspace root, or Git settings require restarting the daemon. Hot reload rejects changes to these execution settings and keeps the last working configuration. Prompt, tracker, polling, and agent-limit changes can still reload.
 - Pi authentication, model selection, tools, extensions, skills, and provider policy come from your normal Pi setup and/or flags in `pi.command`.
 - Pi RPC extension UI dialog requests (`select`, `confirm`, `input`, `editor`) are automatically cancelled in unattended Symphony runs. Fire-and-forget UI notifications are logged/ignored.
 - Tracker state writes are built into the orchestrator only. Agents may use the `write-linear` skill for concise plans, blockers, evidence links, and final handoff comments.
@@ -74,6 +79,7 @@ Before production use, harden the host environment: run under a dedicated OS use
 
    ```env
    LINEAR_API_KEY=...
+   LINEAR_PROJECT_SLUG=your-project-slug
    ```
 
    The Symphony CLI auto-loads the workflow-adjacent `.env` before resolving `WORKFLOW.md` and before launching Pi workers. Already-exported environment variables take precedence over `.env` values.
@@ -85,7 +91,8 @@ Before production use, harden the host environment: run under a dedicated OS use
    gh auth status
    ```
 
-6. Edit the repo-root `WORKFLOW.md` and replace `project_slug` with your Linear project slug.
+6. Set `LINEAR_PROJECT_SLUG` in your shell or `.env`. The supplied workflow resolves
+   `project_slug: $LINEAR_PROJECT_SLUG`; it contains no maintainer-specific project ID.
 
 7. Start the daemon only when you are ready to dispatch real Linear work:
 
@@ -102,6 +109,19 @@ Before production use, harden the host environment: run under a dedicated OS use
    `python3 -m symphony --once ./WORKFLOW.md` is also a dispatching tick, not a dry run; use it only when you intentionally want Symphony to pick up eligible Linear issues.
 
 The default workflow stores issue workspaces under `.symphony/workspaces/`, which is gitignored.
+
+The optional GitHub issue-sync workflow is disabled in forks by default. To use
+it, add repository secrets `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, and
+`LINEAR_PROJECT_ID`, then set the repository variable `LINEAR_SYNC_ENABLED` to
+`true`. Use a key scoped to the intended team/project. Public workflow output
+does not print Linear project names or workspace URLs.
+
+An issue gets at most `agent.max_attempts` execution/retry cycles (default: 3),
+with exponential backoff. Reaching the limit leaves its workspace intact and
+stops dispatching it for the lifetime of the daemon. Fix the issue or configuration
+and restart to retry. With `auto_transition: false`, successful work completes
+without changing Linear state and is not immediately dispatched again. Successful
+work with an unavailable review state also stops after the bounded attempts.
 
 ## Git and branch lifecycle
 

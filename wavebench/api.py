@@ -16,6 +16,7 @@ Key entry points:
 """
 
 import asyncio
+import codecs
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 import aiohttp
@@ -94,8 +96,7 @@ async def _load_model_context_lengths(
         except Exception:
             # Fall back to legacy defaults if model metadata cannot be fetched.
             return
-        finally:
-            _MODEL_CONTEXTS_ATTEMPTED = True
+        _MODEL_CONTEXTS_ATTEMPTED = True
 
 
 async def _resolve_max_tokens(
@@ -216,6 +217,22 @@ def _retry_wait_seconds(retry_after_header: str | None, attempt: int) -> float:
         except ValueError:
             pass
     return min(_MAX_RETRY_WAIT_S, 2.0 ** (attempt - 1))
+
+
+@asynccontextmanager
+async def _request_with_retries(session, endpoint, headers, data, on_retry=None):
+    """Retry rejected HTTP requests only; never replay a response-body failure."""
+    for attempt in range(1, _MAX_RETRIES + 2):
+        async with session.post(f"{API_URL}/{endpoint}", headers=headers, json=data) as response:
+            if response.status not in _RETRYABLE_STATUSES or attempt > _MAX_RETRIES:
+                yield response
+                return
+            await response.read()
+            status = response.status
+            wait = _retry_wait_seconds(response.headers.get("Retry-After"), attempt)
+        if on_retry:
+            on_retry(status, attempt, _MAX_RETRIES, wait)
+        await asyncio.sleep(wait)
 
 
 def load_api_key() -> str | None:
@@ -490,6 +507,7 @@ async def call_model_async(
     return_usage: bool = False,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    on_retry: RetryCallback | None = None,
 ) -> Any:
     """Call the OpenRouter API for a specific model."""
     headers = {
@@ -530,10 +548,8 @@ async def call_model_async(
             f"    {_tri} {S.DIM}{model_id} 402 — retrying with "
             f"max_tokens={retry_data['max_tokens']}{S.RST}"
         )
-        async with session.post(
-            f"{API_URL}/chat/completions",
-            headers=headers,
-            json=retry_data,
+        async with _request_with_retries(
+            session, "chat/completions", headers, retry_data, on_retry
         ) as r:
             if r.status == 200:
                 body = await r.json()
@@ -549,10 +565,8 @@ async def call_model_async(
         for attempt_idx, extra in enumerate(attempts):
             data = {**base_data, **extra}
             try:
-                async with session.post(
-                    f"{API_URL}/chat/completions",
-                    headers=headers,
-                    json=data,
+                async with _request_with_retries(
+                    session, "chat/completions", headers, data, on_retry
                 ) as resp:
                     if resp.status == 200:
                         try:
@@ -588,9 +602,8 @@ async def call_model_async(
                             f"    {_tri} {S.DIM}{model_id}: {resp.status}"
                             f" — {text[:120].strip()}{S.RST}"
                         )
-                        if resp.status not in (429, 500, 502, 503, 504):
-                            raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
-            except asyncio.CancelledError:
+                        raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+            except (asyncio.CancelledError, RuntimeError):
                 raise
             except asyncio.TimeoutError:
                 print(f"    {_tri} {S.DIM}{model_id} reasoning err: timeout{S.RST}")
@@ -602,10 +615,8 @@ async def call_model_async(
             break  # non-400 failures skip remaining reasoning formats
 
     # Final attempt — without reasoning
-    async with session.post(
-        f"{API_URL}/chat/completions",
-        headers=headers,
-        json=base_data,
+    async with _request_with_retries(
+        session, "chat/completions", headers, base_data, on_retry
     ) as resp:
         if resp.status == 200:
             try:
@@ -633,10 +644,8 @@ async def call_model_async(
                 retry_max = max(1, limit - prompt_tokens_est - 512)
                 if retry_max < base_data["max_tokens"]:
                     retry_data = {**base_data, "max_tokens": retry_max}
-                    async with session.post(
-                        f"{API_URL}/chat/completions",
-                        headers=headers,
-                        json=retry_data,
+                    async with _request_with_retries(
+                        session, "chat/completions", headers, retry_data, on_retry
                     ) as retry_resp:
                         if retry_resp.status == 200:
                             body = await retry_resp.json()
@@ -694,9 +703,6 @@ async def call_model_streaming(
     if "gemini-3" in model_id.lower():
         base_data["temperature"] = 1.0
 
-    _stall_deadline = time.monotonic() + REASONING_STALL_TIMEOUT
-    _got_first_token = False
-
     async def _do_stream(data: dict) -> tuple[str | None, dict, int, str]:
         """Execute one streaming request.  Returns (content, usage, status, err).
 
@@ -704,7 +710,6 @@ async def call_model_streaming(
         with exponential backoff (or ``Retry-After`` when honored), notifying
         the caller via ``on_retry`` so the UI can surface throttle state.
         """
-        nonlocal _got_first_token
         parts: list[str] = []
         usage: dict = {}
         finish_reason = ""
@@ -721,10 +726,8 @@ async def call_model_streaming(
         last_err = ""
 
         for attempt in range(1, _MAX_RETRIES + 2):
-            if not _got_first_token and _stall_remaining() <= 0:
-                _raise_stall()
-
-            post_timeout = _stall_remaining() if not _got_first_token else None
+            _stall_deadline = time.monotonic() + REASONING_STALL_TIMEOUT
+            post_timeout = _stall_remaining()
             resp_ctx = session.post(f"{API_URL}/chat/completions", headers=headers, json=data)
             try:
                 resp = await asyncio.wait_for(resp_ctx.__aenter__(), timeout=post_timeout)
@@ -748,15 +751,13 @@ async def call_model_streaming(
                     return None, {}, resp.status, err
                 else:
                     buf = ""
+                    decoder = codecs.getincrementaldecoder("utf-8")("replace")
                     saw_done = False
                     content_stream = resp.content
                     while True:
-                        if not _got_first_token:
-                            remaining = _stall_remaining()
-                            if remaining <= 0:
-                                _raise_stall()
-                        else:
-                            remaining = None
+                        remaining = _stall_remaining()
+                        if remaining <= 0:
+                            _raise_stall()
 
                         try:
                             raw = await asyncio.wait_for(
@@ -769,7 +770,7 @@ async def call_model_streaming(
                         if not raw:
                             break
 
-                        buf += raw.decode("utf-8", errors="replace")
+                        buf += decoder.decode(raw)
                         while "\n" in buf:
                             line, buf = buf.split("\n", 1)
                             line = line.strip()
@@ -800,9 +801,9 @@ async def call_model_streaming(
                                         else "mid-stream error"
                                     )
                                     raise RuntimeError(f"{label}: {err_msg[:200]}")
-                                if "usage" in obj:
-                                    usage = obj["usage"]
-                                for ch in obj.get("choices", []):
+                                if isinstance(obj.get("usage"), dict):
+                                    usage.update(obj["usage"])
+                                for ch in obj.get("choices") or []:
                                     # "length" means the model was cut off by
                                     # max_tokens, not that it finished.  Keep
                                     # the last non-null one — callers use it to
@@ -811,7 +812,7 @@ async def call_model_streaming(
                                     fr = ch.get("finish_reason")
                                     if fr:
                                         finish_reason = fr
-                                    delta = ch.get("delta", {})
+                                    delta = ch.get("delta") or {}
                                     txt = delta.get("content", "")
                                     reasoning = delta.get("reasoning", "")
 
@@ -825,7 +826,7 @@ async def call_model_streaming(
                                         if txt:
                                             parts.append(txt)
                                         total_chars += len(txt) + len(reasoning)
-                                        _got_first_token = True
+                                        _stall_deadline = time.monotonic() + REASONING_STALL_TIMEOUT
                                         if on_progress:
                                             on_progress(total_chars)
                             except json.JSONDecodeError:
@@ -963,6 +964,8 @@ async def call_model_streaming(
             content, usage, status, err = await _do_stream(retry_data)
             if status == 200 and content:
                 return content, usage
+            if status == 200:
+                raise _empty_response_error(usage)
     raise RuntimeError(f"HTTP {status}: {err[:120].strip()}")
 
 
@@ -997,49 +1000,33 @@ async def call_tts_speech(
     if speed is not None:
         data["speed"] = speed
 
-    last_status = 0
-    last_err = ""
-    for attempt in range(1, _MAX_RETRIES + 2):
-        retry_wait_s: float | None = None
-        async with session.post(f"{API_URL}/audio/speech", headers=headers, json=data) as resp:
-            if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
-                last_status = resp.status
-                last_err = await resp.text()
-                retry_wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)
-                if on_retry:
-                    on_retry(last_status, attempt, _MAX_RETRIES, retry_wait_s)
-            elif resp.status != 200:
-                text = await resp.text()
-                raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
-            else:
-                chunks: list[bytes] = []
-                total_bytes = 0
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    if not chunk:
-                        continue
-                    chunks.append(chunk)
-                    total_bytes += len(chunk)
-                    if on_progress:
-                        on_progress(total_bytes)
+    async with _request_with_retries(session, "audio/speech", headers, data, on_retry) as resp:
+        if resp.status != 200:
+            text = await resp.text()
+            raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+        else:
+            chunks: list[bytes] = []
+            total_bytes = 0
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                total_bytes += len(chunk)
+                if on_progress:
+                    on_progress(total_bytes)
 
-                audio = b"".join(chunks)
-                if not audio:
-                    raise RuntimeError("empty audio response")
+            audio = b"".join(chunks)
+            if not audio:
+                raise RuntimeError("empty audio response")
 
-                usage: dict[str, Any] = {
-                    "input_characters": len(input_text),
-                    "audio_bytes": total_bytes,
-                }
-                generation_id = resp.headers.get("X-Generation-Id")
-                if generation_id:
-                    usage["generation_id"] = generation_id
-                return audio, usage
-
-        if retry_wait_s is not None:
-            await asyncio.sleep(retry_wait_s)
-            continue
-
-    raise RuntimeError(f"HTTP {last_status}: {last_err[:120].strip()}")
+            usage: dict[str, Any] = {
+                "input_characters": len(input_text),
+                "audio_bytes": total_bytes,
+            }
+            generation_id = resp.headers.get("X-Generation-Id")
+            if generation_id:
+                usage["generation_id"] = generation_id
+            return audio, usage
 
 
 async def call_image_generation(
@@ -1070,35 +1057,19 @@ async def call_image_generation(
     if image_config:
         data["image_config"] = image_config
 
-    last_status = 0
-    last_err = ""
-    for attempt in range(1, _MAX_RETRIES + 2):
-        retry_wait_s: float | None = None
-        async with session.post(f"{API_URL}/chat/completions", headers=headers, json=data) as resp:
-            if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
-                last_status = resp.status
-                last_err = await resp.text()
-                retry_wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)
-                if on_retry:
-                    on_retry(last_status, attempt, _MAX_RETRIES, retry_wait_s)
-            elif resp.status != 200:
-                text = await resp.text()
-                raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
-            else:
-                try:
-                    body = await resp.json()
-                    message = body["choices"][0]["message"]
-                except (KeyError, IndexError, json.JSONDecodeError) as exc:
-                    raise RuntimeError(f"parse error: {exc}")
-                if not isinstance(message, dict):
-                    raise RuntimeError("parse error: assistant message was not an object")
-                return message, body.get("usage", {})
-
-        if retry_wait_s is not None:
-            await asyncio.sleep(retry_wait_s)
-            continue
-
-    raise RuntimeError(f"HTTP {last_status}: {last_err[:120].strip()}")
+    async with _request_with_retries(session, "chat/completions", headers, data, on_retry) as resp:
+        if resp.status != 200:
+            text = await resp.text()
+            raise RuntimeError(f"HTTP {resp.status}: {text[:120].strip()}")
+        else:
+            try:
+                body = await resp.json()
+                message = body["choices"][0]["message"]
+            except (KeyError, IndexError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"parse error: {exc}")
+            if not isinstance(message, dict):
+                raise RuntimeError("parse error: assistant message was not an object")
+            return message, body.get("usage", {})
 
 
 def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1148,7 +1119,7 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
     image_filtered = []
     for m in all_models:
         mid = m.get("id", "")
-        arch = m.get("architecture", {})
+        arch = m.get("architecture") or {}
         out_mods = arch.get("output_modalities") or []
         in_mods = arch.get("input_modalities") or []
         has_text_output = "text" in out_mods
@@ -1189,9 +1160,14 @@ def fetch_top_models(api_key: str, count: int = 12) -> tuple[list[dict[str, Any]
     filtered.sort(key=_model_score, reverse=True)
     speech_filtered.sort(key=_model_score, reverse=True)
     image_filtered.sort(key=_model_score, reverse=True)
-    image_count = min(len(image_filtered), count, 20)
-    speech_count = min(len(speech_filtered), max(0, count - image_count), 20)
-    text_count = max(0, count - image_count - speech_count)
+    # Allocate in rounds so a small menu still represents each modality.
+    limits = [len(filtered), min(len(speech_filtered), 20), min(len(image_filtered), 20)]
+    counts = [0, 0, 0]
+    while sum(counts) < max(0, count) and counts != limits:
+        for index, limit in enumerate(limits):
+            if counts[index] < limit and sum(counts) < count:
+                counts[index] += 1
+    text_count, speech_count, image_count = counts
     return (
         filtered[:text_count] + speech_filtered[:speech_count] + image_filtered[:image_count]
     ), pricing_lookup

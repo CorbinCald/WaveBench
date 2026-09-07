@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shlex
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -280,7 +280,7 @@ def test_build_turn_prompt_appends_latest_linear_comments() -> None:
                 body="TTS fails for multiple providers.",
                 author="Corbin",
                 url="https://linear.app/comment-1",
-                created_at=datetime(2026, 5, 3, 12, 0, tzinfo=UTC),
+                created_at=datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
             )
         ],
     )

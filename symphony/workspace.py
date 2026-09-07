@@ -441,7 +441,7 @@ class WorkspaceManager:
         except asyncio.TimeoutError as exc:
             raise WorkspaceError(
                 error_code,
-                f"command timed out after {self.git.timeout_ms}ms: {' '.join(command)}",
+                f"command timed out after {self.git.timeout_ms}ms: {_redact_url_credentials(' '.join(command))}",
             ) from exc
         result = _CommandResult(
             process.returncode,
@@ -451,8 +451,10 @@ class WorkspaceManager:
         if check and result.returncode != 0:
             raise WorkspaceError(
                 error_code,
-                f"command exited {result.returncode}: {' '.join(command)}: "
-                f"{(result.stderr or result.stdout).strip()}",
+                _redact_url_credentials(
+                    f"command exited {result.returncode}: {' '.join(command)}: "
+                    f"{(result.stderr or result.stdout).strip()}"
+                ),
             )
         return result
 
@@ -549,3 +551,8 @@ def _truncate(text: str, max_chars: int = 4000) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "...<truncated>"
+
+
+def _redact_url_credentials(value: str) -> str:
+    """Keep credential-bearing clone URLs out of errors and tracker comments."""
+    return re.sub(r"(?i)(https?://)[^/\s@]+@", r"\1[redacted]@", value)

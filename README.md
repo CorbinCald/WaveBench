@@ -1,6 +1,8 @@
 # WaveBench
 
-A terminal-based tool for benchmarking Large Language Models side-by-side via the [OpenRouter](https://openrouter.ai/) API. Send one prompt to multiple models in parallel, compare their generated code, prose, or TTS audio, and track lifetime performance analytics from your terminal.
+A terminal tool for comparing large language models side by side through the [OpenRouter](https://openrouter.ai/) API. Send one prompt to multiple models, compare their generated projects, prose, speech, or images, and track performance and cost from your terminal. Runtime checks measure whether a project starts or runs successfully; you judge its quality.
+
+[![CI](https://github.com/CorbinCald/WaveBench/actions/workflows/ci.yml/badge.svg)](https://github.com/CorbinCald/WaveBench/actions/workflows/ci.yml)
 
 ## Prerequisites
 
@@ -47,6 +49,9 @@ Provide your OpenRouter API key via **environment variable** or a **`.env` file*
 OPENROUTER_API_KEY=your_key_here
 ```
 
+In a checkout, copy `.env.example` to `.env` and fill in your key. Keep real keys
+and private prompts out of commits and public issue reports.
+
 WaveBench stores model selection, user settings, analytics history, prompt history,
 and generated projects in the current working directory. Launch from your existing
 WaveBench directory to keep using its `.env`, settings, and history; new users can
@@ -74,6 +79,8 @@ Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**.
 | `--tts-voice VOICE` | Voice for TTS mode; defaults to `alloy` for OpenAI models; known non-OpenAI TTS models use provider voices automatically when the default is selected (for example Gemini `Kore`, Zonos `american_female`, Voxtral `en_paul_neutral`) |
 | `--tts-format mp3\|pcm` | Preferred audio format for TTS mode; defaults to `mp3` and is adjusted for providers such as Gemini that require `pcm` |
 | `--tts-speed FLOAT` | TTS playback speed multiplier for providers that support it |
+| `--image-aspect-ratio RATIO` | Set the image aspect ratio, such as `1:1` or `16:9`; enables custom image settings |
+| `--image-size 1K\|2K\|4K` | Set the requested image size; enables custom image settings |
 | `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
 | `--open off\|incremental\|after_all` / `--auto-open …` | Schedule harness validation and present managed previews. `off` still validates, headlessly; `after_all` waits for initial generation. New configurations default to `incremental` |
 | `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
@@ -87,7 +94,8 @@ wavebench --prompt "Create a multi-file Python CSV summary program"
 wavebench --mode harness --auto-open off --prompt "Build a static counter website with HTML, CSS and JavaScript"
 wavebench --prompt "Explain quantum computing" --mode text
 wavebench --prompt "Explain quantum computing" --text
-wavebench --prompt "Read this aloud in a calm tone" --mode tts --tts-voice nova
+wavebench --prompt "Read this aloud in a calm tone" --mode tts
+wavebench --prompt "A watercolor ocean wave" --mode image --image-aspect-ratio 16:9
 wavebench --config
 wavebench --stats
 ```
@@ -110,10 +118,11 @@ Harness uses explicit prompt caching for Anthropic, GPT-5.6 and later, and Gemin
 
 Open the interactive config menu with `wavebench --config` or by pressing `c` at the startup mode prompt.
 
-The menu has three tabs:
+The menu has four tabs:
 
 - **Models** — Search, browse, and toggle non-TTS models from the OpenRouter catalog. Models are ranked by provider tier, pricing, recency, supported capabilities, and context length. Press `+` to manually add a model by its OpenRouter ID.
 - **TTS** — Search, browse, and toggle speech-output models separately from the main model list. If no TTS models are selected, TTS mode falls back to the bundled OpenRouter TTS defaults.
+- **Image** — Select image-output models separately from text and speech models. If none are selected, image mode uses its bundled defaults.
 - **Settings** — Configure:
   - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Unsupported values are mapped per model where possible.
   - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`.
@@ -121,9 +130,17 @@ The menu has three tabs:
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
   - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
+  - **Harness limits** — Preview review timeout and separate build/repair time and token budgets. See [Harness limits](docs/harness.md#budgets-and-records).
   - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
+  - **Image settings** — Provider defaults or custom aspect ratio and image size.
 
 Selections persist across runs in local JSON files.
+
+Model availability changes over time. WaveBench warns when selected IDs are
+missing from a successfully fetched catalog. Use `wavebench --config` to replace
+retired selections. A warning keeps your selection intact because private model
+IDs may still work. If the catalog cannot be fetched, the app uses your saved or
+bundled selection without claiming that those IDs are unavailable.
 
 ## Output
 

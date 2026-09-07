@@ -194,24 +194,20 @@ def main() -> int:
 
     project = issue.get("project")
     if project and project["id"] == args.project_id:
-        print(f"{issue['identifier']} is already assigned to project {project['name']}")
+        print("The matching Linear issue is already assigned to the configured project.")
         return 0
 
-    print(f"Found synced Linear issue {issue['identifier']}: {issue['url']}")
+    print("Found the matching synced Linear issue.")
     if args.dry_run:
-        print(f"Dry run: would assign project {args.project_id}")
+        print("Dry run: would assign the configured project.")
         return 0
 
-    updated_issue = assign_issue_project(
+    assign_issue_project(
         client,
         issue_id=issue["id"],
         project_id=args.project_id,
     )
-    updated_project = updated_issue["project"]
-    print(
-        f"Assigned {updated_issue['identifier']} to project "
-        f"{updated_project['name']}: {updated_issue['url']}"
-    )
+    print("Assigned the Linear issue to the configured project.")
     return 0
 
 

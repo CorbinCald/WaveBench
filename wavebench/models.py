@@ -11,7 +11,7 @@ length. Also exposes ``is_stealth()``, ``is_tts_model()``, and
 import time
 
 MODEL_MAPPING: dict[str, str] = {
-    "gemini3_0Pro": "google/gemini-3-pro-preview",
+    "gemini3.1Pro": "google/gemini-3.1-pro-preview",
     "kimik2_5": "moonshotai/kimi-k2.5",
     "minimax_m2.5": "minimax/minimax-m2.5",
     "glm5": "z-ai/glm-5",
@@ -19,12 +19,9 @@ MODEL_MAPPING: dict[str, str] = {
 }
 
 TTS_MODEL_MAPPING: dict[str, str] = {
-    "gpt4oMiniTTS": "openai/gpt-4o-mini-tts-2025-12-15",
     "gemini3.1FlashTTS": "google/gemini-3.1-flash-tts-preview",
     "voxtralMiniTts2603": "mistralai/voxtral-mini-tts-2603",
     "csm1b": "sesame/csm-1b",
-    "zonosV0.1Hybrid": "zyphra/zonos-v0.1-hybrid",
-    "zonosV0.1Transformer": "zyphra/zonos-v0.1-transformer",
     "orpheus3b": "canopylabs/orpheus-3b-0.1-ft",
     "kokoro82m": "hexgrad/kokoro-82m",
 }

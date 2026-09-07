@@ -18,7 +18,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov",
-    "ruff>=0.5",
+    "ruff==0.16.6",
     "pre-commit",
 ]
 
@@ -26,6 +26,11 @@ dev = [
 wavebench = "wavebench.__main__:main"
 wb = "wavebench.harness.__main__:main"
 symphony = "symphony.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/CorbinCald/WaveBench"
+Issues = "https://github.com/CorbinCald/WaveBench/issues"
+Documentation = "https://github.com/CorbinCald/WaveBench/tree/main/docs"
 
 [tool.setuptools.packages.find]
 include = ["wavebench*", "symphony*"]
@@ -58,10 +63,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests can be a bit looser with idioms.
 "tests/**/*.py" = ["B011", "SIM117"]
-# interactive.py imports wavebench.* modules after a conditional
-# ``try: import tty/termios`` block — a legitimate pattern for optional
-# platform-specific deps; E402 doesn't apply.
-"wavebench/tui/interactive.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

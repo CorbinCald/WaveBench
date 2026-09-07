@@ -158,11 +158,12 @@ WaveBench stores local state in the current working directory:
 | `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping; TTS mode filters this to TTS-capable IDs and falls back to bundled TTS defaults if none are selected |
 | `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `tts_voice`, `tts_format`, `tts_speed` |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
-| `.benchmark_query_history.<mode>` | mode-specific prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`) |
+| `.benchmark_query_history.<mode>.json` | portable prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`), up to 500 entries per mode |
 
-For backward compatibility, Harness uses `.benchmark_query_history.code` and
-also reads the legacy `.benchmark_query_history` fallback. No historical files
-are rewritten. Harness records contain a versioned `harness` object; analytics
+For backward compatibility, Harness uses the `code` history category. It imports
+`.benchmark_query_history.code` and the older `.benchmark_query_history` fallback
+when the JSON file does not yet exist. New prompts are saved to JSON; original
+history files remain untouched. Harness records contain a versioned `harness` object; analytics
 show them in separate model rows from one-shot history.
 
 Persistent-state path helpers call `os.getcwd()` at use time. This keeps

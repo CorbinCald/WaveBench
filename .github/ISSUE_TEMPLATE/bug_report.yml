@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible WaveBench problem.
+body:
+  - type: markdown
+    attributes:
+      value: For vulnerabilities, use the private reporting link instead. Remove API keys and private prompts from any output you share.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python version, WaveBench commit, and mode.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal prompt or command that is safe to share.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitized output or screenshots
