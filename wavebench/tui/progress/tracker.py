@@ -93,6 +93,7 @@ class ProgressTracker:
         self._original_print = None
         self._active: dict[str, dict[str, Any]] = {}
         self._parsing: dict[str, dict[str, Any]] = {}
+        self._harness: dict[str, dict[str, Any]] = {}
         self._phases: dict[str, float] = {}
         # Live throttle/retry state per model. Cleared once the retry's
         # `until` deadline passes; total count survives so the active-row
@@ -245,6 +246,60 @@ class ProgressTracker:
         if phase == "finished":
             self.unregister(model_name)
             self.finish_parsing(model_name)
+
+    def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
+        """Publish cumulative usage after a turn, including failed calls and compaction."""
+        self._harness[model_name] = {"usage": usage, "api_s": api_seconds}
+
+    def start_harness_turn(self, model_name: str, input_tokens: int) -> None:
+        """Reset streaming counters without losing the model's lifetime or wave volume."""
+        if model_name not in self._active:
+            self.register(model_name)
+        active = self._active[model_name]
+        self._wave_completed_chars += active["chars"]
+        active.update(chars=0, last_chars=0, last_rate_time=0.0, smoothed_rate=0.0)
+        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
+        metrics.update(turn_start=time.monotonic(), input_tokens=input_tokens)
+
+    def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
+        if result is not None:
+            usage = result.get("usage") or {}
+            harness = result["harness"]
+            api_seconds = (harness.get("timing") or {}).get("api_s", 0)
+            turns = usage.get("api_turns", len(harness.get("turns", [])))
+            metrics = {}
+        else:
+            metrics = self._harness[name]
+            usage = metrics["usage"]
+            api_seconds = metrics["api_s"]
+            turns = usage.get("api_turns", 0)
+        tokens = usage.get("total_tokens")
+        completion = usage.get("completion_tokens")
+        cost = compute_cost(usage, self._model_pricing(name))
+        streaming = metrics.get("turn_start") is not None
+        if not turns:
+            tokens, completion, cost = 0, 0, 0.0
+        rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
+        rate_estimated = False
+        if streaming:
+            turns += 1
+            chars = self._active.get(name, {}).get("chars", 0)
+            if tokens is not None:
+                tokens += metrics["input_tokens"] + chars // 4
+            elapsed = time.monotonic() - metrics["turn_start"]
+            if chars and elapsed > 0:
+                rate = chars / 4 / elapsed
+                rate_estimated = True
+        token_s = f"{'~' if streaming else ''}{tokens:,} tk" if tokens is not None else "tk unknown"
+        rate_s = (
+            f"{'~' if rate_estimated else ''}{rate:,.0f} tk/s" if rate is not None else "tk/s —"
+        )
+        cost_s = (format_cost(cost) or "$0.000") if cost is not None else "cost unknown"
+        turn_s = f"{turns} {'turn' if turns == 1 else 'turns'}"
+        return (
+            f"  {S.DIM}{token_s}{S.RST} · {_styles.ACCENT}{rate_s}{S.RST} · "
+            f"{S.HYEL}{cost_s}{S.RST} · {S.DIM}{turn_s}{S.RST}"
+        )
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -440,6 +495,8 @@ class ProgressTracker:
             if cost is not None
             else (f"  {S.DIM}cost unknown{S.RST}" if info.get("harness") else "")
         )
+        if info.get("harness"):
+            cost_s = ""  # Harness metrics have their own line, preserving room for status.
         retries = info.get("retries") or []
         retry_s = ""
         if retries:
@@ -466,6 +523,8 @@ class ProgressTracker:
                 usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
             else:
                 usage_part = f"  {S.DIM}usage unknown{S.RST}" if info.get("harness") else ""
+            if info.get("harness"):
+                usage_part = ""
             outcome = (
                 f"runtime passed ({len(info['harness']['attempts'])} run(s))"
                 if info.get("harness")
@@ -524,6 +583,8 @@ class ProgressTracker:
 
         for i, (name, info) in enumerate(sorted(self._results.items(), key=_rank_key), 1):
             buf.append(_box_row(self._format_result_row(name, info, i, inner_w), w))
+            if info.get("harness"):
+                buf.append(_box_row(self._format_harness_metrics(name, info), w))
 
         buf.append(_box_sep("", w))
         ok = sum(1 for v in self._results.values() if v.get("status") == "success")
@@ -590,7 +651,12 @@ class ProgressTracker:
                 visible = 0
                 hidden = 0
                 for name in self._model_names:
-                    if visible >= max_model_rows:
+                    result = self._results.get(name)
+                    harness = name in self._harness or bool(result and result.get("harness"))
+                    row_count = 2 if harness else 1
+                    # Reserve one row for the hidden-model indicator when needed.
+                    reserve = int(name != self._model_names[-1])
+                    if visible + row_count + reserve > max_model_rows:
                         hidden += 1
                         if name in self._results:
                             completed_idx += 1
@@ -603,15 +669,28 @@ class ProgressTracker:
                         )
                     elif name in self._parsing:
                         pinfo = self._parsing[name]
-                        mel = format_duration(time.monotonic() - pinfo["start"])
+                        started = self._active[name]["start"] if harness else pinfo["start"]
+                        mel = format_duration(time.monotonic() - started)
                         dots = "·" * (1 + (idx // 4) % 3)
-                        boxes = self._token_boxes(name, pinfo.get("chars", 0))
+                        chars = (
+                            self._active.get(name, {}).get("chars", 0)
+                            if harness
+                            else pinfo.get("chars", 0)
+                        )
+                        boxes = self._token_boxes(name, chars)
                         row = (
                             f"{boxes}   "
                             f"{_rpad(name, self._pad)}  "
                             f"{S.DIM}{pinfo.get('label', 'parsing')}{dots:<4}"
                             f"  {mel:>7}{S.RST}"
                         )
+                        rinfo = self._retries.get(name)
+                        if harness and rinfo and rinfo["until"] > time.monotonic():
+                            remain = max(0.0, rinfo["until"] - time.monotonic())
+                            row = (
+                                f"{boxes}   {_rpad(name, self._pad)}  {S.YEL}HTTP {rinfo['status']}"
+                                f" retry {rinfo['attempt']}/{rinfo['max']} in {remain:.1f}s{S.RST}"
+                            )
                     elif name in self._active:
                         ainfo = self._active[name]
                         mel = format_duration(time.monotonic() - ainfo["start"])
@@ -717,6 +796,12 @@ class ProgressTracker:
                     buf.append(_box_row(row, w) + "\033[K\n")
                     lines += 1
                     visible += 1
+                    if harness:
+                        buf.append(
+                            _box_row(self._format_harness_metrics(name, result), w) + "\033[K\n"
+                        )
+                        lines += 1
+                        visible += 1
 
                 if hidden > 0:
                     buf.append(_box_row(f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")
@@ -733,7 +818,12 @@ class ProgressTracker:
                         running_cost += c
                         has_cost = True
                 for an, ai in self._active.items():
-                    c = self._live_cost_for_active(an, ai["chars"])
+                    if an in self._results:
+                        continue
+                    if an in self._harness:
+                        c = compute_cost(self._harness[an]["usage"], self._model_pricing(an))
+                    else:
+                        c = self._live_cost_for_active(an, ai["chars"])
                     if c is not None:
                         running_cost += c
                         has_cost = True
