@@ -17,6 +17,7 @@ import math
 import shutil
 import sys
 import time
+from collections import deque
 from typing import Any
 
 try:
@@ -262,12 +263,38 @@ class ProgressTracker:
             input_tokens=input_tokens,
             output_tokens=0,
             current_usage={},
+            usage_anchors={},
+            rate_samples=deque(),
             model_id=model_id or self._model_id_map.get(model_name, ""),
         )
 
     def update_harness_stream(self, name: str, usage: dict, output_tokens: int) -> None:
-        if name in self._harness:
-            self._harness[name].update(current_usage=usage, output_tokens=output_tokens)
+        """Publish provider snapshots alongside the separately tokenized visible output."""
+        metrics = self._harness.get(name)
+        if metrics is None or metrics.get("turn_start") is None:
+            return
+        now = time.monotonic()
+        delta = output_tokens - metrics["output_tokens"]
+        if delta:
+            metrics["rate_samples"].append((now, delta))
+        self._harness_live_rate(metrics, now)
+        previous = metrics["current_usage"]
+        # An intermediate provider snapshot covers output received up to here.
+        # Estimate only subsequent output until the next native measurement.
+        for key in ("completion_tokens", "total_tokens", "cost"):
+            value = reported_total(usage) if key == "total_tokens" else usage.get(key)
+            old = reported_total(previous) if key == "total_tokens" else previous.get(key)
+            if key not in metrics["usage_anchors"] or value != old:
+                metrics["usage_anchors"][key] = output_tokens
+        metrics.update(current_usage=usage, output_tokens=output_tokens)
+
+    @staticmethod
+    def _harness_live_rate(metrics: dict, now: float) -> float:
+        """Tokens received in the trailing second; expire even without stream callbacks."""
+        samples = metrics["rate_samples"]
+        while samples and samples[0][0] <= now - 1.0:
+            samples.popleft()
+        return max(0, sum(delta for _, delta in samples))
 
     def _harness_metrics(self, name: str, result: dict | None = None) -> dict:
         if result is not None:
@@ -285,7 +312,11 @@ class ProgressTracker:
         completion = usage.get("completion_tokens")
         cost = settled(usage, "cost", turns)
         streaming = metrics.get("turn_start") is not None
-        rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
+        # Only completed results show the average over API time. Tool/queue waits
+        # on an unfinished model have no live output throughput.
+        rate = 0.0
+        if result is not None:
+            rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
         rate_estimated = False
         if streaming:
             turns += 1
@@ -294,25 +325,32 @@ class ProgressTracker:
             if not valid_number(prompt):
                 prompt = metrics["input_tokens"]
             output = current.get("completion_tokens")
-            rate_estimated = not valid_number(output)
-            if rate_estimated:
+            if valid_number(output):
+                output += max(
+                    0, metrics["output_tokens"] - metrics["usage_anchors"]["completion_tokens"]
+                )
+            else:
                 output = metrics["output_tokens"]
             total = reported_total(current)
+            extra = max(
+                0, metrics["output_tokens"] - metrics["usage_anchors"].get("total_tokens", 0)
+            )
             tokens += (
-                Measurement(total)
+                Measurement(total + extra, estimated=bool(extra))
                 if total is not None
                 else Measurement(prompt + output, estimated=True)
             )
             current_cost = current.get("cost")
-            cost += (
-                Measurement(current_cost)
-                if valid_number(current_cost)
-                else estimate_cost(
-                    prompt, output, self._pricing_lookup.get(metrics["model_id"], {})
-                )
-            )
-            elapsed = time.monotonic() - metrics["turn_start"]
-            rate = output / elapsed if output and elapsed > 0 else None
+            pricing = self._pricing_lookup.get(metrics["model_id"], {})
+            if valid_number(current_cost):
+                cost += Measurement(current_cost)
+                extra = max(0, metrics["output_tokens"] - metrics["usage_anchors"].get("cost", 0))
+                if extra:
+                    cost += estimate_cost(0, extra, {**pricing, "prompt": "0", "request": "0"})
+            else:
+                cost += estimate_cost(prompt, output, pricing)
+            rate = self._harness_live_rate(metrics, time.monotonic())
+            rate_estimated = rate > 0
         return {
             "tokens": tokens,
             "cost": cost,

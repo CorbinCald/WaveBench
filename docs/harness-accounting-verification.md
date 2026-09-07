@@ -64,3 +64,42 @@ Validation: `pytest -q` — 710 passed, one live test deselected.
 Accounting references: [OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting),
 [reasoning tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
 and [prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+
+## Live speed and stalled-stream follow-up — 2026-09-07
+
+Harness was displaying a whole-call average during generation and carrying the
+completed-call average into tool phases. Its token-update throttle also depended
+on another network chunk arriving, which could leave the count behind during a
+pause. Live TPS now measures output received in the trailing second; counts
+update on each text batch. Both use the local tokenizer. A provider accounting
+correction changes totals without being counted as a burst of streamed tokens.
+Output after an intermediate usage snapshot continues to advance estimated
+tokens and cost until the next provider measurement.
+
+Ran the real interactive `--mode harness` prompt editor in an 80 × 28 PTY with
+isolated settings and a local HTTP/SSE server. The server supplied five exposed
+reasoning tokens per second, paused for five seconds, resumed, and then supplied
+write/lint/done tool calls. This deterministic check made no paid API calls.
+
+Captured rows (decoration and optional path removed):
+
+```text
+Pause  building  ~10,015 tk  0 tk/s  ~$0.10  1 turn   4.2s
+Pause  building  ~10,020 tk ~5 tk/s  ~$0.10  1 turn   9.1s
+Pause  passed    30,300 tk  28 tk/s   $0.37  3 turns 10.7s
+```
+
+The count stayed at 10,015 and TPS stayed zero throughout the measured pause;
+resuming added five tokens and showed 5 TPS. All 136 captured model rows fit on
+one line within 80 columns. The generated Python program passed lint and printed
+`42`. Saved usage matched the three supplied reports: 30,300 total tokens,
+300 output tokens, three turns, and $0.369 cost. Final TPS remained the average
+over API time. Raw recordings and generated files were temporary.
+
+Validation: `python -m pytest` — 716 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+The automated regressions cover five-second stalls without callbacks, resumed
+output, intermediate usage, final reconciliation, turn resets, and HTTP batches
+that arrive before the former throttle interval expires.
+
+Protocol reference: [OpenRouter streaming and final usage chunks](https://openrouter.ai/docs/api_reference/streaming).

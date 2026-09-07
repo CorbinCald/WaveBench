@@ -6,7 +6,6 @@ import asyncio
 import codecs
 import copy
 import json
-import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -14,8 +13,6 @@ import aiohttp
 from wavebench import api
 from wavebench.prompt_cache import CachePolicy, affinity
 from wavebench.tokens import count_tokens
-
-from .accounting import valid_number
 
 
 @dataclass
@@ -177,7 +174,11 @@ async def call_conversation(
     on_usage=None,
     on_retry=None,
 ) -> Turn:
-    """Retry rejected HTTP requests only; never replay a partially received turn."""
+    """Retry rejected HTTP requests only; never replay a partially received turn.
+
+    ``on_usage`` receives raw provider usage and a separate local output-token
+    estimate. The estimate tracks visible streaming progress, not billable usage.
+    """
     await api._load_model_context_lengths(session, api_key)
     serialized = json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False)
     # The controller can anchor its estimate to provider-reported prompt usage.
@@ -274,25 +275,25 @@ async def call_conversation(
                 decoder = codecs.getincrementaldecoder("utf-8")("strict")
                 buffer = ""
                 received = 0
-                last_update = 0.0
                 output_tokens = 0
+                last_text = ""
                 last_usage = {}
 
                 async def report_usage(force=False, assembly=assembly):
-                    nonlocal last_update, output_tokens, last_usage
-                    now = time.monotonic()
-                    if on_usage and (
-                        force or assembly.usage != last_usage or now - last_update >= 0.25
-                    ):
-                        if valid_number(assembly.usage.get("completion_tokens")):
-                            output_tokens = assembly.usage["completion_tokens"]
-                        else:
-                            output_tokens = await asyncio.to_thread(
-                                count_tokens, assembly.output_text()
-                            )
+                    nonlocal output_tokens, last_text, last_usage
+                    if not on_usage:
+                        return
+                    text = assembly.output_text()
+                    if force or text != last_text or assembly.usage != last_usage:
+                        # Publish every received text batch, including the last batch
+                        # before a pause. Heartbeats/usage-only frames need no recount.
+                        # Keep visible output separate from provider accounting so a
+                        # final usage correction cannot look like a burst of tokens.
+                        if text != last_text:
+                            output_tokens = await asyncio.to_thread(count_tokens, text)
                         on_usage(copy.deepcopy(assembly.usage), output_tokens)
+                        last_text = text
                         last_usage = copy.deepcopy(assembly.usage)
-                        last_update = now
 
                 try:
                     async for raw in response.content.iter_any():
