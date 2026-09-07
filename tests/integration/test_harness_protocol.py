@@ -30,6 +30,7 @@ def feed(assembly, delta, **extra):
     "model,field",
     [
         ("openai/gpt-5.6-luna", "prompt_cache_breakpoint"),
+        ("openai/gpt-6-astra", "prompt_cache_breakpoint"),
         ("anthropic/claude-haiku-4.5", "cache_control"),
         ("google/gemini-2.5-flash", "cache_control"),
     ],
@@ -77,6 +78,8 @@ async def test_cache_wire_payload_is_stable_across_http_retry(monkeypatch, model
         assert requests[0] == requests[1]
         assert requests[0]["tools"] == TOOL_SCHEMA
         assert field in requests[0]["messages"][0]["content"][0]
+        if model.startswith("openai/"):
+            assert requests[0]["prompt_cache_options"] == {"mode": "implicit", "ttl": "30m"}
         assert messages == original
         assert turn.usage["prompt_tokens_details"]["cached_tokens"] == 9000
         assert turn.adjustments["cache"]["session_id"] == policy.key
@@ -190,7 +193,8 @@ def test_partial_or_truncated_calls_never_complete(finish, done, arguments):
         assembly.complete()
 
 
-async def test_real_http_retry_utf8_stream_and_second_conversation_request(monkeypatch):
+@pytest.mark.parametrize("model", ["vendor/model", "openai/gpt-6-astra"])
+async def test_real_http_retry_utf8_stream_and_second_conversation_request(monkeypatch, model):
     requests = []
     retries = []
 
@@ -246,16 +250,18 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
     monkeypatch.setattr(api, "API_URL", f"http://127.0.0.1:{port}")
     monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
     messages = [{"role": "user", "content": "build"}]
+    policy = CachePolicy(model)
     try:
         async with aiohttp.ClientSession() as session:
             turn = await call_conversation(
                 session,
                 "test-key",
-                "vendor/model",
+                model,
                 messages,
                 TOOL_SCHEMA,
                 max_tokens=100,
                 reasoning_effort="low",
+                cache_policy=policy,
                 on_retry=lambda *args: retries.append(args),
             )
             assert turn.message["content"] == "café 🎉"
@@ -268,15 +274,16 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
             )
             # The unchanged conversation prefix has a measured token count;
             # its JSON byte length alone would reject this smaller context.
-            monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, "vendor/model", 1200)
+            monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1200)
             second_turn = await call_conversation(
                 session,
                 "test-key",
-                "vendor/model",
+                model,
                 messages,
                 TOOL_SCHEMA,
                 max_tokens=100,
                 reasoning_effort="low",
+                cache_policy=policy,
                 input_tokens_bound=50,
             )
             assert second_turn.adjustments["context_bound"] == 1074
@@ -285,7 +292,13 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
         assert requests[0] == requests[1]
         assert requests[-1]["messages"][-2] == turn.message
         assert requests[-1]["messages"][-1]["tool_call_id"] == "call-one"
-        assert requests[-1]["model"] == "vendor/model"
+        assert requests[-1]["model"] == model
+        if model.startswith("openai/"):
+            assert all(
+                request["prompt_cache_options"]["mode"] == "implicit" for request in requests
+            )
+            assert requests[-1]["prompt_cache_key"] == requests[0]["prompt_cache_key"]
+            assert requests[-1]["messages"][-1] == messages[-1]
     finally:
         await runner.cleanup()
 

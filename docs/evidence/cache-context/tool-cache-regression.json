@@ -1,0 +1,428 @@
+{
+  "date": "2026-09-06",
+  "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "affected_run": "001-gpt6Astra-11151a34568a",
+  "diagnosis": [
+    {
+      "variant": "current_tool_marker",
+      "request": 1,
+      "id": "gen-1788745064-ZDUzXHu2T2jI5HYliAX1",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_ratio": 0.0,
+      "cost": 0.08829,
+      "input_cost": 0.08509
+    },
+    {
+      "variant": "current_tool_marker",
+      "request": 2,
+      "id": "gen-1788745067-mjgRqfoFbEJ6GaXPFlTy",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_ratio": 0.0,
+      "cost": 0.08829,
+      "input_cost": 0.08509
+    },
+    {
+      "variant": "translated_tool_marker",
+      "request": 1,
+      "id": "gen-1788745069-rcMzGtFwjf6fnA9fMQwR",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_ratio": 0.0,
+      "cost": 0.08829,
+      "input_cost": 0.08509
+    },
+    {
+      "variant": "translated_tool_marker",
+      "request": 2,
+      "id": "gen-1788745073-zuz0v14nEagExxV1Q5ZI",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_ratio": 0.0,
+      "cost": 0.08829,
+      "input_cost": 0.08509
+    },
+    {
+      "variant": "implicit",
+      "request": 1,
+      "id": "gen-1788745076-Fx9lWMRtOz5VlmW5a0E0",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 0,
+      "cache_write_tokens": 8434,
+      "cache_read_ratio": 0.0,
+      "cost": 0.109375,
+      "input_cost": 0.106175
+    },
+    {
+      "variant": "implicit",
+      "request": 2,
+      "id": "gen-1788745080-330VF3n5sAQg1He2SnDa",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 64,
+      "cached_tokens": 8434,
+      "cache_write_tokens": 0,
+      "cache_read_ratio": 0.9911858032671289,
+      "cost": 0.012384,
+      "input_cost": 0.009184
+    }
+  ],
+  "upstream_conversion": {
+    "sent_mode": {
+      "mode": "explicit",
+      "ttl": "30m"
+    },
+    "sent_markers": [
+      {
+        "message_index": 1,
+        "role": "user",
+        "marker": {
+          "mode": "explicit"
+        }
+      },
+      {
+        "message_index": 5,
+        "role": "tool",
+        "marker": {
+          "mode": "explicit"
+        }
+      }
+    ],
+    "upstream_mode": {
+      "mode": "explicit",
+      "ttl": "30m"
+    },
+    "upstream_markers": [
+      {
+        "input_index": 1,
+        "role": "user",
+        "marker": {
+          "mode": "explicit"
+        }
+      }
+    ],
+    "upstream_tool_results": [
+      {
+        "input_index": 3,
+        "type": "function_call_output",
+        "output_type": "str",
+        "has_marker": false
+      },
+      {
+        "input_index": 7,
+        "type": "function_call_output",
+        "output_type": "str",
+        "has_marker": false
+      }
+    ]
+  },
+  "fixed_original_context_replay": [
+    {
+      "original_turn": 3,
+      "id": "gen-1788745411-dgX0gnyuK1s3qJknQFQq",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8509,
+      "completion_tokens": 61,
+      "cached_tokens": 0,
+      "cache_write_tokens": 8434,
+      "cache_read_ratio": 0.0,
+      "cost": 0.109225,
+      "input_cost": 0.106175
+    },
+    {
+      "original_turn": 4,
+      "id": "gen-1788745415-AhCDihGcMwSiZS19jfPB",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 8883,
+      "completion_tokens": 64,
+      "cached_tokens": 8434,
+      "cache_write_tokens": 374,
+      "cache_read_ratio": 0.9494540132838005,
+      "cost": 0.017059,
+      "input_cost": 0.013859
+    },
+    {
+      "original_turn": 5,
+      "id": "gen-1788745425-AihOJ5Vs0UA4agH9nPYL",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 9029,
+      "completion_tokens": 64,
+      "cached_tokens": 8808,
+      "cache_write_tokens": 146,
+      "cache_read_ratio": 0.9755233137667516,
+      "cost": 0.014583,
+      "input_cost": 0.011383
+    },
+    {
+      "original_turn": 6,
+      "id": "gen-1788745428-NAt8W5BmP8mwHUcZ0mfH",
+      "model": "openai/gpt-6-astra",
+      "provider": "OpenAI",
+      "prompt_tokens": 9229,
+      "completion_tokens": 64,
+      "cached_tokens": 8954,
+      "cache_write_tokens": 200,
+      "cache_read_ratio": 0.9702026221692491,
+      "cost": 0.015404,
+      "input_cost": 0.012204
+    }
+  ],
+  "live_harness": [
+    {
+      "model": "openai/gpt-6-astra",
+      "status": "success",
+      "commands": [
+        "read",
+        "write",
+        "lint",
+        "done"
+      ],
+      "user_messages": 1,
+      "runtime_output": "tool cache verified 7391\n",
+      "usage": {
+        "api_turns": 4,
+        "usage_complete": true,
+        "prompt_tokens": 17478,
+        "completion_tokens": 225,
+        "total_tokens": 17703,
+        "cost": 0.1001715,
+        "cost_requires_provider": true,
+        "prompt_tokens_details": {
+          "cached_tokens": 11164,
+          "cache_write_tokens": 5847
+        },
+        "cache_read_ratio": 0.6387458519281383
+      },
+      "turns": [
+        {
+          "model": "openai/gpt-6-astra",
+          "provider": "OpenAI",
+          "prompt_tokens": 458,
+          "completion_tokens": 54,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_read_ratio": 0.0,
+          "cost": 0.00728,
+          "input_cost": 0.00458,
+          "turn": 1,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-47c79812d69e9f04e544a5c775a382f1f72536b24687cf1e",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 458
+        },
+        {
+          "model": "openai/gpt-6-astra",
+          "provider": "OpenAI",
+          "prompt_tokens": 5525,
+          "completion_tokens": 66,
+          "cached_tokens": 0,
+          "cache_write_tokens": 5522,
+          "cache_read_ratio": 0.0,
+          "cost": 0.072355,
+          "input_cost": 0.069055,
+          "turn": 2,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-47c79812d69e9f04e544a5c775a382f1f72536b24687cf1e",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5525
+        },
+        {
+          "model": "openai/gpt-6-astra",
+          "provider": "OpenAI",
+          "prompt_tokens": 5645,
+          "completion_tokens": 51,
+          "cached_tokens": 5522,
+          "cache_write_tokens": 120,
+          "cache_read_ratio": 0.9782108060230292,
+          "cost": 0.009602,
+          "input_cost": 0.007052,
+          "turn": 3,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-47c79812d69e9f04e544a5c775a382f1f72536b24687cf1e",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5645
+        },
+        {
+          "model": "openai/gpt-6-astra",
+          "provider": "OpenAI",
+          "prompt_tokens": 5850,
+          "completion_tokens": 54,
+          "cached_tokens": 5642,
+          "cache_write_tokens": 205,
+          "cache_read_ratio": 0.9644444444444444,
+          "cost": 0.0109345,
+          "input_cost": 0.0082345,
+          "turn": 4,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-47c79812d69e9f04e544a5c775a382f1f72536b24687cf1e",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5850
+        }
+      ]
+    },
+    {
+      "model": "openai/gpt-5.6-luna",
+      "status": "success",
+      "commands": [
+        "read",
+        "write",
+        "lint",
+        "done"
+      ],
+      "user_messages": 1,
+      "runtime_output": "tool cache verified 7391\n",
+      "usage": {
+        "api_turns": 4,
+        "usage_complete": true,
+        "prompt_tokens": 17586,
+        "completion_tokens": 286,
+        "total_tokens": 17872,
+        "cost": 0.00213506,
+        "cost_requires_provider": true,
+        "prompt_tokens_details": {
+          "cached_tokens": 11223,
+          "cache_write_tokens": 5896
+        },
+        "cache_read_ratio": 0.6381780962128967
+      },
+      "turns": [
+        {
+          "model": "openai/gpt-5.6-luna",
+          "provider": "OpenAI",
+          "prompt_tokens": 458,
+          "completion_tokens": 71,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_read_ratio": 0.0,
+          "cost": 0.0001768,
+          "input_cost": 9.16e-05,
+          "turn": 1,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-5123eacfb64835115a094a1e3e6ada94856b4bdcd89a9506",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 458
+        },
+        {
+          "model": "openai/gpt-5.6-luna",
+          "provider": "OpenAI",
+          "prompt_tokens": 5544,
+          "completion_tokens": 90,
+          "cached_tokens": 0,
+          "cache_write_tokens": 5541,
+          "cache_read_ratio": 0.0,
+          "cost": 0.00149385,
+          "input_cost": 0.00138585,
+          "turn": 2,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-5123eacfb64835115a094a1e3e6ada94856b4bdcd89a9506",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5544
+        },
+        {
+          "model": "openai/gpt-5.6-luna",
+          "provider": "OpenAI",
+          "prompt_tokens": 5685,
+          "completion_tokens": 62,
+          "cached_tokens": 5541,
+          "cache_write_tokens": 141,
+          "cache_read_ratio": 0.97467018469657,
+          "cost": 0.00022107,
+          "input_cost": 0.00014667,
+          "turn": 3,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-5123eacfb64835115a094a1e3e6ada94856b4bdcd89a9506",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5685
+        },
+        {
+          "model": "openai/gpt-5.6-luna",
+          "provider": "OpenAI",
+          "prompt_tokens": 5899,
+          "completion_tokens": 63,
+          "cached_tokens": 5682,
+          "cache_write_tokens": 214,
+          "cache_read_ratio": 0.9632141040854382,
+          "cost": 0.00024334,
+          "input_cost": 0.00016774,
+          "turn": 4,
+          "cache_policy": {
+            "policy": "openai_hybrid",
+            "session_id": "wb-5123eacfb64835115a094a1e3e6ada94856b4bdcd89a9506",
+            "breakpoints": [
+              1
+            ],
+            "mode": "implicit",
+            "ttl": "30m"
+          },
+          "context_prompt_tokens": 5899
+        }
+      ]
+    }
+  ]
+}

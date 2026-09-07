@@ -22,7 +22,7 @@ def _family(model: str) -> str:
     if model.startswith("openai/"):
         version = re.search(r"gpt-(\d+)(?:\.(\d+))?", model)
         if version and tuple(int(v or 0) for v in version.groups()) >= (5, 6):
-            return "openai_explicit"
+            return "openai_hybrid"
         return "openai_implicit"
     if model.startswith("google/gemini-"):
         version = re.search(r"gemini-(\d+)(?:\.(\d+))?", model)
@@ -80,7 +80,19 @@ class CachePolicy:
         if self.family in {"automatic", "openai_implicit"}:
             return payload, record
 
-        blocks = {i: block for i, message in enumerate(wire) if (block := _text_block(message))}
+        if self.family == "openai_hybrid":
+            # OpenRouter's Chat Completions conversion drops explicit markers on
+            # tool results. Explicit-only mode therefore disables caching when a
+            # short user prompt grows through tool calls. Let OpenAI cache the
+            # latest eligible message, retaining explicit anchors on user text.
+            payload["prompt_cache_options"] = {"mode": "implicit", "ttl": "30m"}
+            record.update(mode="implicit", ttl="30m")
+        blocks = {
+            i: block
+            for i, message in enumerate(wire)
+            if not (self.family == "openai_hybrid" and message.get("role") == "tool")
+            and (block := _text_block(message))
+        }
         if not blocks:
             return payload, record
         latest = max(blocks)
@@ -97,18 +109,18 @@ class CachePolicy:
         else:
             if latest not in self.boundaries:
                 self.boundaries.append(latest)
-            # Explicitly keep prior request boundaries even when a large tool batch
-            # exceeds Anthropic's 20-block automatic lookback. Four is the API limit.
+            # Anthropic needs prior boundaries beyond its 20-block lookback.
+            # OpenAI's implicit breakpoint consumes one of the four write slots.
             first = next((i for i, m in enumerate(messages) if m.get("role") == "user"), latest)
-            positions = sorted({first, *self.boundaries[-3:]}.intersection(blocks))
+            recent = 2 if self.family == "openai_hybrid" else 3
+            positions = sorted({first, *self.boundaries[-recent:]}.intersection(blocks))
             if self.family == "anthropic":
                 if self.previous_request is not None and now - self.previous_request >= 240:
                     self.anthropic_ttl = "1h"
                 marker = {"type": "ephemeral", "ttl": self.anthropic_ttl}
             else:
-                payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
                 marker = {"mode": "explicit"}
-        field = "prompt_cache_breakpoint" if self.family == "openai_explicit" else "cache_control"
+        field = "prompt_cache_breakpoint" if self.family == "openai_hybrid" else "cache_control"
         for position in positions:
             blocks[position][field] = dict(marker)
         self.previous_request = now

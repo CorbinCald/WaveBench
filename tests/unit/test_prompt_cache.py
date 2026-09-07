@@ -37,18 +37,8 @@ def append_tools(messages, count=1):
     )
 
 
-@pytest.mark.parametrize(
-    "model,field",
-    [
-        ("openai/gpt-5.6-luna", "prompt_cache_breakpoint"),
-        ("openai/gpt-6-astra", "prompt_cache_breakpoint"),
-        ("anthropic/claude-haiku-4.5", "cache_control"),
-    ],
-)
-def test_cache_prior_boundary_survives_large_parallel_batches_without_mutating_history(
-    model, field
-):
-    policy = CachePolicy(model)
+def test_anthropic_prior_boundary_survives_large_parallel_batches_without_mutating_history():
+    policy = CachePolicy("anthropic/claude-haiku-4.5")
     messages = conversation()
     first_payload, _ = policy.prepare(messages, [], now=0)
     for i in range(6):
@@ -63,10 +53,61 @@ def test_cache_prior_boundary_survives_large_parallel_batches_without_mutating_h
         assert len(record["breakpoints"]) <= 4
         assert payload["messages"][1] == first_payload["messages"][1]
         assert payload["messages"][-65] == messages[-65]
-        assert field in payload["messages"][-1]["content"][-1]
-    if model.startswith("openai/"):
-        assert payload["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
-        assert payload["prompt_cache_key"] == payload["session_id"]
+        assert "cache_control" in payload["messages"][-1]["content"][-1]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.6-luna", "openai/gpt-6-astra"])
+def test_openai_short_prompt_growing_through_tools_keeps_automatic_caching(model):
+    # Regression: the gateway flattens tool content and drops explicit markers.
+    # A long user prompt would hide this failure by providing a cacheable anchor.
+    messages = [{"role": "user", "content": "Build a website."}]
+    policy = CachePolicy(model)
+    first, _ = policy.prepare(messages, [])
+    for batch in range(3):
+        append_tools(messages, 64)
+        messages[-1]["content"] = "project source " * 2000
+        original = copy.deepcopy(messages)
+        payload, record = policy.prepare(messages, [])
+        assert payload["prompt_cache_options"] == {"mode": "implicit", "ttl": "30m"}
+        assert record["mode"] == "implicit"
+        assert record["breakpoints"] == [0]
+        assert payload["prompt_cache_key"] == first["prompt_cache_key"] == payload["session_id"]
+        assert payload["messages"][0] == first["messages"][0]
+        assert payload["messages"][1:] == original[1:]
+        assert messages == original
+    key = policy.key
+    policy.reset()
+    payload, record = policy.prepare(messages[:1], [])
+    assert policy.key == key
+    assert payload["prompt_cache_options"]["mode"] == "implicit"
+    assert record["breakpoints"] == [0]
+
+
+def test_openai_reserves_one_write_slot_for_implicit_caching_across_user_turns():
+    policy = CachePolicy("openai/gpt-6-astra")
+    messages = conversation()
+    user_positions = [1]
+    first, _ = policy.prepare(messages, [])
+    for _ in range(6):
+        append_tools(messages)
+        user_positions.append(len(messages))
+        messages.append({"role": "user", "content": "Repair the project and resubmit."})
+        payload, record = policy.prepare(messages, [])
+        assert record["breakpoints"] == sorted({1, *user_positions[-2:]})
+        assert len(record["breakpoints"]) <= 3
+        assert payload["messages"][1] == first["messages"][1]
+        for position in record["breakpoints"]:
+            assert payload["messages"][position]["content"][0]["prompt_cache_breakpoint"] == {
+                "mode": "explicit"
+            }
+
+
+def test_openai_automatic_mode_does_not_require_an_explicit_text_anchor():
+    payload, record = CachePolicy("openai/gpt-6-astra").prepare(
+        [{"role": "user", "content": ""}], []
+    )
+    assert payload["prompt_cache_options"] == {"mode": "implicit", "ttl": "30m"}
+    assert record["breakpoints"] == []
 
 
 def test_google_reuses_checkpoint_until_expiry_and_resets_after_compaction():
