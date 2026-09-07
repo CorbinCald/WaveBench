@@ -280,8 +280,9 @@ repair time; an `after_all` wait does not inflate model performance time.
 Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
-The live dashboard and final results show a separate metrics line per model:
-total tokens, output tokens per second (`tk/s`), cost, and turns. Totals accumulate
+The live dashboard and final results show each model's status, total tokens,
+output tokens per second (`tk/s`), cost, turns, and elapsed time on one line.
+Model names and optional path/error details shorten as needed to fit. Totals accumulate
 across build, repair, and context-compaction calls, including failed calls with
 reported usage. A turn is one model API call, including the current call; HTTP
 retries and individual tools within a call do not add turns.

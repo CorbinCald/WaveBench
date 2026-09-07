@@ -55,8 +55,9 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
 
 @pytest.mark.parametrize("status", ["success", "failed", "cancelled"])
 @pytest.mark.parametrize("known", [True, False])
+@pytest.mark.parametrize("columns", [80, 110])
 def test_metrics_survive_terminal_outcomes_and_unknown_usage(
-    tracker, monkeypatch, capsys, status, known
+    tracker, monkeypatch, capsys, status, known, columns
 ):
     usage = tracker._harness["model"]["usage"].copy()
     if not known:
@@ -67,18 +68,22 @@ def test_metrics_survive_terminal_outcomes_and_unknown_usage(
         "status": status,
         "time_s": 100,
         "file": "a/long/project/path/" * 8,
-        "error": "intentional failure",
+        "error": "intentional\nfailure with multiple lines",
         "usage": usage,
         "harness": {"attempts": [{}], "timing": {"api_s": 4.0}},
     }
-    monkeypatch.setattr(module, "_tw", lambda: 80)
+    monkeypatch.setattr(module, "_tw", lambda: columns)
     tracker._render_final()
     output = plain(capsys.readouterr().out)
-    assert "2 turns" in output
+    rows = [line for line in output.splitlines() if "model" in line]
+    assert len(rows) == 1
+    row = rows[0]
+    assert "2 turns" in row and "1m 40s" in row
+    assert all(len(line) <= columns for line in output.splitlines())
     if known:
-        assert "1,200 tk" in output and "50 tk/s" in output and "$0.015" in output
+        assert "1,200 tk" in row and "50 tk/s" in row and "$0.015" in row
     else:
-        assert "tk unknown" in output and "cost unknown" in output and "tk/s —" in output
+        assert "tk unknown" in row and "cost unknown" in row and "tk/s —" in row
 
 
 @pytest.mark.parametrize("phase", ["building", "compacting", "linting", "running", "repairing"])
@@ -100,15 +105,18 @@ async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phas
     await tracker._animate()
     assert len(frames) == 1
     frame = frames[0]
-    assert phase in frame and "model" in frame
-    assert "5.0s" in frame  # Per-model elapsed time survives phase/turn changes.
-    assert "1,200 tk" in frame and "50 tk/s" in frame and "2 turns" in frame
+    rows = [line for line in frame.splitlines() if "model" in line]
+    assert len(rows) == 1
+    row = rows[0]
+    assert phase in row and "5.0s" in row
+    assert "1,200 tk" in row and "50 tk/s" in row and "2 turns" in row
     assert frame.count("$0.015") == 2  # Per-model cost and the batch total.
     assert all(len(line) <= columns for line in frame.splitlines())
 
 
-async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypatch):
-    tracker._model_names = [f"model-{i}" for i in range(5)]
+@pytest.mark.parametrize("count,hidden", [(5, 0), (7, 3)])
+async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypatch, count, hidden):
+    tracker._model_names = [f"model-{i}" for i in range(count)]
     for name in tracker._model_names:
         tracker.update_harness(name, tracker._harness["model"]["usage"], 4.0)
         tracker.set_phase(name, "building")
@@ -124,5 +132,9 @@ async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypat
     monkeypatch.setattr(tracker, "_flush_frame", capture)
     tracker._running = True
     await tracker._animate()
-    assert "+3 more" in frames[0]
+    assert frames[0].count("model-") == count - hidden
+    if hidden:
+        assert f"+{hidden} more" in frames[0]
+    else:
+        assert "more…" not in frames[0]
     assert len(frames[0].splitlines()) <= 10

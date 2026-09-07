@@ -297,9 +297,50 @@ class ProgressTracker:
         cost_s = (format_cost(cost) or "$0.000") if cost is not None else "cost unknown"
         turn_s = f"{turns} {'turn' if turns == 1 else 'turns'}"
         return (
-            f"  {S.DIM}{token_s}{S.RST} · {_styles.ACCENT}{rate_s}{S.RST} · "
-            f"{S.HYEL}{cost_s}{S.RST} · {S.DIM}{turn_s}{S.RST}"
+            f"{S.DIM}{token_s}{S.RST} {_styles.ACCENT}{rate_s}{S.RST} "
+            f"{S.HYEL}{cost_s}{S.RST} {S.DIM}{turn_s}{S.RST}"
         )
+
+    def _format_harness_row(
+        self, name: str, inner_w: int, result: dict | None = None, rank: int = 0, tick: int = 0
+    ) -> str:
+        """Fit status and metrics on one row, giving optional path/error text spare space."""
+        detail = ""
+        if result is not None:
+            status = result.get("status", "failed")
+            symbol = {"success": _ok, "cancelled": _skip}.get(status, _fail)
+            symbol = f"{S.DIM}{rank:>2}.{S.RST} {symbol}"
+            if status == "success":
+                status = "passed"
+                detail = result.get("file", "")
+            else:
+                detail = str(result.get("error") or "")
+            retries = result.get("retries") or []
+            if retries:
+                detail = f"{len(retries)} retries {detail}"
+            elapsed = result.get("time_s", 0)
+        else:
+            status = self._parsing.get(name, {}).get("label", "waiting")
+            symbol = f"{_styles.ACCENT}{_SPIN[tick % len(_SPIN)]}{S.RST}"
+            elapsed = time.monotonic() - self._active.get(name, {}).get("start", self._start)
+            retry = self._retries.get(name)
+            if retry and retry["until"] > time.monotonic():
+                status = f"HTTP {retry['status']} retry {retry['attempt']}/{retry['max']}"
+                detail = f"in {retry['until'] - time.monotonic():.1f}s"
+        suffix = (
+            f"{self._format_harness_metrics(name, result)} {S.DIM}{format_duration(elapsed)}{S.RST}"
+        )
+        available = inner_w - _vlen(suffix) - _vlen(symbol) - 3
+        name_w = max(1, min(self._pad, available - len(status) - 1))
+        status_w = max(1, available - name_w)
+        label = _rpad(_truncate(name, name_w), name_w)
+        prefix = f"{symbol} {label} {S.DIM}{_truncate(status, status_w)}{S.RST}"
+        spare = inner_w - _vlen(prefix) - _vlen(suffix) - 2
+        if detail and spare >= 8:
+            detail = " ".join(detail.split())
+            prefix += f" {S.DIM}{_truncate(detail, spare)}{S.RST}"
+        gap = max(1, inner_w - _vlen(prefix) - _vlen(suffix))
+        return f"{prefix}{' ' * gap}{suffix}"
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -487,16 +528,12 @@ class ProgressTracker:
         return f"{S.DIM}{'OUTPUT':>8}  {out}{S.RST}"
 
     def _format_result_row(self, name: str, info: dict[str, Any], rank: int, inner_w: int) -> str:
+        if info.get("harness"):
+            return self._format_harness_row(name, inner_w, info, rank)
         st = info.get("status", "failed")
         t = format_duration(info.get("time_s", 0))
         cost = self._model_cost(name, info)
-        cost_s = (
-            f"  {S.HYEL}{format_cost(cost)}{S.RST}"
-            if cost is not None
-            else (f"  {S.DIM}cost unknown{S.RST}" if info.get("harness") else "")
-        )
-        if info.get("harness"):
-            cost_s = ""  # Harness metrics have their own line, preserving room for status.
+        cost_s = f"  {S.HYEL}{format_cost(cost)}{S.RST}" if cost is not None else ""
         retries = info.get("retries") or []
         retry_s = ""
         if retries:
@@ -522,14 +559,8 @@ class ProgressTracker:
             elif tokens:
                 usage_part = f"  {S.DIM}{tokens:,} tk{S.RST}"
             else:
-                usage_part = f"  {S.DIM}usage unknown{S.RST}" if info.get("harness") else ""
-            if info.get("harness"):
                 usage_part = ""
-            outcome = (
-                f"runtime passed ({len(info['harness']['attempts'])} run(s))"
-                if info.get("harness")
-                else "saved"
-            )
+            outcome = "saved"
             detail = (
                 f"{outcome} {_arrow} {S.GRN}{fname}{S.RST}{usage_part}{cost_s}{retry_s}{trunc_s}"
             )
@@ -583,8 +614,6 @@ class ProgressTracker:
 
         for i, (name, info) in enumerate(sorted(self._results.items(), key=_rank_key), 1):
             buf.append(_box_row(self._format_result_row(name, info, i, inner_w), w))
-            if info.get("harness"):
-                buf.append(_box_row(self._format_harness_metrics(name, info), w))
 
         buf.append(_box_sep("", w))
         ok = sum(1 for v in self._results.values() if v.get("status") == "success")
@@ -646,6 +675,8 @@ class ProgressTracker:
 
                 _chrome = lines + 3
                 max_model_rows = max(1, term.lines - _chrome)
+                # Reserve a row for the hidden-model count when the list does not fit.
+                max_visible = max_model_rows - int(len(self._model_names) > max_model_rows)
 
                 completed_idx = 0
                 visible = 0
@@ -653,10 +684,7 @@ class ProgressTracker:
                 for name in self._model_names:
                     result = self._results.get(name)
                     harness = name in self._harness or bool(result and result.get("harness"))
-                    row_count = 2 if harness else 1
-                    # Reserve one row for the hidden-model indicator when needed.
-                    reserve = int(name != self._model_names[-1])
-                    if visible + row_count + reserve > max_model_rows:
+                    if visible >= max_visible:
                         hidden += 1
                         if name in self._results:
                             completed_idx += 1
@@ -667,30 +695,19 @@ class ProgressTracker:
                         row = self._format_result_row(
                             name, self._results[name], completed_idx, inner_w
                         )
+                    elif harness:
+                        row = self._format_harness_row(name, inner_w, tick=idx)
                     elif name in self._parsing:
                         pinfo = self._parsing[name]
-                        started = self._active[name]["start"] if harness else pinfo["start"]
-                        mel = format_duration(time.monotonic() - started)
+                        mel = format_duration(time.monotonic() - pinfo["start"])
                         dots = "·" * (1 + (idx // 4) % 3)
-                        chars = (
-                            self._active.get(name, {}).get("chars", 0)
-                            if harness
-                            else pinfo.get("chars", 0)
-                        )
-                        boxes = self._token_boxes(name, chars)
+                        boxes = self._token_boxes(name, pinfo.get("chars", 0))
                         row = (
                             f"{boxes}   "
                             f"{_rpad(name, self._pad)}  "
                             f"{S.DIM}{pinfo.get('label', 'parsing')}{dots:<4}"
                             f"  {mel:>7}{S.RST}"
                         )
-                        rinfo = self._retries.get(name)
-                        if harness and rinfo and rinfo["until"] > time.monotonic():
-                            remain = max(0.0, rinfo["until"] - time.monotonic())
-                            row = (
-                                f"{boxes}   {_rpad(name, self._pad)}  {S.YEL}HTTP {rinfo['status']}"
-                                f" retry {rinfo['attempt']}/{rinfo['max']} in {remain:.1f}s{S.RST}"
-                            )
                     elif name in self._active:
                         ainfo = self._active[name]
                         mel = format_duration(time.monotonic() - ainfo["start"])
@@ -796,12 +813,6 @@ class ProgressTracker:
                     buf.append(_box_row(row, w) + "\033[K\n")
                     lines += 1
                     visible += 1
-                    if harness:
-                        buf.append(
-                            _box_row(self._format_harness_metrics(name, result), w) + "\033[K\n"
-                        )
-                        lines += 1
-                        visible += 1
 
                 if hidden > 0:
                     buf.append(_box_row(f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")
