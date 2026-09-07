@@ -24,6 +24,13 @@ try:
 except ImportError:
     termios = None  # type: ignore[assignment]
 
+from wavebench.harness.accounting import (
+    Measurement,
+    estimate_cost,
+    reported_total,
+    settled,
+    valid_number,
+)
 from wavebench.tui import styles as _styles
 from wavebench.tui.analytics.cost import compute_cost
 from wavebench.tui.progress.wave import (
@@ -178,17 +185,6 @@ class ProgressTracker:
         """Compute cost for a completed model result."""
         return compute_cost(info.get("usage", {}), self._model_pricing(model_name))
 
-    def _total_cost(self) -> float | None:
-        """Sum costs across all completed results that have pricing."""
-        total = 0.0
-        any_cost = False
-        for name, info in self._results.items():
-            c = self._model_cost(name, info)
-            if c is not None:
-                total += c
-                any_cost = True
-        return total if any_cost else None
-
     def _live_cost_for_active(self, model_name: str, chars: int) -> float | None:
         """Estimate live cost for an in-progress model from streamed chars."""
         if self._progress_unit == "bytes":
@@ -251,7 +247,9 @@ class ProgressTracker:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
         self._harness[model_name] = {"usage": usage, "api_s": api_seconds}
 
-    def start_harness_turn(self, model_name: str, input_tokens: int) -> None:
+    def start_harness_turn(
+        self, model_name: str, input_tokens: int, *, model_id: str | None = None
+    ) -> None:
         """Reset streaming counters without losing the model's lifetime or wave volume."""
         if model_name not in self._active:
             self.register(model_name)
@@ -259,9 +257,19 @@ class ProgressTracker:
         self._wave_completed_chars += active["chars"]
         active.update(chars=0, last_chars=0, last_rate_time=0.0, smoothed_rate=0.0)
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
-        metrics.update(turn_start=time.monotonic(), input_tokens=input_tokens)
+        metrics.update(
+            turn_start=time.monotonic(),
+            input_tokens=input_tokens,
+            output_tokens=0,
+            current_usage={},
+            model_id=model_id or self._model_id_map.get(model_name, ""),
+        )
 
-    def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
+    def update_harness_stream(self, name: str, usage: dict, output_tokens: int) -> None:
+        if name in self._harness:
+            self._harness[name].update(current_usage=usage, output_tokens=output_tokens)
+
+    def _harness_metrics(self, name: str, result: dict | None = None) -> dict:
         if result is not None:
             usage = result.get("usage") or {}
             harness = result["harness"]
@@ -273,33 +281,99 @@ class ProgressTracker:
             usage = metrics["usage"]
             api_seconds = metrics["api_s"]
             turns = usage.get("api_turns", 0)
-        tokens = usage.get("total_tokens")
+        tokens = settled(usage, "total_tokens", turns)
         completion = usage.get("completion_tokens")
-        cost = compute_cost(usage, self._model_pricing(name))
+        cost = settled(usage, "cost", turns)
         streaming = metrics.get("turn_start") is not None
-        if not turns:
-            tokens, completion, cost = 0, 0, 0.0
         rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
         rate_estimated = False
         if streaming:
             turns += 1
-            chars = self._active.get(name, {}).get("chars", 0)
-            if tokens is not None:
-                tokens += metrics["input_tokens"] + chars // 4
+            current = metrics["current_usage"]
+            prompt = current.get("prompt_tokens")
+            if not valid_number(prompt):
+                prompt = metrics["input_tokens"]
+            output = current.get("completion_tokens")
+            rate_estimated = not valid_number(output)
+            if rate_estimated:
+                output = metrics["output_tokens"]
+            total = reported_total(current)
+            tokens += (
+                Measurement(total)
+                if total is not None
+                else Measurement(prompt + output, estimated=True)
+            )
+            current_cost = current.get("cost")
+            cost += (
+                Measurement(current_cost)
+                if valid_number(current_cost)
+                else estimate_cost(
+                    prompt, output, self._pricing_lookup.get(metrics["model_id"], {})
+                )
+            )
             elapsed = time.monotonic() - metrics["turn_start"]
-            if chars and elapsed > 0:
-                rate = chars / 4 / elapsed
-                rate_estimated = True
-        token_s = f"{'~' if streaming else ''}{tokens:,} tk" if tokens is not None else "tk unknown"
-        rate_s = (
-            f"{'~' if rate_estimated else ''}{rate:,.0f} tk/s" if rate is not None else "tk/s —"
+            rate = output / elapsed if output and elapsed > 0 else None
+        return {
+            "tokens": tokens,
+            "cost": cost,
+            "turns": turns,
+            "rate": rate,
+            "rate_estimated": rate_estimated,
+        }
+
+    @staticmethod
+    def _format_harness_cost(cost: Measurement) -> str:
+        if cost.value is None or (cost.value == 0 and cost.incomplete):
+            return "cost unknown"
+        return f"{cost.prefix}{format_cost(cost.value) or '$0.000'}{cost.suffix}"
+
+    def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
+        values = self._harness_metrics(name, result)
+        tokens, cost, turns, rate = (values[key] for key in ("tokens", "cost", "turns", "rate"))
+        token_s = (
+            f"{tokens.prefix}{int(tokens.value):,}{tokens.suffix} tk"
+            if tokens.value is not None
+            else "tk unknown"
         )
-        cost_s = (format_cost(cost) or "$0.000") if cost is not None else "cost unknown"
+        rate_s = (
+            f"{'~' if values['rate_estimated'] else ''}{rate:,.0f} tk/s"
+            if rate is not None
+            else "tk/s —"
+        )
+        cost_s = self._format_harness_cost(cost)
         turn_s = f"{turns} {'turn' if turns == 1 else 'turns'}"
         return (
             f"{S.DIM}{token_s}{S.RST} {_styles.ACCENT}{rate_s}{S.RST} "
             f"{S.HYEL}{cost_s}{S.RST} {S.DIM}{turn_s}{S.RST}"
         )
+
+    def _cost_summary(self, *, live: bool = False) -> str:
+        names = set(self._results)
+        if live:
+            names.update(self._harness)
+            names.update(self._active)
+        amounts = []
+        has_harness = False
+        for name in sorted(names):
+            result = self._results.get(name)
+            if (result and result.get("harness")) or (result is None and name in self._harness):
+                amounts.append(self._harness_metrics(name, result)["cost"])
+                has_harness = True
+            else:
+                cost = (
+                    self._model_cost(name, result)
+                    if result is not None
+                    else self._live_cost_for_active(name, self._active[name]["chars"])
+                )
+                amounts.append(Measurement(cost))
+        if not amounts:
+            return ""
+        total = amounts[0]
+        for amount in amounts[1:]:
+            total += amount
+        if has_harness:
+            return self._format_harness_cost(total)
+        return format_cost(total.value)
 
     def _format_harness_row(
         self, name: str, inner_w: int, result: dict | None = None, rank: int = 0, tick: int = 0
@@ -632,9 +706,9 @@ class ProgressTracker:
         if canc:
             parts.append(f"{S.DIM}{canc} cancelled{S.RST}")
         parts.append(f"{format_duration(total_time)} total")
-        total_cost = self._total_cost()
-        if total_cost is not None:
-            parts.append(f"{S.HYEL}{format_cost(total_cost)}{S.RST}")
+        total_cost = self._cost_summary()
+        if total_cost:
+            parts.append(f"{S.HYEL}{total_cost}{S.RST}")
         sep = f" {_dot} "
         buf.append(_box_row(sep.join(parts), w))
         buf.append(_box_bot(w))
@@ -826,26 +900,10 @@ class ProgressTracker:
                 buf.append(_box_sep("", w) + "\033[K\n")
                 lines += 1
 
-                running_cost = 0.0
-                has_cost = False
-                for rn, ri in self._results.items():
-                    c = self._model_cost(rn, ri)
-                    if c is not None:
-                        running_cost += c
-                        has_cost = True
-                for an, ai in self._active.items():
-                    if an in self._results:
-                        continue
-                    if an in self._harness:
-                        c = compute_cost(self._harness[an]["usage"], self._model_pricing(an))
-                    else:
-                        c = self._live_cost_for_active(an, ai["chars"])
-                    if c is not None:
-                        running_cost += c
-                        has_cost = True
                 cost_part = ""
-                if has_cost:
-                    cost_part = f" · {S.RST}{S.HYEL}{format_cost(running_cost)}{S.RST}{S.DIM}"
+                running_cost = self._cost_summary(live=True)
+                if running_cost:
+                    cost_part = f" · {S.RST}{S.HYEL}{running_cost}{S.RST}{S.DIM}"
 
                 summary = (
                     f"{_styles.ACCENT_HI}{frame}{S.RST} "

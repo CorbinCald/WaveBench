@@ -331,6 +331,74 @@ async def test_malformed_generation_preserves_usage_without_tool_execution(facto
     assert session.workspace.ls() == []
 
 
+async def test_timeout_preserves_usage_already_received_from_stream(factory, monkeypatch):
+    async def model(*args, **kwargs):
+        kwargs["on_usage"](
+            {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 0.5}, 10
+        )
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    await session.build()
+    assert session.usage()["api_turns"] == 1
+    assert session.usage()["total_tokens"] == 30
+    assert session.usage()["cost"] == 0.5
+
+
+async def test_local_request_rejection_does_not_add_a_turn(factory, monkeypatch):
+    async def model(*args, **kwargs):
+        raise TurnError("no request sent", request_sent=False)
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    await session.build()
+    assert session.usage()["api_turns"] == 0
+    assert session.budget_tokens == 0
+
+
+async def test_reported_zero_usage_does_not_consume_an_estimated_budget(factory, monkeypatch):
+    scripted(monkeypatch)
+    original = module.call_conversation
+
+    async def model(*args, **kwargs):
+        turn = await original(*args, **kwargs)
+        turn.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost": 0}
+        return turn
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    await session.build()
+    assert session.generation == "submitted"
+    assert session.usage()["api_turns"] == 3
+    assert session.usage()["total_tokens"] == session.budget_tokens == 0
+    assert session.usage()["cost"] == 0
+
+
+async def test_failure_before_next_stream_does_not_reuse_previous_turn_usage(factory, monkeypatch):
+    scripted(monkeypatch)
+    original = module.call_conversation
+    called = False
+
+    async def model(*args, **kwargs):
+        nonlocal called
+        if called:
+            raise asyncio.TimeoutError()
+        called = True
+        turn = await original(*args, **kwargs)
+        kwargs["on_usage"](turn.usage, 5)
+        return turn
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    await session.build()
+    usage = session.usage()
+    assert usage["api_turns"] == 2
+    assert usage["cost"] is None and usage["known_cost"] == 0.001
+    assert usage["total_tokens"] is None and usage["known_total_tokens"] == 15
+    assert session.turns[-1]["usage"] == {}
+
+
 async def test_measured_prompt_usage_keeps_large_projects_within_budget(factory, monkeypatch):
     requests = []
 
@@ -576,6 +644,8 @@ async def test_cache_usage_totals_use_actual_reports_and_costs(factory):
     session.turns.append({"phase": "compacting", "usage": {}})
     usage = session.usage()
     assert usage["cache_read_ratio"] is None and usage["cost"] is None
+    assert usage["known_total_tokens"] == 220
+    assert usage["known_cost"] == 0.02
     from wavebench.tui.analytics.cost import compute_cost
 
     assert compute_cost(usage, {"prompt": "0.01", "completion": "0.03"}) is None

@@ -12,6 +12,7 @@ from wavebench import api
 from wavebench.harness.commands import TOOL_SCHEMA
 from wavebench.harness.transport import StreamAssembly, TurnError, call_conversation
 from wavebench.prompt_cache import CachePolicy
+from wavebench.tokens import count_tokens
 
 
 def feed(assembly, delta, **extra):
@@ -24,6 +25,49 @@ def feed(assembly, delta, **extra):
             }
         )
     )
+
+
+def test_output_estimate_ignores_chunk_framing_and_duplicate_reasoning():
+    assembly = StreamAssembly()
+    for fragment in ["Think ", "café 🎉"]:
+        feed(
+            assembly,
+            {
+                "reasoning": fragment,
+                "reasoning_details": [{"index": 0, "type": "reasoning.text", "text": fragment}],
+            },
+        )
+    feed(assembly, {"extra_content": {"google": {"thought_signature": "opaque" * 1000}}})
+    feed(
+        assembly,
+        {
+            "reasoning_details": [
+                {"index": 1, "type": "reasoning.encrypted", "data": "encrypted" * 1000}
+            ]
+        },
+    )
+    feed(assembly, {"content": "Done"})
+    for _ in range(100):
+        feed(assembly, {})
+    assert assembly.output_text() == "Done\nThink café 🎉"
+    assert assembly.chars == len("Done\nThink café 🎉")
+    assert count_tokens(assembly.output_text()) == count_tokens("Done\nThink café 🎉")
+
+
+def test_usage_snapshots_merge_without_double_counting_or_losing_error_usage():
+    assembly = StreamAssembly()
+    for usage in [
+        {"prompt_tokens": 100, "completion_tokens": 10, "cost": 0.01},
+        {"completion_tokens": 20, "total_tokens": 120, "cost": 0.02},
+        {"prompt_tokens": None, "cost_details": {"upstream_inference_cost": 2}},
+    ]:
+        assembly.feed(json.dumps({"usage": usage, "choices": None}))
+    with pytest.raises(TurnError) as error:
+        assembly.feed(json.dumps({"error": "interrupted", "usage": {"cost": 0.03}}))
+    assert error.value.usage["prompt_tokens"] == 100
+    assert error.value.usage["completion_tokens"] == 20
+    assert error.value.usage["total_tokens"] == 120
+    assert error.value.usage["cost"] == 0.03
 
 
 @pytest.mark.parametrize(
@@ -197,6 +241,7 @@ def test_partial_or_truncated_calls_never_complete(finish, done, arguments):
 async def test_real_http_retry_utf8_stream_and_second_conversation_request(monkeypatch, model):
     requests = []
     retries = []
+    usage_updates = []
 
     async def handler(request):
         data = await request.json()
@@ -263,7 +308,9 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
                 reasoning_effort="low",
                 cache_policy=policy,
                 on_retry=lambda *args: retries.append(args),
+                on_usage=lambda usage, tokens: usage_updates.append((usage, tokens)),
             )
+            assert usage_updates[-1] == (turn.usage, 20)
             assert turn.message["content"] == "café 🎉"
             assert len(retries) == 1 and retries[0][0] == 503
             messages.extend(
