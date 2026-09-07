@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from wavebench.harness.accounting import Measurement, reported_total
+from wavebench.harness.accounting import Measurement, cache_read_ratio, reported_total
 from wavebench.tui.progress import ProgressTracker
 from wavebench.tui.progress import tracker as module
 
@@ -23,9 +23,17 @@ def tracker(monkeypatch):
     instance = ProgressTracker(1, {}, model_names=["model"])
     instance.update_harness(
         "model",
-        {"api_turns": 2, "total_tokens": 1200, "completion_tokens": 200, "cost": 0.015},
+        {
+            "api_turns": 2,
+            "prompt_tokens": 1000,
+            "prompt_tokens_details": {"cached_tokens": 500},
+            "total_tokens": 1200,
+            "completion_tokens": 200,
+            "cost": 0.015,
+        },
         4.0,
     )
+    instance.update_harness_tools("model", {"calls": 4, "failures": 1})
     instance.set_phase("model", "building")
     return instance
 
@@ -58,14 +66,18 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
 
 @pytest.mark.parametrize("status", ["success", "failed", "cancelled"])
 @pytest.mark.parametrize("known", [True, False])
-@pytest.mark.parametrize("columns", [80, 110])
+@pytest.mark.parametrize("columns", [80, 110, 120])
 def test_metrics_survive_terminal_outcomes_and_unknown_usage(
     tracker, monkeypatch, capsys, status, known, columns
 ):
     usage = tracker._harness["model"]["usage"].copy()
     if not known:
         usage.update(
-            total_tokens=None, completion_tokens=None, cost=None, cost_requires_provider=True
+            prompt_tokens=None,
+            total_tokens=None,
+            completion_tokens=None,
+            cost=None,
+            cost_requires_provider=True,
         )
     tracker._results["model"] = {
         "status": status,
@@ -73,7 +85,11 @@ def test_metrics_survive_terminal_outcomes_and_unknown_usage(
         "file": "a/long/project/path/" * 8,
         "error": "intentional\nfailure with multiple lines",
         "usage": usage,
-        "harness": {"attempts": [{}], "timing": {"api_s": 4.0}},
+        "harness": {
+            "attempts": [{}],
+            "timing": {"api_s": 4.0},
+            "tool_usage": {"calls": 4, "failures": 1},
+        },
     }
     monkeypatch.setattr(module, "_tw", lambda: columns)
     tracker._render_final()
@@ -83,14 +99,17 @@ def test_metrics_survive_terminal_outcomes_and_unknown_usage(
     row = rows[0]
     assert "2 turns" in row and "1m 40s" in row
     assert all(len(line) <= columns for line in output.splitlines())
+    assert "tools used 4" in output and "tool fail 25.0%" in output
     if known:
         assert "1,200 tk" in row and "50 tk/s" in row and "$0.015" in row
+        assert "cache hit 50.0%" in output
     else:
         assert "tk unknown" in row and "cost unknown" in row and "tk/s —" in row
+        assert "cache hit —" in output
 
 
 @pytest.mark.parametrize("phase", ["building", "compacting", "linting", "running", "repairing"])
-@pytest.mark.parametrize("columns", [80, 110])
+@pytest.mark.parametrize("columns", [80, 110, 120])
 async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phase, columns):
     monkeypatch.setattr(module.time, "monotonic", lambda: 15.0)
     tracker.set_phase("model", phase)
@@ -114,10 +133,16 @@ async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phas
     assert phase in row and "5.0s" in row
     assert "1,200 tk" in row and "0 tk/s" in row and "2 turns" in row
     assert frame.count("$0.015") == 2  # Per-model cost and the batch total.
+    assert "cache hit 50.0%" in frame
+    assert "tools used 4" in frame and "tool fail 25.0%" in frame
     assert all(len(line) <= columns for line in frame.splitlines())
+    if columns == 80:
+        assert "cache hit" not in row
+    if columns == 120:
+        assert "cache hit" in row
 
 
-@pytest.mark.parametrize("count,hidden", [(5, 0), (7, 3)])
+@pytest.mark.parametrize("count,hidden", [(2, 0), (5, 3), (7, 5)])
 async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypatch, count, hidden):
     tracker._model_names = [f"model-{i}" for i in range(count)]
     for name in tracker._model_names:
@@ -141,6 +166,68 @@ async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypat
     else:
         assert "more…" not in frames[0]
     assert len(frames[0].splitlines()) <= 10
+
+
+def test_cache_rate_uses_reported_tokens_and_keeps_settled_rate_until_new_report(tracker):
+    tracker.start_harness_turn("model", 9000)
+    tracker.update_harness_stream("model", {}, 100)
+    assert tracker._harness_metrics("model")["cache_rate"] == 0.5
+    current = {"prompt_tokens": 3000, "prompt_tokens_details": {"cached_tokens": 2700}}
+    tracker.update_harness_stream("model", current, 100)
+    assert tracker._harness_metrics("model")["cache_rate"] == 0.8
+    tracker.update_harness_stream("model", current, 200)
+    assert tracker._harness_metrics("model")["cache_rate"] == 0.8
+    tracker.update_harness(
+        "model",
+        {"api_turns": 3, "prompt_tokens": 4000, "prompt_tokens_details": {"cached_tokens": 3200}},
+        6,
+    )
+    assert tracker._harness_metrics("model")["cache_rate"] == 0.8
+    assert tracker._harness_metrics("model")["tool_calls"] == 4
+    tracker.start_harness_turn("model", 1000, model_id="compactor")
+    tracker.update_harness_stream(
+        "model", {"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 0}}, 50
+    )
+    assert tracker._harness_metrics("model")["cache_rate"] == 0.64
+
+
+def test_first_turn_and_missing_cache_usage_are_unknown_not_zero(tracker):
+    tracker.update_harness("model", {"api_turns": 0}, 0)
+    tracker.update_harness_tools("model", {"calls": 0, "failures": 0})
+    tracker.start_harness_turn("model", 1000)
+    row = plain(tracker._format_harness_tool_metrics("model"))
+    assert "cache hit —" in row and "tools used 0" in row and "tool fail —" in row
+    current = {"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 0}}
+    tracker.update_harness_stream("model", current, 50)
+    assert tracker._harness_metrics("model")["cache_rate"] == 0
+    tracker.update_harness("model", {"api_turns": 1}, 1)
+    tracker.start_harness_turn("model", 1000)
+    tracker.update_harness_stream("model", current, 50)
+    assert tracker._harness_metrics("model")["cache_rate"] is None
+
+
+@pytest.mark.parametrize(
+    "prompt,cached,expected",
+    [
+        (100, 0, 0),
+        (100, 100, 1),
+        (0, 0, None),
+        (100, None, None),
+        (None, 20, None),
+        (100, -1, None),
+        (100, 101, None),
+        (True, 1, None),
+        (100, True, None),
+        (100, 1.5, None),
+    ],
+)
+def test_cache_rate_validates_native_counts(prompt, cached, expected):
+    assert (
+        cache_read_ratio(
+            {"prompt_tokens": prompt, "prompt_tokens_details": {"cached_tokens": cached}}
+        )
+        == expected
+    )
 
 
 def test_first_turn_cost_is_live_and_settles_without_double_counting(tracker):

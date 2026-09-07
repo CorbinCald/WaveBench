@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -178,6 +179,72 @@ async def test_idempotency_done_alone_and_output_limits(project):
     )[0]
     assert result["truncated"]
     assert "a" * 200 in (metadata / result["diagnostics"]).read_text()
+    assert dispatcher.tool_usage == {"calls": 4, "failures": 2}
+
+
+async def test_tool_metrics_update_before_parallel_batch_finishes(project):
+    ws, metadata = project
+    lint_started, finish_lint = asyncio.Event(), asyncio.Event()
+    updates = []
+
+    async def lint():
+        lint_started.set()
+        await finish_lint.wait()
+        return {"exit_code": 1, "stderr": "syntax error"}
+
+    dispatcher = Dispatcher(
+        ws, SimpleNamespace(lint=lint), metadata, Limits(), on_tool_result=updates.append
+    )
+    task = asyncio.create_task(
+        dispatcher.batch(
+            [
+                {
+                    "id": "write",
+                    "arguments": {"command": "write", "path": "main.py", "content": "bad"},
+                },
+                {"id": "read", "arguments": {"command": "read", "path": "missing"}},
+                {"id": "lint", "arguments": {"command": "lint"}},
+            ]
+        )
+    )
+    try:
+        await asyncio.wait_for(lint_started.wait(), 2)
+        assert not task.done()
+        assert updates[-1] == {"calls": 2, "failures": 1}
+    finally:
+        finish_lint.set()
+        results = await task
+    assert [result["ok"] for result in results] == [True, False, False]
+    assert updates[-1] == dispatcher.tool_usage == {"calls": 3, "failures": 2}
+    assert [update["calls"] for update in updates] == [1, 2, 3]
+    await dispatcher.batch([{"id": "write", "arguments": {"command": "ls"}}])
+    assert updates[-1] == {"calls": 4, "failures": 3}
+
+
+async def test_tool_metrics_include_cancelled_and_skipped_calls_once(project):
+    ws, metadata = project
+    started = asyncio.Event()
+    updates = []
+
+    async def lint():
+        started.set()
+        await asyncio.Event().wait()
+
+    dispatcher = Dispatcher(
+        ws, SimpleNamespace(lint=lint), metadata, Limits(), on_tool_result=updates.append
+    )
+    calls = [
+        {"id": "lint", "arguments": {"command": "lint"}},
+        {"id": "queued", "arguments": {"command": "ls"}},
+    ]
+    task = asyncio.create_task(dispatcher.batch(calls))
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert updates == [{"calls": 1, "failures": 1}, {"calls": 2, "failures": 2}]
+    assert all(not result["ok"] for result in await dispatcher.batch(calls))
+    assert len(updates) == 2
 
 
 def test_real_wb_cli_round_trip(project):

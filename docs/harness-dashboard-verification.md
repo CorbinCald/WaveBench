@@ -34,3 +34,42 @@ at 80 and 110 columns.
 
 Validation: `pytest -q` — 671 passed, one live test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## Cache and tool metrics — 2026-09-07
+
+Ran the real interactive `python -m wavebench --mode harness --open off` CLI
+in 80 × 28 and 120 × 28 PTYs with isolated temporary settings and outputs.
+A local HTTP/SSE fixture supplied two concurrent models, intermediate usage
+reports, and native write/read/lint/done calls. The real dispatcher and sandbox
+executed the projects. No paid API calls were made.
+
+One model attempted a missing-file read, built a program that failed execution,
+then repaired it. The other model completed successfully without reporting
+cache usage. Both final programs printed `42`.
+
+| Model fixture | Tools used | Tool failures | Cache hit | API turns | Program runs |
+|---|---:|---:|---:|---:|---:|
+| Cache | 8 | 12.5% (1/8) | 84.8% (17,800/21,000) | 6 | 2 |
+| Missing cache usage | 3 | 0.0% (0/3) | — | 3 | 1 |
+
+All 187 captured generation frames fit their terminal width and height.
+At 80 columns, the new metrics appeared below each model; at 120 columns,
+they fit beside the existing metrics. Counts survived the repair and matched
+the saved `harness.tool_usage` fields. Intermediate cache reports updated the
+percentage during streaming, and final values matched `usage.cache_read_ratio`.
+Sanitized final detail lines:
+
+```text
+cache hit — · tools used 3 · tool fail 0.0%
+cache hit 84.8% · tools used 8 · tool fail 12.5%
+```
+
+Automated regressions also cover partial parallel batches, failed lint,
+cancelled/queued tools, idempotent replays, invalid or missing cache counts,
+compaction, terminal outcomes, and hiding complete model rows in short terminals.
+Raw recordings and generated projects stayed under `/tmp`.
+
+Validation: `python -m pytest` — 742 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+The existing lint-isolation test failed on the first full run, then passed both
+in isolation and in the full rerun without code changes.

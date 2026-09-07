@@ -172,6 +172,9 @@ async def test_attempt_invariant_and_usage_across_repair(
     assert f"{count * 15} tk" in metrics and f"{count} turns" in metrics
     assert f"$0.00{count}" in metrics
     assert tracker._harness[session.name]["api_s"] == session.api_seconds
+    tool_usage = {"calls": 7 if fail_first else 4, "failures": 0}
+    assert tracker._harness[session.name]["tool_usage"] == tool_usage
+    assert "tool fail 0.0%" in tracker._format_harness_tool_metrics(session.name)
     if fail_first:
         repair_message = conversations[session.model_id][3][-1]
         assert (
@@ -183,6 +186,7 @@ async def test_attempt_invariant_and_usage_across_repair(
     stored = json.loads((session.metadata / "result.json").read_text())
     assert len(stored["harness"]["attempts"]) == expected
     assert stored["workspace"] == str(session.workspace.root)
+    assert stored["harness"]["tool_usage"] == tool_usage
 
 
 async def test_abandoned_repair_keeps_failure_without_fabricated_retry(factory, monkeypatch):

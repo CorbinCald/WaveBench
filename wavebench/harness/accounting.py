@@ -21,6 +21,19 @@ def reported_total(usage: dict) -> int | None:
     return None
 
 
+def cache_read_ratio(*usages: dict) -> float | None:
+    """Weight cache hits by reported prompt tokens, never by turns or estimates."""
+    prompt_total = cached_total = 0
+    for usage in usages:
+        prompt = usage.get("prompt_tokens")
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+        if not (type(prompt) is int and type(cached) is int and 0 <= cached <= prompt):
+            return None
+        prompt_total += prompt
+        cached_total += cached
+    return cached_total / prompt_total if prompt_total else None
+
+
 @dataclass(frozen=True)
 class Measurement:
     value: float | None

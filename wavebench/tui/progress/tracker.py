@@ -27,6 +27,7 @@ except ImportError:
 
 from wavebench.harness.accounting import (
     Measurement,
+    cache_read_ratio,
     estimate_cost,
     reported_total,
     settled,
@@ -246,7 +247,13 @@ class ProgressTracker:
 
     def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
-        self._harness[model_name] = {"usage": usage, "api_s": api_seconds}
+        tools = self._harness.get(model_name, {}).get("tool_usage", {})
+        self._harness[model_name] = {"usage": usage, "api_s": api_seconds, "tool_usage": tools}
+
+    def update_harness_tools(self, model_name: str, usage: dict) -> None:
+        """Publish completed tool calls immediately, including partial parallel batches."""
+        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
+        metrics["tool_usage"] = usage.copy()
 
     def start_harness_turn(
         self, model_name: str, input_tokens: int, *, model_id: str | None = None
@@ -302,12 +309,15 @@ class ProgressTracker:
             harness = result["harness"]
             api_seconds = (harness.get("timing") or {}).get("api_s", 0)
             turns = usage.get("api_turns", len(harness.get("turns", [])))
+            tools = harness.get("tool_usage") or {}
             metrics = {}
         else:
             metrics = self._harness[name]
             usage = metrics["usage"]
             api_seconds = metrics["api_s"]
             turns = usage.get("api_turns", 0)
+            tools = metrics.get("tool_usage") or {}
+        cache_usages = [usage] if turns else []
         tokens = settled(usage, "total_tokens", turns)
         completion = usage.get("completion_tokens")
         cost = settled(usage, "cost", turns)
@@ -321,6 +331,8 @@ class ProgressTracker:
         if streaming:
             turns += 1
             current = metrics["current_usage"]
+            if cache_read_ratio(current) is not None:
+                cache_usages.append(current)
             prompt = current.get("prompt_tokens")
             if not valid_number(prompt):
                 prompt = metrics["input_tokens"]
@@ -357,6 +369,9 @@ class ProgressTracker:
             "turns": turns,
             "rate": rate,
             "rate_estimated": rate_estimated,
+            "cache_rate": cache_read_ratio(*cache_usages),
+            "tool_calls": tools.get("calls"),
+            "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
     @staticmethod
@@ -383,6 +398,20 @@ class ProgressTracker:
         return (
             f"{S.DIM}{token_s}{S.RST} {_styles.ACCENT}{rate_s}{S.RST} "
             f"{S.HYEL}{cost_s}{S.RST} {S.DIM}{turn_s}{S.RST}"
+        )
+
+    def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
+        values = self._harness_metrics(name, result)
+        cache, calls, failures = (
+            values[key] for key in ("cache_rate", "tool_calls", "tool_failure_rate")
+        )
+        cache_s = f"{cache:.1%}" if cache is not None else "—"
+        calls_s = f"{calls:,}" if calls is not None else "—"
+        failures_s = f"{failures:.1%}" if failures is not None else "—"
+        color = S.YEL if failures else S.DIM
+        return (
+            f"{S.DIM}cache hit {cache_s} · tools used {calls_s} · {S.RST}"
+            f"{color}tool fail {failures_s}{S.RST}"
         )
 
     def _cost_summary(self, *, live: bool = False) -> str:
@@ -416,7 +445,7 @@ class ProgressTracker:
     def _format_harness_row(
         self, name: str, inner_w: int, result: dict | None = None, rank: int = 0, tick: int = 0
     ) -> str:
-        """Fit status and metrics on one row, giving optional path/error text spare space."""
+        """Keep the model/status legible, wrapping added metrics when space is tight."""
         detail = ""
         if result is not None:
             status = result.get("status", "failed")
@@ -439,9 +468,16 @@ class ProgressTracker:
             if retry and retry["until"] > time.monotonic():
                 status = f"HTTP {retry['status']} retry {retry['attempt']}/{retry['max']}"
                 detail = f"in {retry['until'] - time.monotonic():.1f}s"
-        suffix = (
-            f"{self._format_harness_metrics(name, result)} {S.DIM}{format_duration(elapsed)}{S.RST}"
+        metrics = self._format_harness_metrics(name, result)
+        extra = self._format_harness_tool_metrics(name, result)
+        duration = f"{S.DIM}{format_duration(elapsed)}{S.RST}"
+        suffix = f"{metrics} {duration}"
+        minimum_name = min(len(name), self._pad, 12)
+        inline = (
+            _vlen(suffix) + _vlen(extra) + _vlen(symbol) + minimum_name + len(status) + 5 <= inner_w
         )
+        if inline:
+            suffix = f"{metrics} {extra} {duration}"
         available = inner_w - _vlen(suffix) - _vlen(symbol) - 3
         name_w = max(1, min(self._pad, available - len(status) - 1))
         status_w = max(1, available - name_w)
@@ -452,7 +488,11 @@ class ProgressTracker:
             detail = " ".join(detail.split())
             prefix += f" {S.DIM}{_truncate(detail, spare)}{S.RST}"
         gap = max(1, inner_w - _vlen(prefix) - _vlen(suffix))
-        return f"{prefix}{' ' * gap}{suffix}"
+        row = f"{prefix}{' ' * gap}{suffix}"
+        if not inline:
+            indent = min(_vlen(symbol) + 1, max(0, inner_w - _vlen(extra)))
+            row += f"\n{' ' * indent}{extra}"
+        return row
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -730,7 +770,8 @@ class ProgressTracker:
             return (order.get(v.get("status", "failed"), 3), v.get("time_s", 0))
 
         for i, (name, info) in enumerate(sorted(self._results.items(), key=_rank_key), 1):
-            buf.append(_box_row(self._format_result_row(name, info, i, inner_w), w))
+            for row in self._format_result_row(name, info, i, inner_w).splitlines():
+                buf.append(_box_row(row, w))
 
         buf.append(_box_sep("", w))
         ok = sum(1 for v in self._results.values() if v.get("status") == "success")
@@ -792,23 +833,21 @@ class ProgressTracker:
 
                 _chrome = lines + 3
                 max_model_rows = max(1, term.lines - _chrome)
-                # Reserve a row for the hidden-model count when the list does not fit.
-                max_visible = max_model_rows - int(len(self._model_names) > max_model_rows)
-
                 completed_idx = 0
                 visible = 0
                 hidden = 0
-                for name in self._model_names:
+                for position, name in enumerate(self._model_names):
                     result = self._results.get(name)
                     harness = name in self._harness or bool(result and result.get("harness"))
-                    if visible >= max_visible:
+                    if result is not None:
+                        completed_idx += 1
+                    # Leave room for a hidden-model count unless this is the last model.
+                    row_budget = max_model_rows - int(position < len(self._model_names) - 1)
+                    if hidden or visible >= row_budget:
                         hidden += 1
-                        if name in self._results:
-                            completed_idx += 1
                         continue
 
                     if name in self._results:
-                        completed_idx += 1
                         row = self._format_result_row(
                             name, self._results[name], completed_idx, inner_w
                         )
@@ -927,9 +966,14 @@ class ProgressTracker:
                         boxes = self._phase_boxes(0)
                         row = f"{boxes}   {_rpad(name, self._pad)}  {S.DIM}waiting…{S.RST}"
 
-                    buf.append(_box_row(row, w) + "\033[K\n")
-                    lines += 1
-                    visible += 1
+                    model_rows = row.splitlines()
+                    if visible + len(model_rows) > row_budget:
+                        hidden += 1
+                        continue
+                    for model_row in model_rows:
+                        buf.append(_box_row(model_row, w) + "\033[K\n")
+                    lines += len(model_rows)
+                    visible += len(model_rows)
 
                 if hidden > 0:
                     buf.append(_box_row(f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")

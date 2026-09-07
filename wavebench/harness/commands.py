@@ -128,18 +128,33 @@ def launch_descriptor(command: dict, workspace: Workspace) -> dict:
 
 class Dispatcher:
     def __init__(
-        self, workspace: Workspace, runtime: Any, metadata: Path, limits: Limits, on_phase=None
+        self,
+        workspace: Workspace,
+        runtime: Any,
+        metadata: Path,
+        limits: Limits,
+        on_phase=None,
+        on_tool_result=None,
     ):
         self.workspace = workspace
         self.runtime = runtime
         self.metadata = metadata
         self.limits = limits
         self.on_phase = on_phase or (lambda _: None)
+        self.on_tool_result = on_tool_result or (lambda _: None)
+        self.tool_usage = {"calls": 0, "failures": 0}
         self.submission: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
         self._lock = asyncio.Lock()
         self._serial = 0
+
+    def _record_result(self, result: dict) -> dict:
+        """Count settled tool outcomes; replaying an identical call adds no work."""
+        self.tool_usage["calls"] += 1
+        self.tool_usage["failures"] += int(not result["ok"])
+        self.on_tool_result(self.tool_usage.copy())
+        return result
 
     def reopen(self) -> None:
         self.submission = None
@@ -227,11 +242,13 @@ class Dispatcher:
                     if cached:
                         if cached[0] == signature:
                             return cached[1]
-                        return {
-                            "id": call_id,
-                            "ok": False,
-                            "error": "call ID reused with different arguments; skipped",
-                        }
+                        return self._record_result(
+                            {
+                                "id": call_id,
+                                "ok": False,
+                                "error": "call ID reused with different arguments; skipped",
+                            }
+                        )
                     async with semaphore:
                         started = time.monotonic()
                         try:
@@ -272,6 +289,7 @@ class Dispatcher:
                         finally:
                             self._serial += 1
                             if "result" in locals():
+                                self._record_result(result)
                                 full = {
                                     **result,
                                     "command": command,
@@ -310,6 +328,7 @@ class Dispatcher:
                         }
                         command = call.get("arguments", {})
                         self._calls[call_id] = (json.dumps(command, sort_keys=True), result)
+                        self._record_result(result)
                         (self.metadata / f"tool-{self._serial:04d}.json").write_text(
                             json.dumps({**result, "command": command})
                         )
