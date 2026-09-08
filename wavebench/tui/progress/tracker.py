@@ -265,13 +265,17 @@ class ProgressTracker:
         self._wave_completed_chars += active["chars"]
         active.update(chars=0, last_chars=0, last_rate_time=0.0, smoothed_rate=0.0)
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
+        now = time.monotonic()
         metrics.update(
-            turn_start=time.monotonic(),
+            turn_start=now,
             input_tokens=input_tokens,
             output_tokens=0,
             current_usage={},
             usage_anchors={},
             rate_samples=deque(),
+            rate_smoothed=0.0,
+            rate_updated=now,
+            rate_last_output=now,
             model_id=model_id or self._model_id_map.get(model_name, ""),
         )
 
@@ -284,6 +288,8 @@ class ProgressTracker:
         delta = output_tokens - metrics["output_tokens"]
         if delta:
             metrics["rate_samples"].append((now, delta))
+        if delta > 0:
+            metrics["rate_last_output"] = now
         self._harness_live_rate(metrics, now)
         previous = metrics["current_usage"]
         # An intermediate provider snapshot covers output received up to here.
@@ -297,11 +303,24 @@ class ProgressTracker:
 
     @staticmethod
     def _harness_live_rate(metrics: dict, now: float) -> float:
-        """Tokens received in the trailing second; expire even without stream callbacks."""
+        """Smooth the trailing-second rate, refreshing at most four times a second.
+
+        A 0.8-second time constant softens chunk arrivals and expirations without
+        tying smoothing to frame or callback frequency. Idle streams reach zero
+        within three seconds; settled turns bypass this live estimate entirely.
+        """
         samples = metrics["rate_samples"]
         while samples and samples[0][0] <= now - 1.0:
             samples.popleft()
-        return max(0, sum(delta for _, delta in samples))
+        if now - metrics["rate_last_output"] >= 3.0:
+            metrics.update(rate_smoothed=0.0, rate_updated=now)
+        elapsed = now - metrics["rate_updated"]
+        if elapsed >= 0.25:
+            rate = max(0, sum(delta for _, delta in samples))
+            weight = -math.expm1(-elapsed / 0.8)
+            metrics["rate_smoothed"] += weight * (rate - metrics["rate_smoothed"])
+            metrics["rate_updated"] = now
+        return metrics["rate_smoothed"]
 
     def _harness_metrics(self, name: str, result: dict | None = None) -> dict:
         if result is not None:

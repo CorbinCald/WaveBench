@@ -134,3 +134,23 @@ hidden-model counts in short terminals.
 
 Validation: `python -m pytest` — 763 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## Smoothed live speed — 2026-09-08
+
+Live TK/S now applies a 0.8-second exponential average to the trailing-second
+rate, refreshing at most four times per second. Token totals still update
+immediately. The rate eases down during pauses, reaches zero within three
+seconds of the last output, and resets between turns. Final provider averages
+are unchanged.
+
+Verified in the real interactive Harness CLI in an 80 × 28 PTY with two local
+HTTP/SSE fixture models, uneven token bursts, and a four-second streaming pause.
+The initial 66 recorded frames contained only 14 displayed rate changes; the
+rate eased down and reached zero during the pause. All 258 generation frames
+fit on screen. Both projects completed, including a repair, and printed `42`.
+No paid calls were made; temporary settings and recordings stayed under `/tmp`.
+
+Regression coverage checks burst smoothing around the actual average, immediate
+token totals, refresh cadence, duplicate billing callbacks, idle decay, and
+turn resets. Validation: `python -m pytest` — 765 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.

@@ -328,9 +328,11 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
-Live speed counts output tokens received in the trailing second, using the same
-local tokenizer as the growing token estimate. Each received text batch updates
-the count immediately. TPS reaches zero after one second without new output and
+Live speed smooths the trailing-second output rate with a 0.8-second exponential
+average, refreshed at most four times per second to soften bursty delivery.
+It uses the same local tokenizer as the growing token estimate; each received
+text batch still updates the token total immediately. TPS eases down during
+pauses, reaches zero within three seconds without new output, and
 stays zero between calls, including tool, queue, and retry waits. Provider usage
 corrections do not count as a burst of generated tokens. Final results show average
 speed: reported output tokens divided by total API time, excluding tools,
