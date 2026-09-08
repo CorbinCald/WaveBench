@@ -282,12 +282,14 @@ one-shot model rows. Failed runs' known costs are also included.
 
 The live dashboard and final results show each model's status, total tokens,
 output tokens per second (`tk/s`), cost, turns, elapsed time, cache hit percentage,
-tools used, and tool failure percentage. Each model has a name/status header
-with elapsed time on the right. An aligned grid below groups tokens, speed,
-cost, and turns together, followed by cache and tool activity. Narrow terminals
-use fewer columns while keeping metric values and units together. Short terminals
-reserve space for a count of hidden models. Model names and optional path/error
-details shorten as needed to fit. Totals accumulate across build, repair, and
+tools used, and tool failure percentage. Each model occupies one row beneath
+shared column headers, with phase and metrics aligned across models. Values
+use compact k/M/B/T suffixes when needed; `—` means unknown, and estimation
+and partial-usage markers remain visible. At 60 columns, abbreviated headings
+include `TN` (turns), `HIT%` (cache hits), and `USE` (tools used). Below 60 columns,
+the display prioritizes model, phase, tokens, cost, and time. Model names and
+phases shorten to fit, and short terminals reserve a count of hidden models.
+Totals accumulate across build, repair, and
 context-compaction calls, including failed calls with reported usage.
 A turn is one model API call, including the current call; HTTP
 retries and individual tools within a call do not add turns.
