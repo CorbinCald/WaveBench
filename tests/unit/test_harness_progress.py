@@ -66,7 +66,7 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
 
 @pytest.mark.parametrize("status", ["success", "failed", "cancelled"])
 @pytest.mark.parametrize("known", [True, False])
-@pytest.mark.parametrize("columns", [80, 110, 120])
+@pytest.mark.parametrize("columns", [60, 80, 110, 120])
 def test_metrics_survive_terminal_outcomes_and_unknown_usage(
     tracker, monkeypatch, capsys, status, known, columns
 ):
@@ -97,19 +97,19 @@ def test_metrics_survive_terminal_outcomes_and_unknown_usage(
     rows = [line for line in output.splitlines() if "model" in line]
     assert len(rows) == 1
     row = rows[0]
-    assert "2 turns" in row and "1m 40s" in row
+    assert "2 turns" in output and "1m 40s" in row
     assert all(len(line) <= columns for line in output.splitlines())
     assert "tools used 4" in output and "tool fail 25.0%" in output
     if known:
-        assert "1,200 tk" in row and "50 tk/s" in row and "$0.015" in row
+        assert "1,200 tk" in output and "50 tk/s" in output and "$0.015" in output
         assert "cache hit 50.0%" in output
     else:
-        assert "tk unknown" in row and "cost unknown" in row and "tk/s —" in row
+        assert "tk unknown" in output and "cost unknown" in output and "tk/s —" in output
         assert "cache hit —" in output
 
 
 @pytest.mark.parametrize("phase", ["building", "compacting", "linting", "running", "repairing"])
-@pytest.mark.parametrize("columns", [80, 110, 120])
+@pytest.mark.parametrize("columns", [60, 80, 110, 120])
 async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phase, columns):
     monkeypatch.setattr(module.time, "monotonic", lambda: 15.0)
     tracker.set_phase("model", phase)
@@ -131,18 +131,15 @@ async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phas
     assert len(rows) == 1
     row = rows[0]
     assert phase in row and "5.0s" in row
-    assert "1,200 tk" in row and "0 tk/s" in row and "2 turns" in row
+    assert "1,200 tk" in frame and "0 tk/s" in frame and "2 turns" in frame
     assert frame.count("$0.015") == 2  # Per-model cost and the batch total.
     assert "cache hit 50.0%" in frame
     assert "tools used 4" in frame and "tool fail 25.0%" in frame
     assert all(len(line) <= columns for line in frame.splitlines())
-    if columns == 80:
-        assert "cache hit" not in row
-    if columns == 120:
-        assert "cache hit" in row
+    assert "tk" not in row and "cache hit" not in row
 
 
-@pytest.mark.parametrize("count,hidden", [(2, 0), (5, 3), (7, 5)])
+@pytest.mark.parametrize("count,hidden", [(1, 0), (2, 1), (5, 4), (7, 6)])
 async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypatch, count, hidden):
     tracker._model_names = [f"model-{i}" for i in range(count)]
     for name in tracker._model_names:
@@ -166,6 +163,55 @@ async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypat
     else:
         assert "more…" not in frames[0]
     assert len(frames[0].splitlines()) <= 10
+
+
+@pytest.mark.parametrize("width", [32, 52, 72, 102, 112])
+def test_model_grid_preserves_metrics_and_retry_status(tracker, width):
+    tracker.note_retry("model", 429, 1, 3, 2)
+    row = plain(tracker._format_harness_row("model", width))
+    assert "HTTP 429 retry 1/3" in row if width >= 52 else "HTTP 429" in row
+    assert "in 2.0s" in row
+    for metric in (
+        "1,200 tk",
+        "0 tk/s",
+        "$0.015",
+        "2 turns",
+        "cache hit 50.0%",
+        "tools used 4",
+        "tool fail 25.0%",
+    ):
+        assert metric in row
+    assert all(len(line) <= width for line in row.splitlines())
+
+
+def test_grid_columns_stay_aligned_as_counters_grow(tracker):
+    before = plain(tracker._format_harness_row("model", 72)).splitlines()
+    tracker.update_harness(
+        "model", {"api_turns": 999, "total_tokens": 123456789, "cost": 999.99}, 40
+    )
+    after = plain(tracker._format_harness_row("model", 72)).splitlines()
+    assert len(before) == len(after) == 3
+    for old, new in (
+        ("1,200 tk", "123,456,789 tk"),
+        ("$0.015", "$999.99"),
+        ("2 turns", "999 turns"),
+    ):
+        assert before[1].index(old) == after[1].index(new)
+    assert before[2].index("cache hit") == after[2].index("cache hit")
+    assert all(len(line) <= 72 for line in after)
+
+
+def test_full_percentages_keep_tool_columns_aligned(tracker):
+    before = plain(tracker._format_harness_row("model", 72)).splitlines()
+    tracker._harness["model"]["usage"]["prompt_tokens_details"]["cached_tokens"] = 1000
+    tracker.update_harness_tools("model", {"calls": 1000, "failures": 1000})
+    after = plain(tracker._format_harness_row("model", 72)).splitlines()
+    assert len(before) == len(after) == 3
+    for label in ("cache hit", "tools used", "tool fail"):
+        assert before[2].index(label) == after[2].index(label)
+    assert "cache hit 100.0%" in after[2] and "tool fail 100.0%" in after[2]
+    assert "tools used 1,000" in after[2]
+    assert all(len(line) <= 72 for line in after)
 
 
 def test_cache_rate_uses_reported_tokens_and_keeps_settled_rate_until_new_report(tracker):

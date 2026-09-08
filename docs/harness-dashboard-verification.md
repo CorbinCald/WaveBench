@@ -73,3 +73,41 @@ Validation: `python -m pytest` — 742 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
 The existing lint-isolation test failed on the first full run, then passed both
 in isolation and in the full rerun without code changes.
+
+## Aligned metric layout — 2026-09-08
+
+Replaced the width-dependent inline layout with a consistent model/status
+header and an indented metric grid. At 80 and 120 columns, usage occupies four
+columns with cache and tool activity underneath. At 60 columns, the grid uses
+two columns. Model names are bold, secondary metrics are subdued, and nonzero
+tool failure rates retain their warning color. Paths, errors, and retry delays
+have a separate detail line.
+
+Ran the real interactive `python -m wavebench --mode harness --open off` CLI
+in 60 × 28, 80 × 28, and 120 × 28 PTYs with isolated temporary settings and
+outputs. A local HTTP/SSE fixture drove two concurrent models through native
+file operations, lint, sandbox execution, and repair. Both generated programs
+printed `42`. All 266 captured generation frames fit the terminal dimensions,
+and displayed totals matched saved results. No paid API calls were made.
+
+An excerpt from the 80-column recording:
+
+```text
+    ⠧ Cache-generation-model     repairing                          3.9s
+      ~10,965 tk       ~6 tk/s          ~$0.011          4 turns
+      cache hit 71.7%  tools used 5     tool fail 20.0%
+ 1. ✓ Missing-generation-model   passed                             3.4s
+      6,300 tk         91 tk/s          $0.006           3 turns
+      cache hit —      tools used 3     tool fail 0.0%
+```
+
+Regression coverage checks phases, terminal outcomes, missing usage, retries,
+short-terminal hidden-model counts, large counters, and stable columns when
+cache/tool percentages reach 100%. Raw recordings and generated projects remain
+under `/tmp`.
+
+A further 80 × 28 run with `NO_COLOR=1` verified the final layout with 100% cache
+hits. All 89 frames fit, both projects passed, and the tool columns stayed aligned.
+
+Validation: `python -m pytest` — 761 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.
