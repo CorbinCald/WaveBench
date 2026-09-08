@@ -111,3 +111,26 @@ hits. All 89 frames fit, both projects passed, and the tool columns stayed align
 
 Validation: `python -m pytest` — 761 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## Single-row correction — 2026-09-08
+
+Replaced the stacked grid above with one shared column header and exactly one
+row per model in live generation and final results. Tokens, speed, cost, turns,
+cache, tools, failures, and elapsed time stay beside the model and phase.
+Large numbers compact to unit suffixes as needed; unknown, estimated, and
+partial measurements retain their markers. Numeric columns align on the right.
+
+Verified through the real interactive `python -m wavebench --mode harness
+--open off` CLI in 80 × 28 and 120 × 28 PTYs. Local HTTP/SSE fixtures supplied
+two concurrent models named like the screenshot; one completed directly and
+one repaired a failed program. Both final programs printed `42`, and totals
+matched saved results. All 180 generation frames fit the terminal dimensions,
+including the shared header and one metric row per model. No paid calls were
+made; settings, generated projects, and recordings stayed under `/tmp`.
+
+Regression tests cover single-row streaming and outcomes at 60–120 columns,
+retries, missing usage, growing counters, 100% rates, tiny nonzero costs, and
+hidden-model counts in short terminals.
+
+Validation: `python -m pytest` — 763 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.

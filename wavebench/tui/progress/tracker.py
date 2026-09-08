@@ -419,29 +419,63 @@ class ProgressTracker:
     def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
         return f" {S.DIM}·{S.RST} ".join(self._harness_metric_cells(name, result)[4:])
 
-    def _harness_metric_rows(self, name: str, inner_w: int, result: dict | None) -> list[str]:
-        """Keep usage and tool activity on a stable grid, reflowing whole cells."""
-        indent = " " * 6
-        available = inner_w - len(indent)
-        columns = 4 if available >= 66 else 2 if available >= 32 else 1
-        cell_w = (available - 2 * (columns - 1)) // columns
-        cells = self._harness_metric_cells(name, result)
-        rows = []
-        for group in (cells[:4], cells[4:]):
-            row = ""
-            used = 0
-            for cell in group:
-                # Large totals may occupy adjacent columns without shifting the grid.
-                span = min(columns, max(1, math.ceil((_vlen(cell) + 1) / (cell_w + 2))))
-                if used and (
-                    used + span > columns or used * (cell_w + 2) + _vlen(cell) > available
-                ):
-                    rows.append(indent + row.rstrip())
-                    row, used = "", 0
-                row += _rpad(cell, span * (cell_w + 2))
-                used += span
-            rows.append(indent + row.rstrip())
-        return rows
+    @staticmethod
+    def _harness_columns(inner_w: int) -> list[tuple[str, int]]:
+        """Shared column widths keep every model aligned without wrapping."""
+        keys = ["phase", "tokens", "rate", "cost", "turns", "cache", "tools", "fail", "time"]
+        if inner_w >= 100:
+            widths = [11, 10, 6, 9, 5, 6, 5, 6, 7]
+        elif inner_w >= 72:
+            widths = [9, 7, 4, 7, 5, 5, 5, 5, 5]
+        elif inner_w >= 52:
+            widths = [5, 5, 3, 6, 2, 4, 3, 4, 4]
+        else:
+            keys = ["phase", "tokens", "cost", "time"]
+            widths = [5, 6, 7, 5]
+            while widths and sum(widths) + len(widths) + 3 > inner_w:
+                keys.pop()
+                widths.pop()
+        name_w = max(1, inner_w - sum(widths) - len(widths) - 2)
+        return [("name", name_w), *zip(keys, widths, strict=True)]
+
+    def _format_harness_header(self, inner_w: int) -> str:
+        labels = {
+            "name": "MODEL",
+            "phase": "PHASE",
+            "tokens": "TOKENS",
+            "rate": "TK/S",
+            "cost": "COST",
+            "turns": "TURNS",
+            "cache": "CACHE",
+            "tools": "TOOLS",
+            "fail": "FAIL",
+            "time": "TIME",
+        }
+        short = {"tokens": "TOK", "rate": "/S", "turns": "TN", "cache": "HIT%", "tools": "USE"}
+        cells = []
+        for key, width in self._harness_columns(inner_w):
+            label = labels[key]
+            if len(label) > width:
+                label = short.get(key, label[:width])
+            cells.append(f"{label:<{width}}" if key in {"name", "phase"} else f"{label:>{width}}")
+        return f"{S.DIM}  {' '.join(cells)}{S.RST}"
+
+    @staticmethod
+    def _compact_harness_number(
+        value: float, width: int, *, prefix: str = "", suffix: str = ""
+    ) -> str:
+        """Use k/M/B suffixes only when the exact value does not fit its column."""
+        exact = f"{prefix}{value:,.0f}{suffix}"
+        if len(exact) <= width:
+            return exact
+        for scale, unit in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")):
+            if value < scale:
+                continue
+            for decimals in (1, 0):
+                compact = f"{prefix}{value / scale:.{decimals}f}{unit}{suffix}"
+                if len(compact) <= width:
+                    return compact
+        return _truncate(exact, width)
 
     def _cost_summary(self, *, live: bool = False) -> str:
         names = set(self._results)
@@ -474,45 +508,88 @@ class ProgressTracker:
     def _format_harness_row(
         self, name: str, inner_w: int, result: dict | None = None, rank: int = 0, tick: int = 0
     ) -> str:
-        """A model/status header followed by aligned usage and tool metrics."""
-        detail = ""
+        """One model, phase, and complete set of metrics on a single table row."""
         if result is not None:
             status = result.get("status", "failed")
             symbol = {"success": _ok, "cancelled": _skip}.get(status, _fail)
-            symbol = f"{S.DIM}{rank:>2}.{S.RST} {symbol}"
             if status == "success":
                 status = "passed"
-                detail = result.get("file", "")
-            else:
-                detail = str(result.get("error") or "")
-            retries = result.get("retries") or []
-            if retries:
-                detail = f"{len(retries)} retries {detail}"
             elapsed = result.get("time_s", 0)
         else:
             status = self._parsing.get(name, {}).get("label", "waiting")
-            symbol = f"    {_styles.ACCENT}{_SPIN[tick % len(_SPIN)]}{S.RST}"
+            symbol = f"{_styles.ACCENT}{_SPIN[tick % len(_SPIN)]}{S.RST}"
             elapsed = time.monotonic() - self._active.get(name, {}).get("start", self._start)
             retry = self._retries.get(name)
             if retry and retry["until"] > time.monotonic():
-                status = f"HTTP {retry['status']} retry {retry['attempt']}/{retry['max']}"
-                detail = f"in {retry['until'] - time.monotonic():.1f}s"
-        duration = f"{S.DIM}{format_duration(elapsed)}{S.RST}"
-        available = inner_w - _vlen(duration) - _vlen(symbol) - 4
-        name_w = max(1, min(max(self._pad, 24), available - min(len(status), 24) - 2))
-        status_w = max(1, available - name_w - 2)
-        label = _rpad(_truncate(name, name_w), name_w)
-        status_color = S.DIM if result is not None else _styles.ACCENT
-        prefix = (
-            f"{symbol} {S.BOLD}{label}{S.RST}  {status_color}{_truncate(status, status_w)}{S.RST}"
-        )
-        gap = max(1, inner_w - _vlen(prefix) - _vlen(duration))
-        rows = [f"{prefix}{' ' * gap}{duration}"]
-        rows.extend(self._harness_metric_rows(name, inner_w, result))
-        if detail:
-            detail = _truncate(" ".join(detail.split()), max(1, inner_w - 6))
-            rows.append(f"      {S.DIM}{detail}{S.RST}")
-        return "\n".join(rows)
+                remaining = math.ceil(retry["until"] - time.monotonic())
+                status = f"{retry['status']} {retry['attempt']}/{retry['max']} {remaining}s"
+        values = self._harness_metrics(name, result)
+        cells = []
+        for key, width in self._harness_columns(inner_w):
+            color = S.DIM
+            if key == "name":
+                text, color = name, S.BOLD
+            elif key == "phase":
+                text = status
+                color = S.DIM if result is not None else _styles.ACCENT
+            elif key in {"tokens", "cost"}:
+                measurement = values[key]
+                text = "—"
+                color = ""
+                if measurement.value is not None and not (
+                    key == "cost" and measurement.value == 0 and measurement.incomplete
+                ):
+                    if key == "cost":
+                        text = self._format_harness_cost(measurement)
+                        if len(text) > width:
+                            text = text.replace("$0.", "$.")
+                        if len(text) > width and measurement.value < 1000:
+                            for precision in (3, 2, 1):
+                                text = (
+                                    f"{measurement.prefix}${measurement.value:.{precision}g}"
+                                    f"{measurement.suffix}"
+                                ).replace("$0.", "$.")
+                                if len(text) <= width:
+                                    break
+                            if len(text) > width:
+                                amount = f"{measurement.value:.0e}".replace("e-0", "e-")
+                                text = f"{measurement.prefix}${amount}{measurement.suffix}"
+                    if key == "tokens" or (
+                        key == "cost" and len(text) > width and measurement.value >= 1000
+                    ):
+                        text = self._compact_harness_number(
+                            measurement.value,
+                            width,
+                            prefix=measurement.prefix + ("$" if key == "cost" else ""),
+                            suffix=measurement.suffix,
+                        )
+            elif key in {"rate", "turns", "tools"}:
+                value = values[{"rate": "rate", "turns": "turns", "tools": "tool_calls"}[key]]
+                prefix = "~" if key == "rate" and values["rate_estimated"] else ""
+                text = (
+                    "—"
+                    if value is None
+                    else self._compact_harness_number(value, width, prefix=prefix)
+                )
+                if key == "rate":
+                    color = _styles.ACCENT
+            elif key in {"cache", "fail"}:
+                value = values["cache_rate" if key == "cache" else "tool_failure_rate"]
+                text = "—" if value is None else f"{value:.1%}"
+                if len(text) > width:
+                    text = f"{value:.0%}"
+                if key == "fail" and value:
+                    color = S.YEL
+            else:
+                text = format_duration(elapsed)
+                if len(text) > width:
+                    text = text.replace(" ", "")
+                if len(text) > width:
+                    text = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.0f}m"
+            text = _truncate(text, width)
+            text = f"{text:<{width}}" if key in {"name", "phase"} else f"{text:>{width}}"
+            cells.append(f"{color}{text}{S.RST}")
+        return f"{symbol} {' '.join(cells)}"
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -784,6 +861,9 @@ class ProgressTracker:
         else:
             buf.append(_box_row("", w))
 
+        if any(info.get("harness") for info in self._results.values()):
+            buf.append(_box_row(self._format_harness_header(inner_w), w))
+
         def _rank_key(item: Any) -> Any:
             _, v = item
             order = {"success": 0, "failed": 1, "cancelled": 2}
@@ -849,6 +929,10 @@ class ProgressTracker:
                     lines += 2
                 else:
                     buf.append(_box_row("", w) + "\033[K\n")
+                    lines += 1
+
+                if self._harness or any(info.get("harness") for info in self._results.values()):
+                    buf.append(_box_row(self._format_harness_header(inner_w), w) + "\033[K\n")
                     lines += 1
 
                 _chrome = lines + 3
