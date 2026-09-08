@@ -17,7 +17,6 @@ import math
 import shutil
 import sys
 import time
-from collections import deque
 from typing import Any
 
 try:
@@ -103,6 +102,7 @@ class ProgressTracker:
         self._active: dict[str, dict[str, Any]] = {}
         self._parsing: dict[str, dict[str, Any]] = {}
         self._harness: dict[str, dict[str, Any]] = {}
+        self._harness_samples: dict[str, dict[str, Any]] = {}
         self._phases: dict[str, float] = {}
         # Live throttle/retry state per model. Cleared once the retry's
         # `until` deadline passes; total count survives so the active-row
@@ -244,6 +244,7 @@ class ProgressTracker:
         if phase == "finished":
             self.unregister(model_name)
             self.finish_parsing(model_name)
+            self._harness_samples.pop(model_name, None)
 
     def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
@@ -272,25 +273,23 @@ class ProgressTracker:
             output_tokens=0,
             current_usage={},
             usage_anchors={},
-            rate_samples=deque(),
-            rate_smoothed=0.0,
-            rate_updated=now,
-            rate_last_output=now,
             model_id=model_id or self._model_id_map.get(model_name, ""),
         )
+        if model_name not in self._harness_samples:
+            self._harness_samples[model_name] = {
+                "updated": now,
+                "output_tokens": 0,
+                "published_output_tokens": 0,
+                "tokens": self._harness_metrics(model_name)["tokens"],
+                "rate": 0.0,
+            }
 
     def update_harness_stream(self, name: str, usage: dict, output_tokens: int) -> None:
         """Publish provider snapshots alongside the separately tokenized visible output."""
         metrics = self._harness.get(name)
         if metrics is None or metrics.get("turn_start") is None:
             return
-        now = time.monotonic()
-        delta = output_tokens - metrics["output_tokens"]
-        if delta:
-            metrics["rate_samples"].append((now, delta))
-        if delta > 0:
-            metrics["rate_last_output"] = now
-        self._harness_live_rate(metrics, now)
+        self._harness_samples[name]["output_tokens"] += output_tokens - metrics["output_tokens"]
         previous = metrics["current_usage"]
         # An intermediate provider snapshot covers output received up to here.
         # Estimate only subsequent output until the next native measurement.
@@ -301,28 +300,30 @@ class ProgressTracker:
                 metrics["usage_anchors"][key] = output_tokens
         metrics.update(current_usage=usage, output_tokens=output_tokens)
 
-    @staticmethod
-    def _harness_live_rate(metrics: dict, now: float) -> float:
-        """Smooth the trailing-second rate, refreshing at most four times a second.
-
-        A 0.8-second time constant softens chunk arrivals and expirations without
-        tying smoothing to frame or callback frequency. Idle streams reach zero
-        within three seconds; settled turns bypass this live estimate entirely.
-        """
-        samples = metrics["rate_samples"]
-        while samples and samples[0][0] <= now - 1.0:
-            samples.popleft()
-        if now - metrics["rate_last_output"] >= 3.0:
-            metrics.update(rate_smoothed=0.0, rate_updated=now)
-        elapsed = now - metrics["rate_updated"]
-        if elapsed >= 0.25:
-            rate = max(0, sum(delta for _, delta in samples))
-            weight = -math.expm1(-elapsed / 0.8)
-            metrics["rate_smoothed"] += weight * (rate - metrics["rate_smoothed"])
-            metrics["rate_updated"] = now
-        return metrics["rate_smoothed"]
+    def _harness_display_metrics(self, name: str, result: dict | None = None) -> dict:
+        """Publish tokens and their interval-average output rate together once a second."""
+        values = self._harness_metrics(name, result)
+        sample = self._harness_samples.get(name)
+        if result is None and sample is not None:
+            now = time.monotonic()
+            elapsed = now - sample["updated"]
+            if elapsed >= 1.0:
+                output = sample["output_tokens"]
+                sample.update(
+                    tokens=values["tokens"],
+                    rate=max(0, output - sample["published_output_tokens"]) / elapsed,
+                    published_output_tokens=output,
+                    updated=now,
+                )
+            values.update(
+                tokens=sample["tokens"],
+                rate=sample["rate"],
+                rate_estimated=sample["rate"] > 0,
+            )
+        return values
 
     def _harness_metrics(self, name: str, result: dict | None = None) -> dict:
+        """Current accounting values; live token/rate snapshots are applied separately."""
         if result is not None:
             usage = result.get("usage") or {}
             harness = result["harness"]
@@ -341,8 +342,8 @@ class ProgressTracker:
         completion = usage.get("completion_tokens")
         cost = settled(usage, "cost", turns)
         streaming = metrics.get("turn_start") is not None
-        # Only completed results show the average over API time. Tool/queue waits
-        # on an unfinished model have no live output throughput.
+        # Completed results use the average over API time. Live interval rates
+        # are computed with the shared token snapshot in _harness_display_metrics.
         rate = 0.0
         if result is not None:
             rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
@@ -380,8 +381,6 @@ class ProgressTracker:
                     cost += estimate_cost(0, extra, {**pricing, "prompt": "0", "request": "0"})
             else:
                 cost += estimate_cost(prompt, output, pricing)
-            rate = self._harness_live_rate(metrics, time.monotonic())
-            rate_estimated = rate > 0
         return {
             "tokens": tokens,
             "cost": cost,
@@ -401,7 +400,7 @@ class ProgressTracker:
 
     def _harness_metric_cells(self, name: str, result: dict | None = None) -> list[str]:
         """Format one snapshot into independently alignable metric cells."""
-        values = self._harness_metrics(name, result)
+        values = self._harness_display_metrics(name, result)
         tokens, cost, turns, rate = (values[key] for key in ("tokens", "cost", "turns", "rate"))
         token_s = (
             f"{tokens.prefix}{int(tokens.value):,}{tokens.suffix} tk"
@@ -542,7 +541,7 @@ class ProgressTracker:
             if retry and retry["until"] > time.monotonic():
                 remaining = math.ceil(retry["until"] - time.monotonic())
                 status = f"{retry['status']} {retry['attempt']}/{retry['max']} {remaining}s"
-        values = self._harness_metrics(name, result)
+        values = self._harness_display_metrics(name, result)
         cells = []
         for key, width in self._harness_columns(inner_w):
             color = S.DIM

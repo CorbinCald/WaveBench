@@ -154,3 +154,25 @@ Regression coverage checks burst smoothing around the actual average, immediate
 token totals, refresh cadence, duplicate billing callbacks, idle decay, and
 turn resets. Validation: `python -m pytest` — 765 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## Shared one-second snapshots — 2026-09-08
+
+Replaced independent token updates and exponential speed smoothing with a shared
+one-second display snapshot. TOKENS and TK/S hold together between ticks. TK/S
+averages the output received in that interval over its actual elapsed time.
+The sampling clock and output accumulator survive tool waits and new turns;
+final results flush immediately. Input and provider usage corrections still
+reconcile totals without inflating output speed.
+
+Verified through the real interactive Harness CLI in an 80 × 28 PTY using two
+local HTTP/SSE fixtures with uneven bursts, a four-second pause, and a repair.
+The recorded token/rate pairs held between refreshes. After the burst, a snapshot
+showed 722 tokens and 19 TK/S; the next idle interval kept 722 tokens and showed
+0 TK/S. All 259 generation frames fit on screen, both projects printed `42`, and
+final accounting matched saved results. No paid calls were made; recordings and
+isolated settings stayed under `/tmp`.
+
+Tests cover synchronized updates, full burst accounting, delayed rendering,
+pauses/resumption, provider corrections, short turns sharing a sampling interval,
+and immediate final results. Validation: `python -m pytest` — 768 passed, one paid
+test deselected; `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
