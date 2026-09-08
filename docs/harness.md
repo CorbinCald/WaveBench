@@ -282,8 +282,10 @@ one-shot model rows. Failed runs' known costs are also included.
 
 The live dashboard and final results show each model's status, total tokens,
 output tokens per second (`tk/s`), cost, turns, elapsed time, cache hit percentage,
-tools used, and tool failure percentage. Cache/tool metrics move to an indented
-second line when they would crowd the model name and status. Short terminals
+tools used, and tool failure percentage. Each model has a name/status header
+with elapsed time on the right. An aligned grid below groups tokens, speed,
+cost, and turns together, followed by cache and tool activity. Narrow terminals
+use fewer columns while keeping metric values and units together. Short terminals
 reserve space for a count of hidden models. Model names and optional path/error
 details shorten as needed to fit. Totals accumulate across build, repair, and
 context-compaction calls, including failed calls with reported usage.

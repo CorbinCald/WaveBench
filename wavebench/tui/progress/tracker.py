@@ -380,7 +380,8 @@ class ProgressTracker:
             return "cost unknown"
         return f"{cost.prefix}{format_cost(cost.value) or '$0.000'}{cost.suffix}"
 
-    def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
+    def _harness_metric_cells(self, name: str, result: dict | None = None) -> list[str]:
+        """Format one snapshot into independently alignable metric cells."""
         values = self._harness_metrics(name, result)
         tokens, cost, turns, rate = (values[key] for key in ("tokens", "cost", "turns", "rate"))
         token_s = (
@@ -395,13 +396,6 @@ class ProgressTracker:
         )
         cost_s = self._format_harness_cost(cost)
         turn_s = f"{turns} {'turn' if turns == 1 else 'turns'}"
-        return (
-            f"{S.DIM}{token_s}{S.RST} {_styles.ACCENT}{rate_s}{S.RST} "
-            f"{S.HYEL}{cost_s}{S.RST} {S.DIM}{turn_s}{S.RST}"
-        )
-
-    def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
-        values = self._harness_metrics(name, result)
         cache, calls, failures = (
             values[key] for key in ("cache_rate", "tool_calls", "tool_failure_rate")
         )
@@ -409,10 +403,45 @@ class ProgressTracker:
         calls_s = f"{calls:,}" if calls is not None else "—"
         failures_s = f"{failures:.1%}" if failures is not None else "—"
         color = S.YEL if failures else S.DIM
-        return (
-            f"{S.DIM}cache hit {cache_s} · tools used {calls_s} · {S.RST}"
-            f"{color}tool fail {failures_s}{S.RST}"
-        )
+        return [
+            token_s,
+            f"{_styles.ACCENT}{rate_s}{S.RST}",
+            cost_s,
+            f"{S.DIM}{turn_s}{S.RST}",
+            f"{S.DIM}cache hit {cache_s}{S.RST}",
+            f"{S.DIM}tools used {calls_s}{S.RST}",
+            f"{color}tool fail {failures_s}{S.RST}",
+        ]
+
+    def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
+        return " ".join(self._harness_metric_cells(name, result)[:4])
+
+    def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
+        return f" {S.DIM}·{S.RST} ".join(self._harness_metric_cells(name, result)[4:])
+
+    def _harness_metric_rows(self, name: str, inner_w: int, result: dict | None) -> list[str]:
+        """Keep usage and tool activity on a stable grid, reflowing whole cells."""
+        indent = " " * 6
+        available = inner_w - len(indent)
+        columns = 4 if available >= 66 else 2 if available >= 32 else 1
+        cell_w = (available - 2 * (columns - 1)) // columns
+        cells = self._harness_metric_cells(name, result)
+        rows = []
+        for group in (cells[:4], cells[4:]):
+            row = ""
+            used = 0
+            for cell in group:
+                # Large totals may occupy adjacent columns without shifting the grid.
+                span = min(columns, max(1, math.ceil((_vlen(cell) + 1) / (cell_w + 2))))
+                if used and (
+                    used + span > columns or used * (cell_w + 2) + _vlen(cell) > available
+                ):
+                    rows.append(indent + row.rstrip())
+                    row, used = "", 0
+                row += _rpad(cell, span * (cell_w + 2))
+                used += span
+            rows.append(indent + row.rstrip())
+        return rows
 
     def _cost_summary(self, *, live: bool = False) -> str:
         names = set(self._results)
@@ -445,7 +474,7 @@ class ProgressTracker:
     def _format_harness_row(
         self, name: str, inner_w: int, result: dict | None = None, rank: int = 0, tick: int = 0
     ) -> str:
-        """Keep the model/status legible, wrapping added metrics when space is tight."""
+        """A model/status header followed by aligned usage and tool metrics."""
         detail = ""
         if result is not None:
             status = result.get("status", "failed")
@@ -462,37 +491,28 @@ class ProgressTracker:
             elapsed = result.get("time_s", 0)
         else:
             status = self._parsing.get(name, {}).get("label", "waiting")
-            symbol = f"{_styles.ACCENT}{_SPIN[tick % len(_SPIN)]}{S.RST}"
+            symbol = f"    {_styles.ACCENT}{_SPIN[tick % len(_SPIN)]}{S.RST}"
             elapsed = time.monotonic() - self._active.get(name, {}).get("start", self._start)
             retry = self._retries.get(name)
             if retry and retry["until"] > time.monotonic():
                 status = f"HTTP {retry['status']} retry {retry['attempt']}/{retry['max']}"
                 detail = f"in {retry['until'] - time.monotonic():.1f}s"
-        metrics = self._format_harness_metrics(name, result)
-        extra = self._format_harness_tool_metrics(name, result)
         duration = f"{S.DIM}{format_duration(elapsed)}{S.RST}"
-        suffix = f"{metrics} {duration}"
-        minimum_name = min(len(name), self._pad, 12)
-        inline = (
-            _vlen(suffix) + _vlen(extra) + _vlen(symbol) + minimum_name + len(status) + 5 <= inner_w
-        )
-        if inline:
-            suffix = f"{metrics} {extra} {duration}"
-        available = inner_w - _vlen(suffix) - _vlen(symbol) - 3
-        name_w = max(1, min(self._pad, available - len(status) - 1))
-        status_w = max(1, available - name_w)
+        available = inner_w - _vlen(duration) - _vlen(symbol) - 4
+        name_w = max(1, min(max(self._pad, 24), available - min(len(status), 24) - 2))
+        status_w = max(1, available - name_w - 2)
         label = _rpad(_truncate(name, name_w), name_w)
-        prefix = f"{symbol} {label} {S.DIM}{_truncate(status, status_w)}{S.RST}"
-        spare = inner_w - _vlen(prefix) - _vlen(suffix) - 2
-        if detail and spare >= 8:
-            detail = " ".join(detail.split())
-            prefix += f" {S.DIM}{_truncate(detail, spare)}{S.RST}"
-        gap = max(1, inner_w - _vlen(prefix) - _vlen(suffix))
-        row = f"{prefix}{' ' * gap}{suffix}"
-        if not inline:
-            indent = min(_vlen(symbol) + 1, max(0, inner_w - _vlen(extra)))
-            row += f"\n{' ' * indent}{extra}"
-        return row
+        status_color = S.DIM if result is not None else _styles.ACCENT
+        prefix = (
+            f"{symbol} {S.BOLD}{label}{S.RST}  {status_color}{_truncate(status, status_w)}{S.RST}"
+        )
+        gap = max(1, inner_w - _vlen(prefix) - _vlen(duration))
+        rows = [f"{prefix}{' ' * gap}{duration}"]
+        rows.extend(self._harness_metric_rows(name, inner_w, result))
+        if detail:
+            detail = _truncate(" ".join(detail.split()), max(1, inner_w - 6))
+            rows.append(f"      {S.DIM}{detail}{S.RST}")
+        return "\n".join(rows)
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
