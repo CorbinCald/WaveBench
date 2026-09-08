@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from itertools import pairwise
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +45,8 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
     monkeypatch.setattr(module.time, "monotonic", lambda: 12.0)
     tracker.update_harness_stream("model", {}, 100)
     row = plain(tracker._format_harness_metrics("model"))
-    assert "~1,800 tk" in row and "~100 tk/s" in row
+    assert "~1,800 tk" in row
+    assert 90 < tracker._harness_metrics("model")["rate"] < 100
     assert "$0.015" in row and "3 turns" in row
 
     tracker.update_harness(
@@ -351,38 +353,80 @@ def test_total_tokens_do_not_add_cache_or_reasoning_twice():
     assert reported_total(usage) == 1100
 
 
+def test_live_rate_softens_bursty_delivery_without_delaying_token_totals(tracker, monkeypatch):
+    tracker.start_harness_turn("model", 100)
+    samples = []
+    for step in range(1, 241):
+        now = 10.0 + step * 0.05
+        monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
+        # A buffered stream delivers 60 tokens every 1.2 seconds (50 tk/s).
+        output = (step // 24) * 60
+        if step % 24 == 0:
+            tracker.update_harness_stream("model", {}, output)
+        live = tracker._harness_metrics("model")
+        assert live["tokens"].value == 1200 + 100 + output
+        if step >= 72:
+            samples.append(live["rate"])
+    # The old one-second counter repeatedly jumped straight between 0 and 60.
+    assert min(samples) > 30
+    assert max(abs(b - a) for a, b in pairwise(samples)) < 20
+    assert sum(samples) / len(samples) == pytest.approx(50, abs=5)
+
+
+def test_live_rate_holds_between_refreshes_and_ignores_duplicate_callbacks(tracker, monkeypatch):
+    tracker.start_harness_turn("model", 100)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
+    tracker.update_harness_stream("model", {}, 60)
+    rate = tracker._harness_metrics("model")["rate"]
+    assert 0 < rate < 60
+    for now in (10.25, 10.30, 10.40, 10.49):
+        monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
+        tracker.update_harness_stream("model", {"completion_tokens": 600}, 60)
+        assert tracker._harness_metrics("model")["rate"] == rate
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.50)
+    assert rate < tracker._harness_metrics("model")["rate"] < 60
+
+
 def test_live_rate_tracks_token_growth_and_expires_during_five_second_pause(tracker, monkeypatch):
     tracker.start_harness_turn("model", 8800)
     assert tracker._harness_metrics("model")["rate"] == 0
     previous = tracker._harness_metrics("model")["tokens"].value
-    # Five tokens arrive each second, and both metrics reflect those same arrivals.
+    # Totals stay exact while the displayed speed converges on five tokens per second.
     for second in range(1, 6):
         monkeypatch.setattr(module.time, "monotonic", lambda second=second: 10.0 + second)
         tracker.update_harness_stream("model", {}, 5 * second)
         live = tracker._harness_metrics("model")
-        assert live["tokens"].value - previous == live["rate"] == 5
+        assert live["tokens"].value - previous == 5
+        assert 0 < live["rate"] <= 5
         previous = live["tokens"].value
-        assert "~5 tk/s" in plain(tracker._format_harness_metrics("model"))
+    assert live["rate"] == pytest.approx(5, abs=0.05)
+    assert "~5 tk/s" in plain(tracker._format_harness_metrics("model"))
 
+    previous_rate = live["rate"]
     for second in range(16, 21):
         monkeypatch.setattr(module.time, "monotonic", lambda second=second: float(second))
         # No callback at all while the network is idle; rendering must expire TPS.
         live = tracker._harness_metrics("model")
         assert live["tokens"] == Measurement(10025, estimated=True)
-        assert live["rate"] == 0
-        assert "0 tk/s" in plain(tracker._format_harness_metrics("model"))
+        assert 0 <= live["rate"] < previous_rate or live["rate"] == previous_rate == 0
+        previous_rate = live["rate"]
+        if second >= 18:
+            assert live["rate"] == 0
+            assert "0 tk/s" in plain(tracker._format_harness_metrics("model"))
 
     tracker.update_harness_stream("model", {}, 30)
-    assert tracker._harness_metrics("model")["rate"] == 5
+    monkeypatch.setattr(module.time, "monotonic", lambda: 20.25)
+    resumed_rate = tracker._harness_metrics("model")["rate"]
+    assert 0 < resumed_rate < 5
     assert tracker._harness_metrics("model")["tokens"].value == 10030
 
     # Native billing (including hidden reasoning) must not look like streamed output.
     native = {"prompt_tokens": 8800, "completion_tokens": 500, "total_tokens": 9300}
     tracker.update_harness_stream("model", native, 30)
     assert tracker._harness_metrics("model")["tokens"] == Measurement(10500)
-    assert tracker._harness_metrics("model")["rate"] == 5
+    assert tracker._harness_metrics("model")["rate"] == resumed_rate
     tracker.update_harness_stream("model", native, 30)  # EOF callback is not another burst.
-    assert tracker._harness_metrics("model")["rate"] == 5
+    assert tracker._harness_metrics("model")["rate"] == resumed_rate
 
     tracker.update_harness("model", {**native, "api_turns": 3}, 14)
     tracker.set_phase("model", "linting")
@@ -404,7 +448,8 @@ def test_intermediate_usage_does_not_freeze_later_streamed_tokens_or_cost(tracke
     live = tracker._harness_metrics("model")
     assert live["tokens"] == Measurement(145, estimated=True)
     assert live["cost"] == Measurement(2.1, estimated=True)
-    assert live["rate"] == 5
+    rate = live["rate"]
+    assert 0 < rate < 5
     assert tracker._cost_summary(live=True) == "~$2.10"
     # Final native totals replace the snapshot plus provisional new output.
     final = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cost": 2.3}
@@ -412,4 +457,4 @@ def test_intermediate_usage_does_not_freeze_later_streamed_tokens_or_cost(tracke
     live = tracker._harness_metrics("model")
     assert live["tokens"] == Measurement(150)
     assert live["cost"] == Measurement(2.3)
-    assert live["rate"] == 5
+    assert live["rate"] == rate
