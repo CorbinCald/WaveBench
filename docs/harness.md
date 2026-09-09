@@ -328,7 +328,7 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
-Live TOKENS and TK/S refresh together once per second and hold between refreshes.
+Live TOKENS and TK/S refresh together every 250 ms and hold between refreshes.
 TK/S is the number of locally tokenized output tokens received since the previous
 refresh divided by the actual elapsed time. Bursts are collected into that same
 interval, including across tool waits and new turns. An interval with no output
