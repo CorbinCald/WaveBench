@@ -176,3 +176,17 @@ Tests cover synchronized updates, full burst accounting, delayed rendering,
 pauses/resumption, provider corrections, short turns sharing a sampling interval,
 and immediate final results. Validation: `python -m pytest` — 768 passed, one paid
 test deselected; `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## 250 ms refresh — 2026-09-09
+
+Changed the shared TOKENS/TK/S interval to 250 ms. The renderer wakes for the
+next snapshot between animation frames; rates still use actual elapsed time.
+
+Verified through the real interactive Harness CLI in an 80 × 28 PTY with two
+local HTTP/SSE fixtures, bursts, a pause, and repair. Across 83 observed snapshots,
+the median interval was 250.75 ms and every rate matched interval output divided
+by elapsed time. All 332 generation frames fit the terminal, and both projects
+printed `42`. No paid calls were made; recordings stayed under `/tmp`.
+
+Validation: `python -m pytest` — 768 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.

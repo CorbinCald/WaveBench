@@ -76,6 +76,7 @@ class ProgressTracker:
     """
 
     DEFAULT_AVG_TOKENS = 2000
+    HARNESS_SAMPLE_INTERVAL = 0.25
 
     def __init__(
         self,
@@ -301,13 +302,13 @@ class ProgressTracker:
         metrics.update(current_usage=usage, output_tokens=output_tokens)
 
     def _harness_display_metrics(self, name: str, result: dict | None = None) -> dict:
-        """Publish tokens and their interval-average output rate together once a second."""
+        """Publish tokens and their interval-average output rate together every 250 ms."""
         values = self._harness_metrics(name, result)
         sample = self._harness_samples.get(name)
         if result is None and sample is not None:
             now = time.monotonic()
             elapsed = now - sample["updated"]
-            if elapsed >= 1.0:
+            if elapsed >= self.HARNESS_SAMPLE_INTERVAL:
                 output = sample["output_tokens"]
                 sample.update(
                     tokens=values["tokens"],
@@ -1180,7 +1181,14 @@ class ProgressTracker:
                 await loop.run_in_executor(None, self._flush_frame, frame)
                 self._drawn_lines = lines
                 idx += 1
-                await asyncio.sleep(0.08)
+                # Wake for the next metric snapshot even between animation frames.
+                delay = 0.08
+                now = time.monotonic()
+                for sample in self._harness_samples.values():
+                    remaining = sample["updated"] + self.HARNESS_SAMPLE_INTERVAL - now
+                    if remaining > 0:
+                        delay = min(delay, remaining)
+                await asyncio.sleep(delay)
         except asyncio.CancelledError:
             pass
 

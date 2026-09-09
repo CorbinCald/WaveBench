@@ -355,32 +355,32 @@ def test_total_tokens_do_not_add_cache_or_reasoning_twice():
     assert reported_total(usage) == 1100
 
 
-def test_tokens_and_rate_publish_the_same_one_second_interval(tracker, monkeypatch):
+def test_tokens_and_rate_publish_the_same_quarter_second_interval(tracker, monkeypatch):
     tracker.start_harness_turn("model", 100)
-    for now, output in ((10.1, 10), (10.2, 25), (10.6, 40), (10.99, 70)):
+    for now, output in ((10.025, 10), (10.05, 25), (10.15, 40), (10.249, 70)):
         monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
         tracker.update_harness_stream("model", {}, output)
         # Accounting consumes every event, but both visible counters hold together.
         assert tracker._harness_metrics("model")["tokens"].value == 1300 + output
         visible = tracker._harness_display_metrics("model")
         assert visible["tokens"].value == 1300 and visible["rate"] == 0
-    monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
     first = tracker._harness_display_metrics("model")
-    assert first["tokens"].value == 1370 and first["rate"] == 70
-    for now, output in ((11.1, 75), (11.7, 100)):
+    assert first["tokens"].value == 1370 and first["rate"] == 280
+    for now, output in ((10.275, 75), (10.425, 100)):
         monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
         tracker.update_harness_stream("model", {}, output)
         visible = tracker._harness_display_metrics("model")
         assert visible["tokens"] == first["tokens"] and visible["rate"] == first["rate"]
-    monkeypatch.setattr(module.time, "monotonic", lambda: 12.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
     second = tracker._harness_display_metrics("model")
     assert second["tokens"].value == 1400
-    assert second["rate"] == second["tokens"].value - first["tokens"].value == 30
+    assert second["rate"] == (second["tokens"].value - first["tokens"].value) / 0.25 == 120
     assert "~1,400 tk" in tracker._format_harness_metrics("model")
-    assert "~30 tk/s" in tracker._format_harness_metrics("model")
+    assert "~120 tk/s" in tracker._format_harness_metrics("model")
 
 
-def test_one_second_snapshots_retain_all_bursts_and_hold_between_ticks(tracker, monkeypatch):
+def test_quarter_second_snapshots_retain_all_bursts_and_hold_between_ticks(tracker, monkeypatch):
     tracker.start_harness_turn("model", 100)
     previous = tracker._harness_display_metrics("model")
     rates = []
@@ -391,15 +391,15 @@ def test_one_second_snapshots_retain_all_bursts_and_hold_between_ticks(tracker, 
         if step % 24 == 0:
             tracker.update_harness_stream("model", {}, output)
         visible = tracker._harness_display_metrics("model")
-        if step % 20 == 0:
+        if step % 5 == 0:
             assert visible["tokens"].value == 1300 + output
-            assert visible["rate"] == visible["tokens"].value - previous["tokens"].value
+            assert visible["rate"] == (visible["tokens"].value - previous["tokens"].value) / 0.25
             rates.append(visible["rate"])
         else:
             assert visible["tokens"] == previous["tokens"]
             assert visible["rate"] == previous["rate"]
         previous = visible
-    assert sum(rates) == 600
+    assert sum(rates) * 0.25 == 600
     assert sum(rates) / len(rates) == 50
 
 
@@ -407,15 +407,15 @@ def test_delayed_refresh_averages_over_actual_elapsed_time(tracker, monkeypatch)
     tracker.start_harness_turn("model", 100)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.2)
     tracker.update_harness_stream("model", {}, 30)
-    monkeypatch.setattr(module.time, "monotonic", lambda: 11.25)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.375)
     visible = tracker._harness_display_metrics("model")
-    assert visible["tokens"].value == 1330 and visible["rate"] == 24
-    monkeypatch.setattr(module.time, "monotonic", lambda: 11.5)
+    assert visible["tokens"].value == 1330 and visible["rate"] == 80
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
     tracker.update_harness_stream("model", {}, 50)
     assert tracker._harness_display_metrics("model")["tokens"] == visible["tokens"]
-    monkeypatch.setattr(module.time, "monotonic", lambda: 13.25)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
     visible = tracker._harness_display_metrics("model")
-    assert visible["tokens"].value == 1350 and visible["rate"] == 10
+    assert visible["tokens"].value == 1350 and visible["rate"] == 32
 
 
 def test_live_snapshots_stop_and_resume_together_without_counting_usage_corrections(
@@ -460,19 +460,19 @@ def test_live_snapshots_stop_and_resume_together_without_counting_usage_correcti
 
 def test_short_turns_share_the_generation_sampling_clock(tracker, monkeypatch):
     tracker.start_harness_turn("model", 100)
-    monkeypatch.setattr(module.time, "monotonic", lambda: 10.2)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.05)
     tracker.update_harness_stream("model", {}, 30)
     assert tracker._harness_display_metrics("model")["tokens"].value == 1300
     tracker.update_harness("model", {"api_turns": 3, "total_tokens": 1330}, 4.2)
     tracker.set_phase("model", "linting")
     assert tracker._harness_display_metrics("model")["tokens"].value == 1300
-    monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.15)
     tracker.start_harness_turn("model", 200)
     tracker.update_harness_stream("model", {}, 20)
     assert tracker._harness_display_metrics("model")["tokens"].value == 1300
-    monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
     snapshot = tracker._harness_display_metrics("model")
-    assert snapshot["tokens"].value == 1550 and snapshot["rate"] == 50
+    assert snapshot["tokens"].value == 1550 and snapshot["rate"] == 200
 
 
 def test_final_results_flush_pending_values_without_waiting_for_the_tick(tracker, monkeypatch):
