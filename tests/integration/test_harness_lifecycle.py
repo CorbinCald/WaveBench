@@ -49,6 +49,8 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
     app = web.Application()
     app.router.add_get("/search", search)
     turns = 0
+    tracker = ProgressTracker(1, {})
+    tracker._running = True
 
     async def model(client, key, model_id, messages, tools, **kwargs):
         nonlocal turns
@@ -56,9 +58,11 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
         assert "test-private-brave-key" not in json.dumps({"messages": messages, "tools": tools})
         name = "wb"
         if enabled and turns == 0:
+            assert tracker._harness_metrics(session.name)["web_searches"] == 0
             name, args = "web_search", {"query": "example reference"}
         elif turns == int(enabled):
             if enabled:
+                assert tracker._harness_metrics(session.name)["web_searches"] == 1
                 result = json.loads(messages[-1]["content"])
                 assert result["results"][0]["url"] == "https://example.com/reference"
             args = {
@@ -95,12 +99,14 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
         monkeypatch.setattr(web_search, "BRAVE_URL", str(server.make_url("/search")))
         session = factory(
             auto_open="off",
+            tracker=tracker,
             web_search=(web_search.BraveSearch("test-private-brave-key") if enabled else None),
         )
         await session.build()
         await session.execute()
     assert session.status == "success", session.error
     assert len(requests) == int(enabled)
+    assert tracker._harness_metrics(session.name)["web_searches"] == (1 if enabled else None)
     assert session.result()["harness"]["web_search"] == {
         "enabled": enabled,
         "provider": "brave" if enabled else None,
@@ -110,6 +116,39 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
     assert "test-private-brave-key" not in "".join(
         path.read_text() for path in session.metadata.glob("*.json")
     )
+
+
+async def test_live_search_counts_include_failures_and_survive_replay_and_repair(factory):
+    from wavebench.web_search import SearchError
+
+    class Search:
+        async def search(self, query, count):
+            if query == "fail":
+                raise SearchError("Brave rate limit or quota reached; try again later.")
+            return {"results": []}
+
+    tracker = ProgressTracker(1, {})
+    tracker._running = True
+    session = factory(web_search=Search(), tracker=tracker)
+    session.phase("building")
+    assert "web searches 0" in tracker._format_harness_tool_metrics(session.name)
+    call = {"name": "web_search", "id": "first", "arguments": {"query": "docs"}}
+    await session.dispatcher.batch([call])
+    assert "web searches 1" in tracker._format_harness_tool_metrics(session.name)
+    await session.dispatcher.batch([call])
+    assert "web searches 1" in tracker._format_harness_tool_metrics(session.name)
+    await session.dispatcher.batch([{**call, "id": "second", "arguments": {"query": "fail"}}])
+    assert "web searches 2" in tracker._format_harness_tool_metrics(session.name)
+    session.phase("repairing")
+    session.dispatcher.reopen()
+    await session.dispatcher.batch([{**call, "id": "third"}])
+    session.phase("finished")
+    assert "web searches 3" in tracker._format_harness_tool_metrics(session.name, session.result())
+    assert tracker._harness[session.name]["web_search"] == {
+        "enabled": True,
+        "calls": 3,
+        "failures": 1,
+    }
 
 
 @pytest.fixture

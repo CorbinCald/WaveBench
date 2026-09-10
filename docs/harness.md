@@ -183,7 +183,11 @@ result without another request.
 The controller owns requests and credentials; generated code keeps its isolated
 network and receives no Brave key. `harness.web_search` in each result records
 whether search was enabled, its provider, attempts, and failures. Search calls
-also appear in ordinary tool counts and diagnostic files. Brave billing is
+also appear in ordinary tool counts and diagnostic files. When search is enabled,
+the live and final metrics show each model's **WEB SEARCHES** count (**WEB** in
+narrower terminals). It starts at zero, updates after each search attempt,
+includes failed attempts, and persists across repair and compaction. Replayed
+calls do not increase the count. Brave billing is
 separate from the reported OpenRouter cost. `--no-web-search` disables the tool
 for one run; an enabled configuration with no key stops before model generation
 and explains how to complete setup.
