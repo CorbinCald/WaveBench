@@ -28,7 +28,6 @@ from wavebench.harness.accounting import (
     Measurement,
     cache_read_ratio,
     estimate_cost,
-    reported_total,
     settled,
     valid_number,
 )
@@ -277,12 +276,13 @@ class ProgressTracker:
             model_id=model_id or self._model_id_map.get(model_name, ""),
         )
         if model_name not in self._harness_samples:
+            values = self._harness_metrics(model_name)
             self._harness_samples[model_name] = {
                 "updated": now,
                 "output_tokens": 0,
                 "published_output_tokens": 0,
-                "tokens": self._harness_metrics(model_name)["tokens"],
-                "rate": 0.0,
+                "tokens": values["tokens"],
+                "rate": values["rate"],
             }
 
     def update_harness_stream(self, name: str, usage: dict, output_tokens: int) -> None:
@@ -294,9 +294,9 @@ class ProgressTracker:
         previous = metrics["current_usage"]
         # An intermediate provider snapshot covers output received up to here.
         # Estimate only subsequent output until the next native measurement.
-        for key in ("completion_tokens", "total_tokens", "cost"):
-            value = reported_total(usage) if key == "total_tokens" else usage.get(key)
-            old = reported_total(previous) if key == "total_tokens" else previous.get(key)
+        for key in ("completion_tokens", "cost"):
+            value = usage.get(key)
+            old = previous.get(key)
             if key not in metrics["usage_anchors"] or value != old:
                 metrics["usage_anchors"][key] = output_tokens
         metrics.update(current_usage=usage, output_tokens=output_tokens)
@@ -312,19 +312,21 @@ class ProgressTracker:
                 output = sample["output_tokens"]
                 sample.update(
                     tokens=values["tokens"],
-                    rate=max(0, output - sample["published_output_tokens"]) / elapsed,
+                    rate=max(0, output - sample["published_output_tokens"]) / elapsed
+                    if output > 0 or sample["rate"] is not None
+                    else None,
                     published_output_tokens=output,
                     updated=now,
                 )
             values.update(
                 tokens=sample["tokens"],
                 rate=sample["rate"],
-                rate_estimated=sample["rate"] > 0,
+                rate_estimated=(sample["rate"] or 0) > 0,
             )
         return values
 
     def _harness_metrics(self, name: str, result: dict | None = None) -> dict:
-        """Current accounting values; live token/rate snapshots are applied separately."""
+        """Output tokens and full cost; live token/rate snapshots are applied separately."""
         if result is not None:
             usage = result.get("usage") or {}
             harness = result["harness"]
@@ -339,13 +341,13 @@ class ProgressTracker:
             turns = usage.get("api_turns", 0)
             tools = metrics.get("tool_usage") or {}
         cache_usages = [usage] if turns else []
-        tokens = settled(usage, "total_tokens", turns)
+        tokens = settled(usage, "completion_tokens", turns)
         completion = usage.get("completion_tokens")
         cost = settled(usage, "cost", turns)
         streaming = metrics.get("turn_start") is not None
         # Completed results use the average over API time. Live interval rates
         # are computed with the shared token snapshot in _harness_display_metrics.
-        rate = 0.0
+        rate = 0.0 if turns else None
         if result is not None:
             rate = completion / api_seconds if completion is not None and api_seconds > 0 else None
         rate_estimated = False
@@ -359,20 +361,14 @@ class ProgressTracker:
                 prompt = metrics["input_tokens"]
             output = current.get("completion_tokens")
             if valid_number(output):
-                output += max(
+                extra = max(
                     0, metrics["output_tokens"] - metrics["usage_anchors"]["completion_tokens"]
                 )
+                output += extra
+                tokens += Measurement(output, estimated=bool(extra))
             else:
                 output = metrics["output_tokens"]
-            total = reported_total(current)
-            extra = max(
-                0, metrics["output_tokens"] - metrics["usage_anchors"].get("total_tokens", 0)
-            )
-            tokens += (
-                Measurement(total + extra, estimated=bool(extra))
-                if total is not None
-                else Measurement(prompt + output, estimated=True)
-            )
+                tokens += Measurement(output, estimated=True)
             current_cost = current.get("cost")
             pricing = self._pricing_lookup.get(metrics["model_id"], {})
             if valid_number(current_cost):
@@ -382,6 +378,10 @@ class ProgressTracker:
                     cost += estimate_cost(0, extra, {**pricing, "prompt": "0", "request": "0"})
             else:
                 cost += estimate_cost(prompt, output, pricing)
+        # Input estimates must not look like generated output. Before any output
+        # or completed call, the display has no output count to publish yet.
+        if result is None and not usage.get("api_turns", 0) and tokens.value == 0:
+            tokens = Measurement(None)
         return {
             "tokens": tokens,
             "cost": cost,
@@ -406,7 +406,7 @@ class ProgressTracker:
         token_s = (
             f"{tokens.prefix}{int(tokens.value):,}{tokens.suffix} tk"
             if tokens.value is not None
-            else "tk unknown"
+            else "tk —"
         )
         rate_s = (
             f"{'~' if values['rate_estimated'] else ''}{rate:,.0f} tk/s"
@@ -461,7 +461,7 @@ class ProgressTracker:
         labels = {
             "name": "MODEL",
             "phase": "PHASE",
-            "tokens": "TOKENS",
+            "tokens": "OUT TK",
             "rate": "TK/S",
             "cost": "COST",
             "turns": "TURNS",
@@ -470,7 +470,7 @@ class ProgressTracker:
             "fail": "FAIL",
             "time": "TIME",
         }
-        short = {"tokens": "TOK", "rate": "/S", "turns": "TN", "cache": "HIT%", "tools": "USE"}
+        short = {"tokens": "OUT", "rate": "/S", "turns": "TN", "cache": "HIT%", "tools": "USE"}
         cells = []
         for key, width in self._harness_columns(inner_w):
             label = labels[key]
@@ -543,6 +543,14 @@ class ProgressTracker:
                 remaining = math.ceil(retry["until"] - time.monotonic())
                 status = f"{retry['status']} {retry['attempt']}/{retry['max']} {remaining}s"
         values = self._harness_display_metrics(name, result)
+        if (
+            result is None
+            and status == "building"
+            and self._harness[name].get("turn_start") is not None
+            and values["tokens"].value is None
+            and not self._harness[name]["usage"].get("api_turns", 0)
+        ):
+            status = "waiting"
         cells = []
         for key, width in self._harness_columns(inner_w):
             color = S.DIM

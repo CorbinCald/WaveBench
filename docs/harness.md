@@ -280,17 +280,25 @@ repair time; an `after_all` wait does not inflate model performance time.
 Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
-The live dashboard and final results show each model's status, total tokens,
-output tokens per second (`tk/s`), cost, turns, elapsed time, cache hit percentage,
-tools used, and tool failure percentage. Each model occupies one row beneath
+The live dashboard and final results table show each model's status, generated
+output tokens (`OUT TK`, or `OUT` on narrow terminals), output tokens per second
+(`tk/s`), cost, turns, elapsed time, cache hit percentage, tools used, and tool
+failure percentage. Each model occupies one row beneath
 shared column headers, with phase and metrics aligned across models. Values
 use compact k/M/B/T suffixes when needed; `—` means unknown, and estimation
 and partial-usage markers remain visible. At 60 columns, abbreviated headings
 include `TN` (turns), `HIT%` (cache hits), and `USE` (tools used). Below 60 columns,
 the display prioritizes model, phase, tokens, cost, and time. Model names and
 phases shorten to fit, and short terminals reserve a count of hidden models.
-Totals accumulate across build, repair, and
-context-compaction calls, including failed calls with reported usage.
+Output counts accumulate across build, repair, and context-compaction calls,
+including failed calls with reported usage.
+Input prompts and tool definitions do not appear in this output count. Before
+the first output, the count and speed show `—` and an active building row says
+`waiting`. Each model starts showing its own output count and speed as output
+arrives. Once output has started, an interval without output shows `0` TK/S.
+Cost includes input and output, so an estimated input charge can appear while
+the model is still waiting. Provider-reported output can include hidden reasoning;
+without received output text, live speed remains `—`.
 A turn is one model API call, including the current call; HTTP
 retries and individual tools within a call do not add turns.
 The elapsed timer beside the phase runs continuously for that model.
@@ -317,24 +325,27 @@ estimated input/output charge at its model's catalog rates. Compaction uses the
 compactor's rates. Cache discounts, hidden reasoning, and provider-specific
 charges can make estimates differ from the final bill.
 
-Provider usage replaces estimates as soon as it arrives. Token totals include
-every call's input and output; reasoning and cache-detail counts are subsets,
-not extra tokens to add again. Cost uses `usage.cost`, not the upstream cost or
-catalog pricing when provider billing is available. The global total adds the
-same unrounded values shown per model, including queued and finished models;
+Provider usage replaces estimates as soon as it arrives. The output column uses
+reported completion tokens, including reasoning counted once. Saved usage and
+budget totals still include every call's input and output; reasoning and
+cache-detail counts are subsets, not extra tokens to add again. Cost uses
+`usage.cost`, not the upstream cost or catalog pricing when provider billing
+is available. The global total adds the same unrounded values shown per model,
+including queued and finished models;
 rounding each displayed row separately can produce small display differences.
 
 If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
-Live TOKENS and TK/S refresh together every 250 ms and hold between refreshes.
+Live OUT TK and TK/S refresh together every 250 ms and hold between refreshes.
 TK/S is the number of locally tokenized output tokens received since the previous
 refresh divided by the actual elapsed time. Bursts are collected into that same
 interval, including across tool waits and new turns. An interval with no output
-shows zero, with no lingering smoothed rate. Internal accounting still consumes
-every event immediately. Input tokens and provider usage corrections reconcile
-the displayed total at the next refresh without counting as new output throughput.
+shows zero once output has started, with no lingering smoothed rate. Internal
+accounting still consumes every event immediately. Provider completion-usage
+corrections reconcile the displayed output count at the next refresh without
+counting as new output throughput.
 Finished generations publish their final totals immediately. Final results show average
 speed: reported output tokens divided by total API time, excluding tools,
 execution, and review waits.

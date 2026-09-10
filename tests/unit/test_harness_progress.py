@@ -38,13 +38,95 @@ def tracker(monkeypatch):
     return instance
 
 
+@pytest.mark.parametrize("width", [52, 72, 112])
+def test_startup_waits_for_each_models_output_without_showing_prompt_tokens(monkeypatch, width):
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: 10.0))
+    tracker = ProgressTracker(
+        2,
+        {},
+        model_names=["Astra", "Fable"],
+        model_id_map={"Astra": "a", "Fable": "b"},
+        pricing_lookup={
+            model: {"prompt": "0.00001", "completion": "0.00005"} for model in ("a", "b")
+        },
+    )
+
+    def cells(name):
+        row = plain(tracker._format_harness_row(name, width))
+        assert len(row) <= width and "\n" not in row
+        keys = [key for key, _ in tracker._harness_columns(width)]
+        return dict(zip(keys, row[2:].split(), strict=True))
+
+    assert "OUT" in plain(tracker._format_harness_header(width))
+    for name in ("Astra", "Fable"):
+        tracker.update_harness(name, {"api_turns": 0}, 0)
+        tracker.set_phase(name, "building")
+        assert tracker._harness_display_metrics(name)["rate"] is None
+        tracker.start_harness_turn(name, 528)
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
+    for name in ("Astra", "Fable"):
+        tracker.update_harness_stream(name, {}, 0)  # Empty role/heartbeat frame.
+        values = tracker._harness_display_metrics(name)
+        assert values["tokens"].value is None and values["rate"] is None
+        assert values["cost"].value == pytest.approx(0.00528)  # Full input cost is retained.
+        row = cells(name)
+        assert row["phase"].startswith("wait")
+        assert row["tokens"] == row["rate"] == "—"
+        assert "528" not in row.values()
+
+    tracker.update_harness_stream("Astra", {}, 6)
+    assert cells("Astra")["tokens"] == "—"  # Wait for the shared display snapshot.
+    monkeypatch.setattr(module.time, "monotonic", lambda: 11.25)
+    assert cells("Astra")["tokens"] == "~6"
+    assert cells("Astra")["rate"] == "~24"
+    assert cells("Astra")["phase"].startswith("buil")
+    assert cells("Fable")["tokens"] == cells("Fable")["rate"] == "—"
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: 11.5)
+    assert cells("Astra")["tokens"] == "~6"
+    assert cells("Astra")["rate"] == "0"  # A pause differs from waiting for first output.
+    assert cells("Fable")["rate"] == "—"
+    tracker.update_harness_stream("Fable", {}, 12)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 11.75)
+    assert cells("Fable")["tokens"] == "~12" and cells("Fable")["rate"] == "~48"
+    assert cells("Astra")["tokens"] == "~6" and cells("Astra")["rate"] == "0"
+
+
+def test_provider_input_and_hidden_reasoning_do_not_invent_streaming_speed(monkeypatch):
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: 10.0))
+    tracker = ProgressTracker(1, {}, model_names=["model"])
+    tracker.start_harness_turn("model", 528)
+    prompt_only = {"prompt_tokens": 800, "completion_tokens": 0, "total_tokens": 800}
+    tracker.update_harness_stream("model", prompt_only, 0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
+    values = tracker._harness_display_metrics("model")
+    assert values["tokens"].value is None and values["rate"] is None
+
+    usage = {
+        **prompt_only,
+        "completion_tokens": 40,
+        "total_tokens": 840,
+        "completion_tokens_details": {"reasoning_tokens": 40},
+    }
+    tracker.update_harness_stream("model", usage, 0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
+    values = tracker._harness_display_metrics("model")
+    assert values["tokens"] == Measurement(40) and values["rate"] is None
+
+    result = {"usage": {**usage, "api_turns": 1}, "harness": {"timing": {"api_s": 2}}}
+    final = tracker._harness_display_metrics("model", result)
+    assert final["tokens"] == Measurement(40) and final["rate"] == 20
+    assert result["usage"]["total_tokens"] == 840  # Saved billing still includes input.
+
+
 def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracker, monkeypatch):
     tracker.start_harness_turn("model", 500)
     tracker.update("model", 400)
     monkeypatch.setattr(module.time, "monotonic", lambda: 12.0)
     tracker.update_harness_stream("model", {}, 100)
     row = plain(tracker._format_harness_metrics("model"))
-    assert "~1,800 tk" in row
+    assert "~300 tk" in row
     assert tracker._harness_display_metrics("model")["rate"] == 50
     assert "$0.015" in row and "3 turns" in row
 
@@ -56,15 +138,15 @@ def test_streaming_estimates_reset_per_turn_and_settle_to_provider_totals(tracke
     tracker.set_phase("model", "linting")
     monkeypatch.setattr(module.time, "monotonic", lambda: 13.0)
     row = plain(tracker._format_harness_metrics("model"))
-    assert "1,900 tk" in row and "0 tk/s" in row and "~" not in row
+    assert "300 tk" in row and "0 tk/s" in row and "~" not in row
     assert "$0.020" in row and "3 turns" in row
     tracker.start_harness_turn("model", 1000)
     tracker.update("model", 40)
     tracker.update_harness_stream("model", {}, 10)
     row = plain(tracker._format_harness_metrics("model"))
-    assert "1,900 tk" in row and "4 turns" in row
+    assert "300 tk" in row and "4 turns" in row
     monkeypatch.setattr(module.time, "monotonic", lambda: 14.0)
-    assert "~2,910 tk" in tracker._format_harness_metrics("model")
+    assert "~310 tk" in tracker._format_harness_metrics("model")
     assert tracker._wave_completed_chars + tracker._active["model"]["chars"] == 440
 
 
@@ -104,9 +186,9 @@ def test_metrics_survive_terminal_outcomes_and_unknown_usage(
     assert "2" in row and ("1m40s" in row or "1m 40s" in row or "2m" in row)
     assert all(len(line) <= columns for line in output.splitlines())
     assert "4" in row and ("25.0%" in row or "25%" in row)
-    assert "TOK" in output and "COST" in output and "FAIL" in output
+    assert "OUT" in output and "COST" in output and "FAIL" in output
     if known:
-        assert "1,200" in row and "50" in row and "$0.015" in row
+        assert "200" in row and "50" in row and "$0.015" in row
         assert "50.0%" in row or "50%" in row
     else:
         assert row.count("—") == 4  # Tokens, speed, cost, and cache stay explicitly unknown.
@@ -135,14 +217,14 @@ async def test_live_frame_keeps_phase_and_all_metrics(tracker, monkeypatch, phas
     assert len(rows) == 1
     row = rows[0]
     assert phase[:4] in row and "5.0s" in row
-    assert "1,200" in row and "0" in row and "2" in row
+    assert "200" in row and "0" in row and "2" in row
     assert frame.count("$0.015") == 2  # Per-model cost and the batch total.
     assert "50.0%" in row or "50%" in row
     assert "25.0%" in row or "25%" in row
     assert "4" in row
-    assert frame.count("TOK") == 1 and frame.count("COST") == 1
+    assert frame.count("OUT") == 1 and frame.count("COST") == 1
     assert all(len(line) <= columns for line in frame.splitlines())
-    assert len([line for line in frame.splitlines() if "1,200" in line]) == 1
+    assert len([line for line in frame.splitlines() if "200" in line]) == 1
 
 
 @pytest.mark.parametrize("count,hidden", [(1, 0), (2, 0), (5, 2), (7, 4)])
@@ -180,7 +262,7 @@ def test_single_row_preserves_metrics_during_retries(tracker, width):
         assert "1/3" in row
     if width >= 100:
         assert "2s" in row
-    assert "1,200" in row and "$0.015" in row
+    assert "200" in row and "$0.015" in row
     assert "50.0%" in row or "50%" in row
     assert "25.0%" in row or "25%" in row
     assert "\n" not in row and len(row) <= width
@@ -189,11 +271,11 @@ def test_single_row_preserves_metrics_during_retries(tracker, width):
 def test_single_row_columns_stay_aligned_as_counters_grow(tracker):
     before = plain(tracker._format_harness_row("model", 72))
     tracker.update_harness(
-        "model", {"api_turns": 999, "total_tokens": 123456789, "cost": 999.99}, 40
+        "model", {"api_turns": 999, "completion_tokens": 123456789, "cost": 999.99}, 40
     )
     after = plain(tracker._format_harness_row("model", 72))
     assert "\n" not in after
-    for old, new in (("1,200", "123.5M"), ("$0.015", "$999.99")):
+    for old, new in (("200", "123.5M"), ("$0.015", "$999.99")):
         assert before.index(old) + len(old) == after.index(new) + len(new)
     assert len(before) == len(after) == 72
 
@@ -208,10 +290,10 @@ def test_full_percentages_and_tool_counts_fit_one_row(tracker):
 
 @pytest.mark.parametrize("width", [52, 72, 112])
 def test_compact_streaming_cost_never_rounds_small_charges_to_zero(tracker, width):
-    tracker._harness["model"]["usage"].update(cost=0.0001, total_tokens=1_234_567)
+    tracker._harness["model"]["usage"].update(cost=0.0001, completion_tokens=1_234_567)
     tracker.start_harness_turn("model", 1000)
     row = plain(tracker._format_harness_row("model", width))
-    assert "~1.2M" in row or "~1,235,567" in row
+    assert "~1.2M" in row or "~1,234,567" in row
     assert "$0.0001" in row or "$.0001" in row or "$1e-4" in row
     assert "\n" not in row and len(row) <= width
 
@@ -285,7 +367,7 @@ def test_first_turn_cost_is_live_and_settles_without_double_counting(tracker):
     tracker.start_harness_turn("model", 1000)
     tracker.update_harness_stream("model", {}, 9000)
     live = tracker._harness_metrics("model")
-    assert live["tokens"] == Measurement(10000, estimated=True)
+    assert live["tokens"] == Measurement(9000, estimated=True)
     assert live["cost"].value == pytest.approx(0.46)
     assert live["cost"].estimated and live["turns"] == 1
     assert "~$0.46" in tracker._format_harness_metrics("model")
@@ -298,7 +380,7 @@ def test_first_turn_cost_is_live_and_settles_without_double_counting(tracker):
     usage = {"prompt_tokens": 1000, "completion_tokens": 12000, "total_tokens": 13000, "cost": 0.60}
     tracker.update_harness_stream("model", usage, 9000)
     assert tracker._harness_metrics("model")["cost"] == Measurement(0.60)
-    assert tracker._harness_metrics("model")["tokens"] == Measurement(13000)
+    assert tracker._harness_metrics("model")["tokens"] == Measurement(12000)
     tracker.update_harness("model", {**usage, "api_turns": 1}, 10)
     assert tracker._cost_summary(live=True) == "$0.60"
     assert tracker._harness_metrics("model")["turns"] == 1
@@ -325,11 +407,12 @@ def test_failed_call_keeps_known_subtotals_and_never_fabricates_full_usage(track
         "total_tokens": None,
         "cost": None,
         "known_total_tokens": 1200,
+        "known_completion_tokens": 200,
         "known_cost": 0.015,
     }
     tracker.update_harness("model", usage, 5)
     row = tracker._format_harness_metrics("model")
-    assert "≥1,200 tk" in row and "≥$0.015" in row and "3 turns" in row
+    assert "≥200 tk" in row and "≥$0.015" in row and "3 turns" in row
     assert tracker._cost_summary(live=True) == "≥$0.015"
 
 
@@ -361,12 +444,12 @@ def test_tokens_and_rate_publish_the_same_quarter_second_interval(tracker, monke
         monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
         tracker.update_harness_stream("model", {}, output)
         # Accounting consumes every event, but both visible counters hold together.
-        assert tracker._harness_metrics("model")["tokens"].value == 1300 + output
+        assert tracker._harness_metrics("model")["tokens"].value == 200 + output
         visible = tracker._harness_display_metrics("model")
-        assert visible["tokens"].value == 1300 and visible["rate"] == 0
+        assert visible["tokens"].value == 200 and visible["rate"] == 0
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
     first = tracker._harness_display_metrics("model")
-    assert first["tokens"].value == 1370 and first["rate"] == 280
+    assert first["tokens"].value == 270 and first["rate"] == 280
     for now, output in ((10.275, 75), (10.425, 100)):
         monkeypatch.setattr(module.time, "monotonic", lambda now=now: now)
         tracker.update_harness_stream("model", {}, output)
@@ -374,9 +457,9 @@ def test_tokens_and_rate_publish_the_same_quarter_second_interval(tracker, monke
         assert visible["tokens"] == first["tokens"] and visible["rate"] == first["rate"]
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
     second = tracker._harness_display_metrics("model")
-    assert second["tokens"].value == 1400
+    assert second["tokens"].value == 300
     assert second["rate"] == (second["tokens"].value - first["tokens"].value) / 0.25 == 120
-    assert "~1,400 tk" in tracker._format_harness_metrics("model")
+    assert "~300 tk" in tracker._format_harness_metrics("model")
     assert "~120 tk/s" in tracker._format_harness_metrics("model")
 
 
@@ -392,7 +475,7 @@ def test_quarter_second_snapshots_retain_all_bursts_and_hold_between_ticks(track
             tracker.update_harness_stream("model", {}, output)
         visible = tracker._harness_display_metrics("model")
         if step % 5 == 0:
-            assert visible["tokens"].value == 1300 + output
+            assert visible["tokens"].value == 200 + output
             assert visible["rate"] == (visible["tokens"].value - previous["tokens"].value) / 0.25
             rates.append(visible["rate"])
         else:
@@ -409,13 +492,13 @@ def test_delayed_refresh_averages_over_actual_elapsed_time(tracker, monkeypatch)
     tracker.update_harness_stream("model", {}, 30)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.375)
     visible = tracker._harness_display_metrics("model")
-    assert visible["tokens"].value == 1330 and visible["rate"] == 80
+    assert visible["tokens"].value == 230 and visible["rate"] == 80
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.5)
     tracker.update_harness_stream("model", {}, 50)
     assert tracker._harness_display_metrics("model")["tokens"] == visible["tokens"]
     monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
     visible = tracker._harness_display_metrics("model")
-    assert visible["tokens"].value == 1350 and visible["rate"] == 32
+    assert visible["tokens"].value == 250 and visible["rate"] == 32
 
 
 def test_live_snapshots_stop_and_resume_together_without_counting_usage_corrections(
@@ -432,23 +515,23 @@ def test_live_snapshots_stop_and_resume_together_without_counting_usage_correcti
     for second in range(16, 21):
         monkeypatch.setattr(module.time, "monotonic", lambda second=second: float(second))
         live = tracker._harness_display_metrics("model")
-        assert live["tokens"] == Measurement(10025, estimated=True)
+        assert live["tokens"] == Measurement(225, estimated=True)
         assert live["rate"] == 0
     tracker.update_harness_stream("model", {}, 30)
     assert tracker._harness_display_metrics("model")["tokens"] == live["tokens"]
     monkeypatch.setattr(module.time, "monotonic", lambda: 21.0)
     live = tracker._harness_display_metrics("model")
-    assert live["tokens"].value == 10030 and live["rate"] == 5
+    assert live["tokens"].value == 230 and live["rate"] == 5
 
     # Provider corrections reconcile the total on the tick without inventing output.
     native = {"prompt_tokens": 8800, "completion_tokens": 500, "total_tokens": 9300}
     tracker.update_harness_stream("model", native, 30)
     tracker.update_harness_stream("model", native, 30)
-    assert tracker._harness_metrics("model")["tokens"] == Measurement(10500)
+    assert tracker._harness_metrics("model")["tokens"] == Measurement(700)
     assert tracker._harness_display_metrics("model")["tokens"] == live["tokens"]
     monkeypatch.setattr(module.time, "monotonic", lambda: 22.0)
     corrected = tracker._harness_display_metrics("model")
-    assert corrected["tokens"] == Measurement(10500) and corrected["rate"] == 0
+    assert corrected["tokens"] == Measurement(700) and corrected["rate"] == 0
 
     tracker.update_harness("model", {**native, "api_turns": 3}, 14)
     tracker.set_phase("model", "linting")
@@ -462,17 +545,19 @@ def test_short_turns_share_the_generation_sampling_clock(tracker, monkeypatch):
     tracker.start_harness_turn("model", 100)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.05)
     tracker.update_harness_stream("model", {}, 30)
-    assert tracker._harness_display_metrics("model")["tokens"].value == 1300
-    tracker.update_harness("model", {"api_turns": 3, "total_tokens": 1330}, 4.2)
+    assert tracker._harness_display_metrics("model")["tokens"].value == 200
+    tracker.update_harness(
+        "model", {"api_turns": 3, "total_tokens": 1330, "completion_tokens": 230}, 4.2
+    )
     tracker.set_phase("model", "linting")
-    assert tracker._harness_display_metrics("model")["tokens"].value == 1300
+    assert tracker._harness_display_metrics("model")["tokens"].value == 200
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.15)
     tracker.start_harness_turn("model", 200)
     tracker.update_harness_stream("model", {}, 20)
-    assert tracker._harness_display_metrics("model")["tokens"].value == 1300
+    assert tracker._harness_display_metrics("model")["tokens"].value == 200
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.25)
     snapshot = tracker._harness_display_metrics("model")
-    assert snapshot["tokens"].value == 1550 and snapshot["rate"] == 200
+    assert snapshot["tokens"].value == 250 and snapshot["rate"] == 200
 
 
 def test_final_results_flush_pending_values_without_waiting_for_the_tick(tracker, monkeypatch):
@@ -484,7 +569,7 @@ def test_final_results_flush_pending_values_without_waiting_for_the_tick(tracker
         "harness": {"timing": {"api_s": 4.2}},
     }
     final = tracker._harness_display_metrics("model", result)
-    assert final["tokens"] == Measurement(1330)
+    assert final["tokens"] == Measurement(230)
     assert final["rate"] == pytest.approx(230 / 4.2)
 
 
@@ -494,11 +579,11 @@ def test_intermediate_usage_does_not_freeze_later_streamed_tokens_or_cost(tracke
     tracker.start_harness_turn("model", 100, model_id="model")
     native = {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140, "cost": 2.0}
     tracker.update_harness_stream("model", native, 20)
-    assert tracker._harness_metrics("model")["tokens"] == Measurement(140)
+    assert tracker._harness_metrics("model")["tokens"] == Measurement(40)
     monkeypatch.setattr(module.time, "monotonic", lambda: 11.0)
     tracker.update_harness_stream("model", native, 25)
     live = tracker._harness_metrics("model")
-    assert live["tokens"] == Measurement(145, estimated=True)
+    assert live["tokens"] == Measurement(45, estimated=True)
     assert live["cost"] == Measurement(2.1, estimated=True)
     rate = tracker._harness_display_metrics("model")["rate"]
     assert rate == 25
@@ -507,6 +592,6 @@ def test_intermediate_usage_does_not_freeze_later_streamed_tokens_or_cost(tracke
     final = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cost": 2.3}
     tracker.update_harness_stream("model", final, 25)
     live = tracker._harness_metrics("model")
-    assert live["tokens"] == Measurement(150)
+    assert live["tokens"] == Measurement(50)
     assert live["cost"] == Measurement(2.3)
     assert tracker._harness_display_metrics("model")["rate"] == rate
