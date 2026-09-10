@@ -30,3 +30,28 @@ Validation: `python -m pytest` — 801 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
 Temporary servers, processes, settings, projects, and recordings were removed
 after verification.
+
+## Real LLM tool use
+
+Also verified on 2026-09-09 with paid OpenRouter calls to two real model
+families. The production HarnessSession, streaming transport, dispatcher,
+Brave HTTP client, file tools, lint, and sandbox execution were used unchanged.
+Only the Brave endpoint was replaced with a local HTTP fixture because no
+Brave credential was configured. Live Brave authentication/search remains
+unverified.
+
+For each model, the fixture returned a fresh random token and source URL that
+were absent from the user prompt. The task required searching for that token,
+then creating and submitting a Python program that printed the token and URL.
+Both generated programs printed exactly the values returned by the fixture,
+proving the real LLM issued the native call and consumed its tool response.
+
+| Model | Search calls | Search failures | API turns | Output matched | OpenRouter cost |
+|---|---:|---:|---:|---|---:|
+| `openai/gpt-5.6-luna` | 1 | 0 | 4 | Yes | $0.0009907 |
+| `anthropic/claude-haiku-4.5` | 1 | 0 | 4 | Yes | $0.009313 |
+
+Each used `web_search`, followed by `wb` write, lint, and done. Returned model
+IDs matched the requested IDs. The runs used one process at a time, an
+eight-turn / 24,000-token build budget per model, and a 15-minute task timeout.
+Temporary servers, workspaces, and raw evidence were cleaned up afterward.
