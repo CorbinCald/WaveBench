@@ -169,7 +169,7 @@ async def test_attempt_invariant_and_usage_across_repair(
     count = calls[session.model_id]
     assert all(f"{i} turn" in row for i, row in enumerate(live_turns, 1))
     metrics = tracker._format_harness_metrics(session.name)
-    assert f"{count * 15} tk" in metrics and f"{count} turns" in metrics
+    assert f"{count * 5} tk" in metrics and f"{count} turns" in metrics
     assert f"$0.00{count}" in metrics
     assert tracker._harness[session.name]["api_s"] == session.api_seconds
     tool_usage = {"calls": 7 if fail_first else 4, "failures": 0}
@@ -565,7 +565,7 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
     assert result["harness"]["model_usage"]["total_tokens"] == 90
     assert result["harness"]["compaction"]["usage"]["total_tokens"] == 5500
     metrics = tracker._format_harness_metrics(session.name)
-    assert "5,590 tk" in metrics and "$0.008" in metrics and "7 turns" in metrics
+    assert "530 tk" in metrics and "$0.008" in metrics and "7 turns" in metrics
     assert tracker._harness[session.name]["api_s"] == session.api_seconds
     assert session.compaction_seconds > 0
     assert session.build_seconds >= session.compaction_seconds

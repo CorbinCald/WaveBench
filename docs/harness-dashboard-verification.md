@@ -190,3 +190,36 @@ printed `42`. No paid calls were made; recordings stayed under `/tmp`.
 
 Validation: `python -m pytest` — 768 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
+
+## Output counts and startup waiting — 2026-09-09
+
+The Harness table now labels generated completion tokens as `OUT TK` (`OUT` on
+narrow terminals). Shared input estimates no longer appear as generated tokens.
+Before the first output, an active building row shows `waiting` with `—` for
+output count and speed. After output begins, a pause shows zero speed. Provider
+completion counts replace estimates; cost and saved usage retain input charges.
+
+Verified through the real interactive `python -m wavebench --mode harness
+--open off` CLI in 80 × 28 and 120 × 28 PTYs. Two local HTTP/SSE fixtures started
+output at different times, paused, and supplied provider usage. One project
+required a repair. Both projects printed `42`, and all 276 generation frames fit
+their terminals. No paid calls were made. Sanitized metric excerpts:
+
+```text
+MODEL    PHASE      OUT TK  TK/S
+Cache    waiting        —     —
+Missing  waiting        —     —
+
+Cache    building     ~10   ~40
+Missing  waiting        —     —
+
+Cache    building     ~10     0
+```
+
+Final output counts were 600 and 300, matching saved completion usage. Saved
+total tokens still equalled prompt plus completion tokens. Automated checks
+also cover 60-column rows, empty initial frames, hidden reasoning, missing
+usage, provider corrections, compaction, and repair.
+
+Validation: `python -m pytest` — 772 passed, one paid test deselected;
+`ruff check .`, `ruff format --check .`, and `git diff --check` passed.
