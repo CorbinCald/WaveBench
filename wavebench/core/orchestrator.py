@@ -159,6 +159,16 @@ async def main_async(
     tts_mode = mode.name == "tts"
     image_mode = mode.name == "image"
     harness_mode = mode.name == "harness"
+    from wavebench.web_search import SearchError, configured_search, search_status
+
+    search_config = dict(config)
+    if getattr(args, "web_search", None) is not None:
+        search_config["web_search"] = "on" if args.web_search else "off"
+    try:
+        web_search = configured_search(search_config) if harness_mode else None
+    except SearchError as exc:
+        print(f"\n  {_fail} {exc}\n")
+        return
     if tts_mode:
         reasoning_effort = None
         # Avoid launching every generated audio file when a user has auto-open
@@ -279,6 +289,13 @@ async def main_async(
         print(_box_row(f"{S.DIM}{'REASON':>8}{S.RST}  {reasoning_label}", w, heavy=True))
     print(_box_row(f"{S.DIM}{'NAMING':>8}{S.RST}  {directory_naming}", w, heavy=True))
     if harness_mode:
+        print(
+            _box_row(
+                f"{S.DIM}{'SEARCH':>8}{S.RST}  {search_status(search_config)}",
+                w,
+                heavy=True,
+            )
+        )
         print(
             _box_row(
                 f"{S.DIM}{'EXECUTE':>8}{S.RST}  {auto_open} · one run + one repair on failure",
@@ -447,6 +464,7 @@ async def main_async(
                             auto_open=auto_open,
                             reasoning_effort=reasoning_effort,
                             tracker=tracker,
+                            web_search=web_search,
                         )
                     )
                 await harness_batch.run()

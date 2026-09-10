@@ -150,6 +150,44 @@ Lint uses Python compilation without imports, `node --check`, JSON parsing, and
 HTML parsing. It ignores package scripts, project plugins, and configuration
 hooks. HTML checks are structural parsing, not full HTML/CSS validation.
 
+## Optional web search
+
+Press **w** in the benchmark menu or use `wavebench --setup-web-search` to configure
+Brave Search. **Settings → Web search (Harness)** opens the same screen with Space;
+Enter or Tab saves the Settings changes. The validated credential is saved
+immediately, even if you later cancel the surrounding Settings menu. Search is
+disabled by default. Once enabled, every model in a benchmark receives the same
+additional native tool:
+
+```json
+{"name": "web_search", "arguments": {"query": "Python documentation", "count": 5}}
+```
+
+`query` accepts up to 600 characters and 75 words. `count` defaults to 5 and can
+be 1–10. The tool returns titles, URLs, and snippets from Brave's
+[Web Search endpoint](https://api-dashboard.search.brave.com/api-reference/web/search/get).
+It does not fetch result pages. Search responses enter the agent conversation
+as tool results, with instructions to treat them as untrusted source material
+and cite relevant URLs. Search tools, prompts, and token estimates remain stable
+through build, repair, and context compaction.
+
+Each model gets 20 search attempts across build and repair; set
+`harness.web_search_calls` in `.benchmark_config.json` to change that limit for
+all models. Calls are paced to at most one request per second within a benchmark,
+with a 15-second HTTP timeout, a 1 MB response limit, and bounded snippets. They
+also consume the existing build/repair time and tool-output budgets. Invalid
+keys, quotas, timeouts, and provider failures return readable tool errors. Requests
+are not automatically retried. Replaying the same tool-call ID returns its saved
+result without another request.
+
+The controller owns requests and credentials; generated code keeps its isolated
+network and receives no Brave key. `harness.web_search` in each result records
+whether search was enabled, its provider, attempts, and failures. Search calls
+also appear in ordinary tool counts and diagnostic files. Brave billing is
+separate from the reported OpenRouter cost. `--no-web-search` disables the tool
+for one run; an enabled configuration with no key stops before model generation
+and explains how to complete setup.
+
 ## Prompt caching and context compaction
 
 Harness keeps instructions, tool schemas, and earlier messages stable, appends

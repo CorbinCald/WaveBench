@@ -22,6 +22,7 @@ class Limits:
     parallel_calls: int = 4
     batch_calls: int = 64
     process_concurrency: int = 4
+    web_search_calls: int = 20
 
     def __post_init__(self):
         for field in fields(self):

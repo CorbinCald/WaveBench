@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from wavebench.web_search import WEB_SEARCH_SCHEMA, BraveSearch
+
 from .config import Limits
 from .workspace import Workspace
 
@@ -135,6 +137,7 @@ class Dispatcher:
         limits: Limits,
         on_phase=None,
         on_tool_result=None,
+        web_search: BraveSearch | None = None,
     ):
         self.workspace = workspace
         self.runtime = runtime
@@ -143,6 +146,9 @@ class Dispatcher:
         self.on_phase = on_phase or (lambda _: None)
         self.on_tool_result = on_tool_result or (lambda _: None)
         self.tool_usage = {"calls": 0, "failures": 0}
+        self.web_search = web_search
+        self.web_search_usage = {"calls": 0, "failures": 0}
+        self.tools = [*TOOL_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
         self.submission: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
@@ -158,6 +164,22 @@ class Dispatcher:
 
     def reopen(self) -> None:
         self.submission = None
+
+    async def _search(self, arguments: dict) -> dict:
+        if self.web_search is None:
+            raise ValueError("web_search is disabled for this benchmark")
+        if self.submission is not None:
+            raise ValueError("phase already submitted; skipped")
+        if self.web_search_usage["calls"] >= self.limits.web_search_calls:
+            raise ValueError("web search call budget exhausted")
+        self.web_search_usage["calls"] += 1
+        try:
+            if not isinstance(arguments, dict) or set(arguments) - {"query", "count"}:
+                raise ValueError("web_search accepts only query and count")
+            return await self.web_search.search(arguments.get("query"), arguments.get("count", 5))
+        except BaseException:
+            self.web_search_usage["failures"] += 1
+            raise
 
     async def _execute(self, command: dict) -> dict:
         if not isinstance(command, dict):
@@ -218,7 +240,7 @@ class Dispatcher:
             tasks = []
             commands = []
             has_done = any(
-                (c.get("arguments") or {}).get("command") == "done"
+                (c.get("arguments") or {}).get("command") == "done" and c.get("name", "wb") == "wb"
                 for c in calls
                 if isinstance(c.get("arguments"), dict)
             )
@@ -237,7 +259,7 @@ class Dispatcher:
                 ):
                     await asyncio.gather(*dependencies)
                     call_id = call.get("id", f"invalid-{index}")
-                    signature = json.dumps(command, sort_keys=True)
+                    signature = json.dumps([call.get("name", "wb"), command], sort_keys=True)
                     cached = self._calls.get(call_id)
                     if cached:
                         if cached[0] == signature:
@@ -260,13 +282,17 @@ class Dispatcher:
                                 raise ValueError(
                                     "done must be submitted alone; entire batch skipped"
                                 )
-                            if call.get("name", "wb") != "wb":
+                            if call.get("name", "wb") not in {"wb", "web_search"}:
                                 raise ValueError(
                                     'unknown tool; call the function named wb with {"command":"write", "path":"...", "content":"..."}, or another documented command'
                                 )
                             if call.get("error"):
                                 raise ValueError(call["error"])
-                            payload = await self._execute(command)
+                            payload = (
+                                await self._search(command)
+                                if call.get("name") == "web_search"
+                                else await self._execute(command)
+                            )
                             result = {
                                 "id": call_id,
                                 "ok": payload.get("exit_code", 0) == 0,
@@ -293,6 +319,7 @@ class Dispatcher:
                                 full = {
                                     **result,
                                     "command": command,
+                                    "tool": call.get("name", "wb"),
                                     "time_s": time.monotonic() - started,
                                 }
                                 (self.metadata / f"tool-{self._serial:04d}.json").write_text(
@@ -327,9 +354,14 @@ class Dispatcher:
                             "error": "cancelled before execution; skipped",
                         }
                         command = call.get("arguments", {})
-                        self._calls[call_id] = (json.dumps(command, sort_keys=True), result)
+                        self._calls[call_id] = (
+                            json.dumps([call.get("name", "wb"), command], sort_keys=True),
+                            result,
+                        )
                         self._record_result(result)
                         (self.metadata / f"tool-{self._serial:04d}.json").write_text(
-                            json.dumps({**result, "command": command})
+                            json.dumps(
+                                {**result, "command": command, "tool": call.get("name", "wb")}
+                            )
                         )
                 raise

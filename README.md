@@ -65,6 +65,22 @@ wavebench
 
 Interactive startup shows a **Harness / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific history. Harness replaces one-shot code generation with isolated, multi-file projects. Type `c` at the mode prompt to open the configuration menu.
 
+Harness agents can optionally search the web with Brave. Press **`w`** at the
+mode prompt, or run **`wavebench --setup-web-search`**, to open the guided setup:
+create a [Brave Search API key](https://api-dashboard.search.brave.com/app/keys),
+paste it into the masked field, and press Enter to test and enable it. Setup
+works without an OpenRouter key. The benchmark menu shows **Off**, **On (Brave)**,
+or **Needs setup**. Web search starts disabled and applies to Harness agents;
+Text, TTS, and Image modes retain their existing behavior.
+
+Setup saves the key in the gitignored, owner-only `.benchmark_secrets.json` in
+the current directory. Alternatively, export `BRAVE_SEARCH_API_KEY`; the environment
+value takes precedence and is never copied to disk. `--web-search` and
+`--no-web-search` override the saved setting for one run. Disabling keeps the key
+for later use. Testing the connection sends one search; Brave charges are separate
+from the OpenRouter costs shown in benchmark analytics. See [search limits and
+records](docs/harness.md#optional-web-search).
+
 Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**. Install `bubblewrap`, `python3`, and `nodejs` with your distribution's package manager. Auto-install also requires system `python3-pip`. The host must permit unprivileged user namespaces. A failed sandbox preflight is reported before model generation; there is no unsandboxed fallback. Text, TTS, and image modes keep their existing platform support.
 
 [Watch a preview of the animated progress display.](docs/wave-animation.md)
@@ -129,6 +145,7 @@ The menu has four tabs:
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
+  - **Web search (Harness)** — Press Space for Brave setup, key replacement, or disabling.
   - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
   - **Harness limits** — Preview review timeout and separate build/repair time and token budgets. See [Harness limits](docs/harness.md#budgets-and-records).
   - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
@@ -216,6 +233,7 @@ These are created in the current working directory and are gitignored:
 |---|---|
 | `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
 | `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, and TTS voice/format/speed |
+| `.benchmark_secrets.json` | Private Brave API key from interactive setup; gitignored and never sent to models |
 | `.benchmark_history.json` | Lifetime run history for analytics |
 | `.benchmark_query_history.<mode>.json` | Portable prompt history (last 500 entries per mode); Harness uses `code`, alongside `text`, `tts`, and `image` |
 
