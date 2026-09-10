@@ -117,6 +117,7 @@ def load_config() -> dict[str, Any]:
         "image_aspect_ratio": "1:1",
         "image_size": "1K",
         "image_model_ids": [],
+        "web_search": "off",
     }
     if os.path.exists(path):
         try:

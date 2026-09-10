@@ -20,6 +20,98 @@ from wavebench.tokens import prompt_tokens
 from wavebench.tui.progress import ProgressTracker
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_search_results_reach_agent_and_generated_program(factory, monkeypatch, enabled):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from wavebench import web_search
+
+    requests = []
+
+    async def search(request):
+        requests.append(dict(request.query))
+        assert request.headers["X-Subscription-Token"] == "test-private-brave-key"
+        return web.json_response(
+            {
+                "web": {
+                    "results": [
+                        {
+                            "title": "Reference",
+                            "url": "https://example.com/reference",
+                            "description": "Use 42.",
+                        }
+                    ]
+                }
+            }
+        )
+
+    app = web.Application()
+    app.router.add_get("/search", search)
+    turns = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal turns
+        assert ("web_search" in [tool["function"]["name"] for tool in tools]) == enabled
+        assert "test-private-brave-key" not in json.dumps({"messages": messages, "tools": tools})
+        name = "wb"
+        if enabled and turns == 0:
+            name, args = "web_search", {"query": "example reference"}
+        elif turns == int(enabled):
+            if enabled:
+                result = json.loads(messages[-1]["content"])
+                assert result["results"][0]["url"] == "https://example.com/reference"
+            args = {
+                "command": "write",
+                "path": "main.py",
+                "content": (
+                    "import os\nassert 'BRAVE_SEARCH_API_KEY' not in os.environ\nprint(42)\n"
+                ),
+            }
+        else:
+            args = {"command": "done", "runtime": "python", "entry": "main.py"}
+        turns += 1
+        return Turn(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": str(turns),
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(args)},
+                    }
+                ],
+            },
+            {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            model_id,
+            "offline",
+            "tool_calls",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-private-brave-key")
+    async with TestServer(app) as server:
+        monkeypatch.setattr(web_search, "BRAVE_URL", str(server.make_url("/search")))
+        session = factory(
+            auto_open="off",
+            web_search=(web_search.BraveSearch("test-private-brave-key") if enabled else None),
+        )
+        await session.build()
+        await session.execute()
+    assert session.status == "success", session.error
+    assert len(requests) == int(enabled)
+    assert session.result()["harness"]["web_search"] == {
+        "enabled": enabled,
+        "provider": "brave" if enabled else None,
+        "calls": int(enabled),
+        "failures": 0,
+    }
+    assert "test-private-brave-key" not in "".join(
+        path.read_text() for path in session.metadata.glob("*.json")
+    )
+
+
 @pytest.fixture
 async def factory(tmp_path, monkeypatch):
     if sys.platform != "linux" or not shutil.which("bwrap"):

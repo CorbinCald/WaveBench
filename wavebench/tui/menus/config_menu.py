@@ -38,6 +38,7 @@ from wavebench.tui.menus._shared import (
     _is_printable_search_char,
     _unique_short_name,
 )
+from wavebench.tui.menus.web_search_menu import interactive_web_search
 from wavebench.tui.styles import (
     THEMES,
     S,
@@ -46,6 +47,7 @@ from wavebench.tui.styles import (
     _box_top,
     _work,
 )
+from wavebench.web_search import search_status
 
 try:
     import termios  # noqa: F401
@@ -277,6 +279,12 @@ def interactive_config_menu(
             "value": current_config.get("auto_open", "incremental"),
             "type": "cycle",
             "choices": AUTO_OPEN_CHOICES,
+        },
+        {
+            "key": "web_search",
+            "label": "Web search (Harness)",
+            "value": current_config.get("web_search", "off"),
+            "type": "web_search",
         },
         *[
             {
@@ -557,7 +565,12 @@ def interactive_config_menu(
                 if setting_row < len(visible_settings):
                     _, item = visible_settings[setting_row]
                     is_cur = setting_row == settings_cursor
-                    if item.get("type") in ("cycle", "number"):
+                    if item.get("type") == "web_search":
+                        status = search_status({"web_search": item["value"]})
+                        color = S.HGRN if status == "On (Brave)" else S.DIM
+                        val_s = f"{color}{status}{S.RST}"
+                        chk = f"{S.HGRN}✓{S.RST}" if status == "On (Brave)" else " "
+                    elif item.get("type") in ("cycle", "number"):
                         val = item["value"]
                         if item.get("key") == "reasoning_effort":
                             if val == "off":
@@ -776,7 +789,14 @@ def interactive_config_menu(
                     visible = _visible_settings()
                     if visible and settings_cursor < len(visible):
                         _, item = visible[settings_cursor]
-                        if item.get("type") == "number":
+                        if item.get("type") == "web_search":
+                            updated = interactive_web_search(
+                                {"web_search": item["value"]}, alternate_screen=False
+                            )
+                            if updated is not None:
+                                item["value"] = updated["web_search"]
+                            sys.stdout.write("\033[2J\033[H\033[?25l")
+                        elif item.get("type") == "number":
                             editing_setting = item
                             setting_buffer = str(item["value"])
                             setting_error = ""

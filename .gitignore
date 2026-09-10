@@ -18,6 +18,8 @@ benchmarkResults/
 .benchmark_history.json.*
 .benchmark_config.json
 .benchmark_config.json.*
+.benchmark_secrets.json
+.benchmark_secrets.json.*
 .benchmark_models.json
 .benchmark_models.json.*
 .benchmark_query_history

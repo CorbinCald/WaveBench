@@ -85,6 +85,7 @@ async def run_model(
     auto_open: str = "off",
     auto_install: str = "off",
     image_modalities: list[str] | None = None,
+    web_search=None,
 ) -> None:
     """Execute one model against *mode*; write output; record result.
 
@@ -119,6 +120,7 @@ async def run_model(
             auto_open=auto_open,
             reasoning_effort=reasoning_effort,
             tracker=tracker,
+            web_search=web_search,
         )
         try:
             await harness.build()

@@ -37,6 +37,7 @@ from wavebench.tui.analytics import display_analytics
 from wavebench.tui.input import _read_key_timeout, hold_raw
 from wavebench.tui.line_editor import _read_line, _TabEscape
 from wavebench.tui.menus import run_config_menu
+from wavebench.tui.menus.web_search_menu import interactive_web_search
 from wavebench.tui.progress import render_idle_wave
 from wavebench.tui.styles import (
     CURSOR_SHOW,
@@ -53,6 +54,7 @@ from wavebench.tui.styles import (
     apply_theme,
     overlay_frame,
 )
+from wavebench.web_search import search_status
 
 QUERY_HISTORY_FILE = ".benchmark_query_history"
 
@@ -171,6 +173,17 @@ def main() -> None:
         default=None,
         help="Install harness requirements.txt PyPI wheels in each model's isolated workspace",
     )
+    parser.add_argument(
+        "--web-search",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable Brave web search for Harness agents for this run",
+    )
+    parser.add_argument(
+        "--setup-web-search",
+        action="store_true",
+        help="Interactively configure and test Brave web search, then exit",
+    )
     args = parser.parse_args()
     if args.mode == "code":
         args.mode = "harness"
@@ -201,6 +214,15 @@ def main() -> None:
             print(f"\n  {S.DIM}No history to clear.{S.RST}\n")
         return
 
+    if args.setup_web_search:
+        config = load_config()
+        apply_theme(config.get("theme", "default"))
+        updated = interactive_web_search(config)
+        if updated is not None:
+            save_config(updated)
+            print(f"Web search: {search_status(updated)}")
+        return
+
     # ── API key ────────────────────────────────────────────────────────────
     api_key = load_api_key()
     if not api_key:
@@ -217,6 +239,12 @@ def main() -> None:
     selected_models = load_models()
     config = load_config()
     apply_theme(config.get("theme", "default"))
+
+    def _search_status() -> str:
+        effective = dict(config)
+        if args.web_search is not None:
+            effective["web_search"] = "on" if args.web_search else "off"
+        return search_status(effective)
 
     def _resolve_models_future() -> tuple:
         """Block on the background fetch and return (available, pricing)."""
@@ -267,7 +295,8 @@ def main() -> None:
                 f"{S.DIM}{len(active)} models{S.RST}  "
                 f"{_styles.ACCENT}[c]{S.RST} config"
             )
-            return [_box_top("Select Mode", w), _box_row(row, w), _box_bot(w)]
+            title = f"Select Mode · Web search: {_search_status()} [w]"
+            return [_box_top(title, w), _box_row(row, w), _box_bot(w)]
 
         def _print_mode_menu() -> None:
             print("\n".join(_mode_menu_rows()))
@@ -275,7 +304,11 @@ def main() -> None:
         def _model_summary_rows() -> list[str]:
             w = _tw() - 4
             return [
-                _box_top(f"{len(active)} Models", w),
+                _box_top(
+                    f"{len(active)} Models"
+                    + (f" · Web search: {_search_status()}" if mode_name == "harness" else ""),
+                    w,
+                ),
                 _box_row(_styles._truncate(summary, max(1, w - 4)), w),
                 _box_bot(w),
             ]
@@ -368,7 +401,7 @@ def main() -> None:
                             key = _read_key_timeout(0.07)
                             if key is None:
                                 _wave_idle()
-                            elif key in ("tab", "escape", "ctrl-c", "c", "1", "2", "3", "4"):
+                            elif key in ("tab", "escape", "ctrl-c", "c", "w", "1", "2", "3", "4"):
                                 break
                             # Any other key is not a menu choice: keep the
                             # wave rolling instead of flashing it clear.
@@ -383,18 +416,25 @@ def main() -> None:
                     if key == "ctrl-c":
                         print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
                         return
-                    if key == "c":
-                        sys.stdout.write("c\n")
-                        new_m, new_c = run_config_menu(
-                            api_key,
-                            current_mapping=selected_models,
-                            current_config=config,
-                            prefetched=_resolve_models_future(),
-                        )
-                        if new_m is not None:
+                    if key in ("c", "w"):
+                        sys.stdout.write(key + "\n")
+                        if key == "w":
+                            new_m = selected_models
+                            new_c = interactive_web_search(config)
+                        else:
+                            new_m, new_c = run_config_menu(
+                                api_key,
+                                current_mapping=selected_models,
+                                current_config=config,
+                                prefetched=_resolve_models_future(),
+                            )
+                        if new_c is not None:
                             selected_models = new_m
                             config = new_c
-                            save_models(selected_models)
+                            if key == "w":
+                                args.web_search = None
+                            if selected_models is not None:
+                                save_models(selected_models)
                             save_config(config)
                             apply_theme(config.get("theme", "default"))
                         _refresh_header()
