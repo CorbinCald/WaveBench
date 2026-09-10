@@ -248,13 +248,22 @@ class ProgressTracker:
 
     def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
-        tools = self._harness.get(model_name, {}).get("tool_usage", {})
-        self._harness[model_name] = {"usage": usage, "api_s": api_seconds, "tool_usage": tools}
+        previous = self._harness.get(model_name, {})
+        self._harness[model_name] = {
+            "usage": usage,
+            "api_s": api_seconds,
+            "tool_usage": previous.get("tool_usage", {}),
+            "web_search": previous.get("web_search", {}),
+        }
 
-    def update_harness_tools(self, model_name: str, usage: dict) -> None:
+    def update_harness_tools(
+        self, model_name: str, usage: dict, *, web_search: dict | None = None
+    ) -> None:
         """Publish completed tool calls immediately, including partial parallel batches."""
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         metrics["tool_usage"] = usage.copy()
+        if web_search is not None:
+            metrics["web_search"] = web_search.copy()
 
     def start_harness_turn(
         self, model_name: str, input_tokens: int, *, model_id: str | None = None
@@ -333,6 +342,7 @@ class ProgressTracker:
             api_seconds = (harness.get("timing") or {}).get("api_s", 0)
             turns = usage.get("api_turns", len(harness.get("turns", [])))
             tools = harness.get("tool_usage") or {}
+            searches = harness.get("web_search") or {}
             metrics = {}
         else:
             metrics = self._harness[name]
@@ -340,6 +350,7 @@ class ProgressTracker:
             api_seconds = metrics["api_s"]
             turns = usage.get("api_turns", 0)
             tools = metrics.get("tool_usage") or {}
+            searches = metrics.get("web_search") or {}
         cache_usages = [usage] if turns else []
         tokens = settled(usage, "completion_tokens", turns)
         completion = usage.get("completion_tokens")
@@ -390,6 +401,7 @@ class ProgressTracker:
             "rate_estimated": rate_estimated,
             "cache_rate": cache_read_ratio(*cache_usages),
             "tool_calls": tools.get("calls"),
+            "web_searches": searches.get("calls") if searches.get("enabled") else None,
             "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
@@ -422,7 +434,7 @@ class ProgressTracker:
         calls_s = f"{calls:,}" if calls is not None else "—"
         failures_s = f"{failures:.1%}" if failures is not None else "—"
         color = S.YEL if failures else S.DIM
-        return [
+        cells = [
             token_s,
             f"{_styles.ACCENT}{rate_s}{S.RST}",
             cost_s,
@@ -431,6 +443,9 @@ class ProgressTracker:
             f"{S.DIM}tools used {calls_s}{S.RST}",
             f"{color}tool fail {failures_s}{S.RST}",
         ]
+        if values["web_searches"] is not None:
+            cells.append(f"{S.DIM}web searches {values['web_searches']:,}{S.RST}")
+        return cells
 
     def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
         return " ".join(self._harness_metric_cells(name, result)[:4])
@@ -438,8 +453,7 @@ class ProgressTracker:
     def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
         return f" {S.DIM}·{S.RST} ".join(self._harness_metric_cells(name, result)[4:])
 
-    @staticmethod
-    def _harness_columns(inner_w: int) -> list[tuple[str, int]]:
+    def _harness_columns(self, inner_w: int) -> list[tuple[str, int]]:
         """Shared column widths keep every model aligned without wrapping."""
         keys = ["phase", "tokens", "rate", "cost", "turns", "cache", "tools", "fail", "time"]
         if inner_w >= 100:
@@ -451,9 +465,22 @@ class ProgressTracker:
         else:
             keys = ["phase", "tokens", "cost", "time"]
             widths = [5, 6, 7, 5]
-            while widths and sum(widths) + len(widths) + 3 > inner_w:
-                keys.pop()
-                widths.pop()
+        show_searches = any(
+            ((result.get("harness") or {}).get("web_search") or {}).get("enabled")
+            for result in self._results.values()
+        ) or any(
+            (metrics.get("web_search") or {}).get("enabled") for metrics in self._harness.values()
+        )
+        if show_searches:
+            index = keys.index("tools") + 1 if "tools" in keys else max(0, len(keys) - 1)
+            keys.insert(index, "searches")
+            widths.insert(index, 12 if inner_w >= 100 else 3)
+            if 52 <= inner_w < 72:
+                widths[keys.index("phase")] = 4
+                widths[keys.index("time")] = 3
+        while widths and sum(widths) + len(widths) + 3 > inner_w:
+            keys.pop()
+            widths.pop()
         name_w = max(1, inner_w - sum(widths) - len(widths) - 2)
         return [("name", name_w), *zip(keys, widths, strict=True)]
 
@@ -467,10 +494,18 @@ class ProgressTracker:
             "turns": "TURNS",
             "cache": "CACHE",
             "tools": "TOOLS",
+            "searches": "WEB SEARCHES",
             "fail": "FAIL",
             "time": "TIME",
         }
-        short = {"tokens": "OUT", "rate": "/S", "turns": "TN", "cache": "HIT%", "tools": "USE"}
+        short = {
+            "tokens": "OUT",
+            "rate": "/S",
+            "turns": "TN",
+            "cache": "HIT%",
+            "tools": "USE",
+            "searches": "WEB",
+        }
         cells = []
         for key, width in self._harness_columns(inner_w):
             label = labels[key]
@@ -590,8 +625,15 @@ class ProgressTracker:
                             prefix=measurement.prefix + ("$" if key == "cost" else ""),
                             suffix=measurement.suffix,
                         )
-            elif key in {"rate", "turns", "tools"}:
-                value = values[{"rate": "rate", "turns": "turns", "tools": "tool_calls"}[key]]
+            elif key in {"rate", "turns", "tools", "searches"}:
+                value = values[
+                    {
+                        "rate": "rate",
+                        "turns": "turns",
+                        "tools": "tool_calls",
+                        "searches": "web_searches",
+                    }[key]
+                ]
                 prefix = "~" if key == "rate" and values["rate_estimated"] else ""
                 text = (
                     "—"

@@ -336,6 +336,70 @@ def test_first_turn_and_missing_cache_usage_are_unknown_not_zero(tracker):
     assert tracker._harness_metrics("model")["cache_rate"] is None
 
 
+@pytest.mark.parametrize("width", [32, 52, 72, 102, 112])
+@pytest.mark.parametrize("status", [None, "success", "failed", "cancelled"])
+def test_web_search_counts_fit_live_and_final_rows(tracker, width, status):
+    search = {"enabled": True, "calls": 17, "failures": 2}
+    tracker.update_harness_tools("model", {"calls": 24, "failures": 2}, web_search=search)
+    result = None
+    if status:
+        result = {
+            "status": status,
+            "time_s": 10,
+            "usage": tracker._harness["model"]["usage"],
+            "harness": {"web_search": search, "tool_usage": {"calls": 24, "failures": 2}},
+        }
+        tracker._results["model"] = result
+        # Final output uses saved results even after live state has been discarded.
+        tracker._harness.clear()
+    header = plain(tracker._format_harness_header(width))
+    row = plain(tracker._format_harness_row("model", width, result))
+    assert "WEB SEARCHES" in header if width >= 100 else "WEB" in header
+    assert "17" in row.split()
+    assert len(header) == len(row) == width
+    assert "web searches 17" in plain(tracker._format_harness_tool_metrics("model", result))
+
+
+def test_web_search_zero_and_counts_survive_streaming_and_compaction(tracker):
+    search = {"enabled": True, "calls": 0, "failures": 0}
+    tracker.update_harness_tools("model", {"calls": 0, "failures": 0}, web_search=search)
+    assert "web searches 0" in tracker._format_harness_tool_metrics("model")
+    search["calls"] = 1
+    assert tracker._harness_metrics("model")["web_searches"] == 0  # Snapshot, not a live alias.
+    tracker.update_harness_tools("model", {"calls": 1, "failures": 0}, web_search=search)
+    for phase in ("building", "compacting", "repairing", "running"):
+        tracker.update_harness("model", {"api_turns": 3}, 5)
+        tracker.start_harness_turn("model", 500)
+        tracker.set_phase("model", phase)
+        assert "web searches 1" in tracker._format_harness_tool_metrics("model")
+
+
+def test_disabled_search_and_older_results_do_not_add_a_column(tracker):
+    tracker.update_harness_tools(
+        "model",
+        {"calls": 4, "failures": 1},
+        web_search={"enabled": False, "calls": 0, "failures": 0},
+    )
+    assert "WEB" not in plain(tracker._format_harness_header(112))
+    assert "web searches" not in tracker._format_harness_tool_metrics("model")
+    tracker._results["old"] = {"harness": {}, "usage": {}}
+    assert "WEB" not in plain(tracker._format_harness_header(112))
+
+
+def test_mixed_models_keep_search_columns_aligned(tracker):
+    tracker.update_harness("other", {}, 0)
+    tracker.update_harness_tools(
+        "model",
+        {"calls": 2, "failures": 0},
+        web_search={"enabled": True, "calls": 2, "failures": 0},
+    )
+    for width in (52, 72, 112):
+        assert "WEB" in plain(tracker._format_harness_header(width))
+        assert len(plain(tracker._format_harness_row("model", width))) == width
+        assert len(plain(tracker._format_harness_row("other", width))) == width
+    assert tracker._harness_metrics("other")["web_searches"] is None
+
+
 @pytest.mark.parametrize(
     "prompt,cached,expected",
     [

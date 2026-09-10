@@ -146,14 +146,21 @@ class HarnessSession:
 
     def on_tool_result(self, usage: dict) -> None:
         if self.tracker and self.tracker.is_running:
-            self.tracker.update_harness_tools(self.name, usage)
+            self.tracker.update_harness_tools(
+                self.name,
+                usage,
+                web_search={
+                    "enabled": self.dispatcher.web_search is not None,
+                    **self.dispatcher.web_search_usage,
+                },
+            )
 
     def phase(self, phase: str) -> None:
         self.phase_name = phase
         self.events.append({"phase": phase, "timestamp": time.time()})
         if self.tracker and self.tracker.is_running:
             self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
-            self.tracker.update_harness_tools(self.name, self.dispatcher.tool_usage)
+            self.on_tool_result(self.dispatcher.tool_usage)
             self.tracker.set_phase(self.name, phase)
         else:
             print(f"  {self.name}: {phase}", flush=True)

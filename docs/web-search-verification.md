@@ -55,3 +55,22 @@ Each used `web_search`, followed by `wb` write, lint, and done. Returned model
 IDs matched the requested IDs. The runs used one process at a time, an
 eight-turn / 24,000-token build budget per model, and a 15-minute task timeout.
 Temporary servers, workspaces, and raw evidence were cleaned up afterward.
+
+## Live search counts
+
+Verified on 2026-09-09 with the real interactive Harness CLI and
+`openai/gpt-5.6-luna` through OpenRouter. Brave responses came from a local
+HTTP fixture; the model and all Harness tool execution were real.
+
+The model made three separate searches. The live WEB column advanced through
+0, 1, 2, and 3. Resizing the same terminal from 80 to 120 to 60 columns preserved
+alignment and the count; the wide header displayed WEB SEARCHES. The final
+result retained 3 searches, matching the HTTP requests and saved metadata.
+The generated Python program printed all three fresh tokens from the search
+results. OpenRouter reported $0.00141085 for the run.
+
+Tests also cover zero counts, failed searches, replay without double counting,
+repair and compaction, mixed enabled/disabled models, older records, and final
+success/failure/cancellation rows. Validation: 825 tests passed, one paid test
+deselected; Ruff lint, formatting, and diff checks passed. Temporary processes,
+settings, outputs, and recordings were removed after verification.
