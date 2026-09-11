@@ -84,6 +84,11 @@ def failure_record(
             summary = "Output allowance exhausted"
         elif code == "project_abandoned":
             summary = "Model ended without submission"
+        elif code == "provider_stream_error":
+            summary = "Provider failed during response"
+            provider_error = diagnostics.get("provider_error") or {}
+            if provider_error.get("native_finish_reason") == "MALFORMED_FUNCTION_CALL":
+                summary = "Provider reported malformed tool call"
     elif runtime:
         category, code, summary = (
             "project_runtime",

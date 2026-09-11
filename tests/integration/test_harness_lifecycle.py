@@ -227,7 +227,7 @@ def scripted(
             command = [{"command": "lint"}]
         elif index in {2, 5}:
             command = [{"command": "done", "runtime": "python", "entry": "main.py"}]
-        elif index == 3:
+        elif index == 3 or (abandon and index > 3):
             if abandon:
                 return Turn(
                     {"role": "assistant", "content": "I cannot fix this"},
