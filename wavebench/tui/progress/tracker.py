@@ -512,7 +512,7 @@ class ProgressTracker:
             if len(label) > width:
                 label = short.get(key, label[:width])
             cells.append(f"{label:<{width}}" if key in {"name", "phase"} else f"{label:>{width}}")
-        return f"{S.DIM}  {' '.join(cells)}{S.RST}"
+        return f"{S.DIM}  {'│'.join(cells)}{S.RST}"
 
     @staticmethod
     def _compact_harness_number(
