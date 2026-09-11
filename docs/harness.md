@@ -410,6 +410,18 @@ reply without `wb done`, the controller gives it one submission reminder per
 phase. Only an actual, valid `done` tool call submits the project. These recovery
 requests consume the remaining turn, time and token budgets and are recorded in
 `harness.recoveries`; missing provider usage remains unknown.
+
+Gemini conversations bind to the provider reported by their first successful
+turn: `Google` maps to `google-vertex`, and `Google AI Studio` maps to
+`google-ai-studio`. Later requests restrict `provider.only` to that provider and
+disable cross-provider fallback, including HTTP retries, stream recovery and
+repair. Compaction preserves this binding while its separate summarizer keeps
+normal routing. This prevents signed tool history from crossing between the two
+Google services. If the bound provider becomes unavailable, the request fails
+within the existing retry limits. Missing or unexpected provider identities stop
+the response before tools execute. Results record `harness.gemini_provider` and
+each completed turn's `adjustments.provider_routing`.
+
 Live OUT TK and TK/S refresh together every 250 ms and hold between refreshes.
 TK/S is the number of locally tokenized output tokens received since the previous
 refresh divided by the actual elapsed time. Bursts are collected into that same

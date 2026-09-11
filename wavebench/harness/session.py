@@ -39,7 +39,7 @@ from .context import (
 )
 from .failure import failure_record
 from .runtime import Runtime, SetupError
-from .transport import TurnError, capability
+from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability
 from .workspace import allocate_project
 
 
@@ -140,6 +140,7 @@ class HarnessSession:
         self._finishing_warning: dict | None = None
         self.prompt_estimate = PromptEstimate()
         self.cache_policy = CachePolicy(model_id)
+        self.gemini_provider: str | None = None
         self.compactions: list[dict] = []
         self.compaction_seconds = 0.0
         self.api_seconds = 0.0
@@ -169,6 +170,23 @@ class HarnessSession:
 
     def on_diagnostics(self, diagnostics: dict) -> None:
         self._stream_diagnostics = diagnostics
+
+    def bind_gemini_provider(self, turn) -> None:
+        if not self.model_id.lower().lstrip("~").startswith("google/gemini-"):
+            return
+        if turn.provider not in GEMINI_PROVIDER_ROUTES:
+            raise TurnError(
+                "Gemini provider identity unavailable; no tools executed",
+                turn.usage,
+                failure_code="provider_identity_missing",
+            )
+        if self.gemini_provider is not None and self.gemini_provider != turn.provider:
+            raise TurnError(
+                "Gemini provider changed despite routing restriction; no tools executed",
+                turn.usage,
+                failure_code="provider_changed",
+            )
+        self.gemini_provider = turn.provider
 
     def record_failure(self, exc: BaseException, *, runtime: bool = False) -> dict:
         return failure_record(
@@ -294,6 +312,7 @@ class HarnessSession:
                 "setup": self.runtime.setup_results,
                 "turns": self.turns,
                 "cache_policy": self.cache_policy.family,
+                "gemini_provider": self.gemini_provider,
                 "compaction": {
                     "threshold_tokens": COMPACTION_THRESHOLD,
                     "model": COMPACTION_MODEL,
@@ -786,6 +805,7 @@ class HarnessSession:
                                 input_tokens_bound=input_bound,
                                 stream_limits=self.limits,
                                 cache_policy=self.cache_policy,
+                                gemini_provider=self.gemini_provider,
                                 reasoning_effort=self.reasoning_effort,
                                 on_progress=(lambda chars: self.tracker.update(self.name, chars))
                                 if self.tracker and self.tracker.is_running
@@ -796,6 +816,7 @@ class HarnessSession:
                             ),
                             max_seconds - active,
                         )
+                        self.bind_gemini_provider(turn)
                         self.turns.append(
                             {
                                 "phase": phase,

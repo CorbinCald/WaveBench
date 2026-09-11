@@ -59,13 +59,23 @@ def failure_record(
             code or "token_budget_exhausted",
             "Token budget exhausted",
         )
-    elif code in {"unsupported_tools", "reasoning_rejected", "http_error"}:
+    elif code in {
+        "unsupported_tools",
+        "reasoning_rejected",
+        "http_error",
+        "thought_signature_invalid",
+        "provider_changed",
+        "provider_identity_missing",
+    }:
         category, summary = (
             "model_protocol",
             {
                 "unsupported_tools": "Tool calling unsupported",
                 "reasoning_rejected": "Reasoning setting rejected",
                 "http_error": "Provider request rejected",
+                "thought_signature_invalid": "Gemini thought signature rejected",
+                "provider_changed": "Gemini provider changed unexpectedly",
+                "provider_identity_missing": "Gemini provider identity unavailable",
             }[code],
         )
     elif type(exc).__name__ == "BudgetError" or isinstance(exc, asyncio.TimeoutError):
