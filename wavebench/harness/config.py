@@ -23,12 +23,27 @@ class Limits:
     batch_calls: int = 64
     process_concurrency: int = 4
     web_search_calls: int = 20
+    stream_raw_min_bytes: int = 16 * 1024 * 1024
+    stream_raw_bytes_per_token: int = 1024
+    stream_raw_max_bytes: int = 128 * 1024 * 1024
+    stream_output_min_bytes: int = 1024 * 1024
+    stream_output_bytes_per_token: int = 64
+    stream_output_max_bytes: int = 32 * 1024 * 1024
+    stream_frame_bytes: int = 2 * 1024 * 1024
+    stream_assembly_bytes: int = 32 * 1024 * 1024
+    stream_seconds: int = 300
+    stream_idle_seconds: int = 60
 
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"harness.{field.name} must be a positive integer")
+        for category in ("raw", "output"):
+            if getattr(self, f"stream_{category}_min_bytes") > getattr(
+                self, f"stream_{category}_max_bytes"
+            ):
+                raise ValueError(f"harness.stream_{category}_min_bytes exceeds its maximum")
 
     @classmethod
     def from_config(cls, config: dict):

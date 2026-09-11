@@ -606,6 +606,8 @@ async def main_async(
 
         _total_run_cost = 0.0
         _has_any_cost = False
+        if any(info.get("harness") for info in results.values()):
+            print(_box_row(tracker._format_harness_header(inner_w), w))
 
         for i, (name, info) in enumerate(sorted(results.items(), key=_rank_key), 1):
             st = info["status"]
@@ -614,6 +616,10 @@ async def main_async(
             if model_cost is not None:
                 _total_run_cost += model_cost
                 _has_any_cost = True
+            if info.get("harness"):
+                for row in tracker._format_result_row(name, info, i, inner_w).splitlines():
+                    print(_box_row(row, w))
+                continue
             cost_s = (
                 f"  {S.HYEL}{format_cost(model_cost)}{S.RST}"
                 if model_cost is not None

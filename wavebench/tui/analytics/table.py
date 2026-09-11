@@ -12,9 +12,11 @@ Read-only with respect to ``history``; writes only to stdout via
 
 from __future__ import annotations
 
+import textwrap
 from datetime import datetime
 from typing import Any
 
+from wavebench.harness.failure import budget_record, failure_summary
 from wavebench.tui import styles as _styles
 from wavebench.tui.styles import (
     S,
@@ -101,6 +103,7 @@ def display_analytics(
     n = len(runs)
     col = max((len(name) for name, _ in ranked), default=12) + 2
     col = max(col, pad)
+    narrow = col + 57 > inner
 
     # ── Box header ─────────────────────────────────────────────────────────
     print()
@@ -112,6 +115,8 @@ def display_analytics(
         f"  {'AVG':>8}  {'AVG TKNS':>9}"
         f"  {'AVG COST':>9}  {'TOTAL':>9}{S.RST}"
     )
+    if narrow:
+        hdr = f"{S.BOLD}MODEL / RUNS / PASS RATE / AVERAGES{S.RST}"
     print(_box_row(hdr, w))
     print(_box_sep("", w))
 
@@ -145,8 +150,19 @@ def display_analytics(
             rate_c = f"{S.HRED}{rate_s}{S.RST}"
 
         avg_tk_s = f"{int(avg_tk):,}" if avg_tk is not None else "—"
-        avg_cost_s = format_cost(avg_cost) if avg_cost else "—"
-        total_cost_s = format_cost(total_cost) if total_cost else "—"
+        avg_cost_s = format_cost(avg_cost) if avg_cost is not None else "—"
+        total_cost_s = format_cost(total_cost) if total_cost is not None else "—"
+
+        if narrow:
+            rows = [
+                name,
+                f"{s['runs']} runs · {rate:.0f}% passed · avg {format_duration(avg_v)} · avg tokens {avg_tk_s}",
+                f"avg cost {avg_cost_s} · total {total_cost_s}",
+            ]
+            for row in rows:
+                for line in textwrap.wrap(row, max(1, inner)):
+                    print(_box_row(line, w))
+            continue
 
         print(
             _box_row(
@@ -169,8 +185,8 @@ def display_analytics(
     avg_tk_all = f"{int(sum(all_tokens) / len(all_tokens)):,}" if all_tokens else "—"
     total_spend = sum(all_costs) if all_costs else None
     avg_cost_all = (sum(all_costs) / len(all_costs)) if all_costs else None
-    total_spend_s = format_cost(total_spend) if total_spend else "—"
-    avg_cost_all_s = format_cost(avg_cost_all) if avg_cost_all else "—"
+    total_spend_s = format_cost(total_spend) if total_spend is not None else "—"
+    avg_cost_all_s = format_cost(avg_cost_all) if avg_cost_all is not None else "—"
 
     print(_box_sep("Totals", w))
     print(
@@ -205,5 +221,21 @@ def display_analytics(
             tot = len(models)
             prompt = _truncate(run.get("prompt", "—"), inner - 20)
             print(_box_row(f"{S.DIM}{date_s}{S.RST}  {ok}/{tot}  {prompt}", w))
+            for name, result in models.items():
+                if not result.get("harness"):
+                    continue
+                details = [name]
+                budget = budget_record(result["harness"])
+                if budget:
+                    marker = "~" if budget.get("estimated") else ""
+                    details.append(
+                        f"budget {marker}{budget['used_tokens']:,}/{budget['limit_tokens']:,}; "
+                        f"{marker}{budget['remaining_tokens']:,} left"
+                    )
+                outcome = failure_summary(result) or result.get("status", "unknown")
+                paragraphs = ["; ".join(details), *outcome.splitlines()]
+                for paragraph in paragraphs:
+                    for line in textwrap.wrap(paragraph, max(1, inner - 2)):
+                        print(_box_row(f"{S.DIM}  {line}{S.RST}", w))
 
     print(_box_bot(w))

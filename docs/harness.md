@@ -225,10 +225,13 @@ Automatic breakpoints cover that history without inserting user messages or
 rewriting tool results. [Failure analysis and live verification](cache-context-verification.md#tool-result-caching-fix)
 include upstream request evidence and actual cache reads.
 
-Before each build/repair request, Harness checks the active context. It compacts
-when the estimated input **exceeds 240,000 tokens**, or earlier to reserve output
-space in a smaller model window. This is context size, not cumulative billed
-tokens. The compactor is fixed to **`openai/gpt-5.6-luna`, High effort**, independent
+Before each build/repair request, Harness checks active context and remaining
+cumulative budget. It compacts when estimated input **exceeds 240,000 tokens**,
+when a smaller model window needs output headroom, or when repeated inputs would
+leave too little budget for useful follow-up work. Budget-driven compaction
+starts below the normal context threshold and must pay for its own request while
+preserving capacity for validation and submission. The compactor is fixed to
+**`openai/gpt-5.6-luna`, High effort**, independent
 of the benchmark's model and reasoning setting; an effort rejection never
 silently downgrades it.
 
@@ -244,8 +247,9 @@ The TUI shows `compacting` during the request. Before replacement, the original
 conversation is archived as `conversation-before-compaction-NNN.json` in model
 metadata. `compaction-NNN.json` records the exact request, complete response,
 usage, duration, reason, and before/after sizes. Empty, truncated, oversized,
-wrong-model, or ineffective summaries leave the original context intact and
-end generation with an error. If the required preserved messages cannot fit,
+wrong-model, or ineffective summaries leave the original context intact.
+Invalid summaries and mandatory context failures end generation with an error;
+optional compaction with insufficient savings is recorded and skipped. If the required preserved messages cannot fit,
 Harness fails explicitly instead of truncating them. Cache boundaries reset
 after successful replacement; provider affinity remains stable.
 
@@ -254,10 +258,10 @@ active-phase limits** as generation. It consumes no project execution attempt
 and does not reset turn limits. Results include its cost in overall usage, with
 `harness.model_usage`, `harness.compaction.usage`, and `timing.compaction_s`
 separately identifying overhead. Luna's one-use summary input requests no paid
-cache writes. The default **256,000 total-token budget** can stop a long session
-before the 240,000-context threshold; raise **Settings → Total token budget**
-(and time limits if needed) to allow longer sessions. Compaction never raises
-these limits automatically.
+cache writes. The default **256,000 total-token budget** includes every repeated
+input, cached input, generated output, and compaction request. Compaction never
+raises this limit. See [budget-aware compaction](budget-compaction.md) for
+affordability, savings checks, and recorded outcomes.
 
 Provider references: [OpenRouter caching and routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching),
 [OpenAI cache controls](https://developers.openai.com/api/docs/guides/prompt-caching),
@@ -281,6 +285,13 @@ Time limits count active model requests and tools; scheduler waiting and preview
 review are separate. The total token budget is per model across every build and
 repair request, including repeated conversation input and generated output.
 
+Before that capacity becomes scarce, the model receives one actionable warning
+to finish essential edits, lint, inspect results, and call `done`. The shared
+[finishing reserve](finishing-reserve.md) accounts for both requests' inputs and
+outputs plus the tool-result round trip. Warning text is counted, output is
+capped while finishing, and inaccurate estimates or insufficient reserve have
+explicit records. The model must still submit its work itself.
+
 | Limit | Default |
 |---|---:|
 | Build / repair model turns | 32 / 12 |
@@ -290,6 +301,9 @@ repair request, including repeated conversation input and generated output.
 | Program / startup / lint / dependency setup | 60 / 20 / 30 / 120 seconds |
 | Managed preview review | 600 seconds, or Enter/Ctrl-C |
 | Tool response / saved subprocess diagnostics | 16,000 characters / 8 MiB per subprocess |
+| Stream body / generated text | Output-scaled, capped at 128 MiB / 32 MiB |
+| Incomplete stream event / retained parsed fields | 2 MiB / 32 MiB |
+| Stream duration / idle wait | 300 / 60 seconds, within the active-phase deadline |
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
 | File data / project source data | 8 MiB per file / 128 MiB |
@@ -308,6 +322,11 @@ and budget accounting. Provider context/output caps and reasoning adjustments
 are recorded per turn. Missing usage and cost are persisted as unknown, never
 invented as zero. HTTP retries are bounded separately and never replay completed
 tool effects. Truncated or malformed streamed arguments do not execute.
+Stream byte limits are separately configurable and recorded. Diagnostics retain
+the reached limit, byte counters, parsing state, and sanitized provider/model
+identifiers without response excerpts. See [stream policy and defaults](stream-limits.md).
+The [limit verification notes](harness-limits-verification.md) include bounded
+live DeepSeek/Gemini runs and the full local checks.
 Python execution also has a 1 GiB address-space limit; Node uses a 512 MiB V8
 heap. A subprocess has a 128 MiB individual-file write limit. The aggregate
 storage monitor polls every 100 ms, so a fast writer can briefly overshoot it;
@@ -325,8 +344,13 @@ one-shot model rows. Failed runs' known costs are also included.
 The live dashboard and final results table show each model's status, generated
 output tokens (`OUT TK`, or `OUT` on narrow terminals), output tokens per second
 (`tk/s`), cost, turns, elapsed time, cache hit percentage, tools used, and tool
-failure percentage. Each model occupies one row beneath
-shared column headers, with phase and metrics aligned across models. Values
+failure percentage. Each model has a metric row beneath
+shared column headers, with phase and metrics aligned across models. A separate
+budget line shows cumulative input plus output used, the configured limit, and
+remaining tokens; estimates carry `~`. Final failure details distinguish stream
+limits, token exhaustion, model/protocol failures, and project runtime failures.
+Unaffordable requests include remaining tokens and the next input estimate.
+These details also appear in history, with older records supported. Values
 use compact k/M/B/T suffixes when needed; `—` means unknown, and estimation
 and partial-usage markers remain visible. At 60 columns, abbreviated headings
 include `TN` (turns), `HIT%` (cache hits), and `USE` (tools used). Below 60 columns,
