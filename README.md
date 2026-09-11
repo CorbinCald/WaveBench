@@ -145,6 +145,7 @@ The menu has four tabs:
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
+  - **Preview destination** — Automatic, Connected laptop, or Wavebench host. Controls where Harness web previews open; [SSH setup and behavior](docs/harness.md#preview-destination).
   - **Web search (Harness)** — Press Space for Brave setup, key replacement, or disabling.
   - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
   - **Harness limits** — Preview review timeout and separate build/repair time and token budgets. See [Harness limits](docs/harness.md#budgets-and-records).

@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from wavebench.harness import handoff
 from wavebench.harness import session as module
 from wavebench.harness.commands import launch_descriptor
 from wavebench.harness.config import Limits
@@ -180,6 +181,7 @@ async def factory(tmp_path, monkeypatch):
             kwargs.pop("limits", Limits(review_seconds=1)),
             api_slots,
             process_slots,
+            preview_destination=kwargs.pop("preview_destination", "host"),
             **kwargs,
         )
         sessions.append(instance)
@@ -854,3 +856,135 @@ async def test_ineffective_compaction_retains_oversized_protected_message(factor
     assert session.generation == "budget_exhausted"
     assert "cannot fit preserved messages" in session.error
     assert session.messages == before and not session.attempts
+
+
+@pytest.fixture
+def review_helper(tmp_path, monkeypatch):
+    """Use the real companion when supplied locally, a pipe-protocol fixture in CI."""
+    bin_dir = tmp_path / "review-bin"
+    bin_dir.mkdir()
+    helper = bin_dir / "herdr-review"
+    external = os.environ.get("WAVEBENCH_TEST_REVIEW_HELPER")
+    if external:
+        helper.symlink_to(external)
+    else:
+        helper.write_text("""#!/usr/bin/env python3
+import argparse,json,os,pathlib,select,sys,time,uuid
+parser=argparse.ArgumentParser()
+parser.add_argument('action', choices=['offer','status'])
+parser.add_argument('--session')
+parser.add_argument('--ttl',type=int,default=900)
+parser.add_argument('--url')
+args=parser.parse_args()
+if args.action=='status':
+    print(json.dumps({'client':{}}))
+    sys.exit(0)
+root=pathlib.Path(os.environ['XDG_STATE_HOME'])/'herdr-review/remote'/args.session
+root.mkdir(parents=True,exist_ok=True)
+token=uuid.uuid4().hex
+record={'id':'app-'+token,'token':token,'pid':os.getpid(),'expires':time.time()+args.ttl,
+        'urls':[args.url],'ports':[int(args.url.split(':')[2].split('/')[0])]}
+path=root/(record['id']+'.json')
+try:
+    path.write_text(json.dumps(record))
+    print(json.dumps(record),flush=True)
+    if select.select([sys.stdin],[],[],args.ttl)[0]:
+        sys.stdin.read()
+finally:
+    path.unlink(missing_ok=True)
+""")
+        helper.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "review-state"))
+    monkeypatch.setenv("HERDR_SESSION", "fixture")
+    return tmp_path / "review-state/herdr-review/remote/fixture"
+
+
+def ready_static(session):
+    session.workspace.write("index.html", "<!doctype html><h1>Ready on laptop</h1>")
+    session.descriptor = launch_descriptor(
+        {"runtime": "static", "entry": "index.html"}, session.workspace
+    )
+    session.generation = "submitted"
+    session.submitted_at = time.monotonic()
+
+
+@pytest.mark.parametrize("policy", ["incremental", "after_all", "off"])
+async def test_remote_previews_use_existing_processes_and_cleanup(
+    factory, review_helper, monkeypatch, policy
+):
+    import aiohttp
+
+    def forbidden_browser(*args):
+        pytest.fail("Remote previews must never open a host browser")
+
+    monkeypatch.setattr(module, "open_preview", forbidden_browser)
+    first = factory("first", auto_open=policy, preview_destination="laptop")
+    second = factory("second", auto_open=policy, preview_destination="laptop")
+    for session in (first, second):
+        ready_static(session)
+        await session.execute()
+        assert session.status == "success"
+        assert len(session.attempts) == 1
+    if policy == "off":
+        assert not first.remote_preview and not second.remote_preview
+        assert not list(review_helper.glob("*.json"))
+        return
+    paths = [review_helper / (s.remote_preview.record["id"] + ".json") for s in (first, second)]
+    assert all(path.exists() for path in paths)
+    async with aiohttp.ClientSession() as client:
+        for session in (first, second):
+            async with client.get(session.preview.url) as response:
+                assert "Ready on laptop" in await response.text()
+    await first.close()
+    assert not paths[0].exists() and paths[1].exists()
+    assert second.preview.process.returncode is None
+    await HarnessBatch([second], policy, {}).review()
+    assert not paths[1].exists()
+    assert second.preview._stopped
+    assert second.remote_preview.process.returncode == 0
+
+
+async def test_remote_helper_expiry_stops_generated_app(factory, review_helper, monkeypatch):
+    monkeypatch.setattr(handoff, "MAX_PREVIEW_SECONDS", 1)
+    session = factory(preview_destination="laptop")
+    ready_static(session)
+    await session.execute()
+    path = review_helper / (session.remote_preview.record["id"] + ".json")
+    await asyncio.wait_for(session.preview_watch, 5)
+    assert not path.exists()
+    assert session.preview._stopped
+    assert session.preview.process.returncode is not None
+    assert session.status == "success"
+
+
+async def test_cancelling_review_withdraws_remote_preview(factory, review_helper, capsys):
+    session = factory(preview_destination="laptop", limits=Limits(review_seconds=30))
+    ready_static(session)
+    await session.execute()
+    path = review_helper / (session.remote_preview.record["id"] + ".json")
+    task = asyncio.create_task(HarnessBatch([session], "incremental", {}).review())
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not path.exists()
+    assert session.preview._stopped
+    assert "Waiting for laptop connection" in capsys.readouterr().out
+
+
+async def test_missing_helper_does_not_change_execution_success_or_open_host(factory, monkeypatch):
+    session = factory(preview_destination="laptop")
+    ready_static(session)
+    monkeypatch.setattr(module, "open_preview", lambda *args: pytest.fail("Wrong browser"))
+    # Keep bwrap and the rest of the runtime available.
+    original = handoff.shutil.which
+    monkeypatch.setattr(
+        handoff.shutil, "which", lambda name: None if name == "herdr-review" else original(name)
+    )
+    await session.execute()
+    assert session.status == "success"
+    assert "install herdr-review" in session.attempts[-1]["presentation_error"]
+    assert not session.remote_preview
+    await session.close()
+    assert session.preview._stopped

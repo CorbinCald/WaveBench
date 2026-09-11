@@ -462,6 +462,7 @@ async def main_async(
                             process_slots,
                             auto_install=auto_install,
                             auto_open=auto_open,
+                            preview_destination=config.get("preview_destination", "automatic"),
                             reasoning_effort=reasoning_effort,
                             tracker=tracker,
                             web_search=web_search,

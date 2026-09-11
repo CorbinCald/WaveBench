@@ -38,6 +38,7 @@ from .context import (
     plan_compaction,
 )
 from .failure import failure_record
+from .handoff import MAX_PREVIEW_SECONDS, RemotePreview, client_status, destination
 from .runtime import Runtime, SetupError
 from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability
 from .workspace import allocate_project
@@ -86,11 +87,15 @@ class HarnessSession:
         *,
         auto_install="off",
         auto_open="incremental",
+        preview_destination="automatic",
         reasoning_effort="high",
         tracker=None,
         web_search: BraveSearch | None = None,
     ):
         self.name, self.model_id = name, model_id
+        self.preview_destination = preview_destination
+        self.remote_preview = None
+        self.preview_watch = None
         self.client, self.api_key = client, api_key
         self.limits, self.api_slots, self.process_slots = limits, api_slots, process_slots
         self.auto_open, self.auto_install, self.reasoning_effort = (
@@ -294,6 +299,7 @@ class HarnessSession:
                 "version": HARNESS_VERSION,
                 "config": self.limits.record(),
                 "auto_open": self.auto_open,
+                "preview_destination": self.preview_destination,
                 "dependency_policy": self.auto_install,
                 "model_id": self.model_id,
                 "tool_capability": self.tool_capability,
@@ -1099,12 +1105,7 @@ class HarnessSession:
                                 attempt["preview_url"] = url
                                 browser_log = self.metadata / "browser.log"
                                 attempt["browser_log"] = str(browser_log)
-                                opened = await asyncio.to_thread(open_preview, url, browser_log)
-                                if not opened:
-                                    attempt["presentation_error"] = (
-                                        f"browser unavailable; open {url} manually. "
-                                        f"Browser log: {browser_log} (if created)"
-                                    )
+                                await self.present_preview(url, browser_log, attempt)
                         elif self.auto_open != "off" and attempt.get("diagnostics"):
                             # Show output from the completed managed run; no terminal relaunch.
                             import re
@@ -1154,11 +1155,52 @@ class HarnessSession:
             finally:
                 self.phase("finished")
 
+    async def present_preview(self, url: str, log: Path, attempt: dict) -> None:
+        try:
+            target = await destination(self.preview_destination)
+            attempt["preview_destination"] = target
+            if target == "laptop":
+                remote = RemotePreview()
+                await remote.open(url, log)
+                self.remote_preview = remote
+                attempt["presentation_status"] = "Waiting for laptop connection"
+            elif not await asyncio.to_thread(open_preview, url, log):
+                attempt["presentation_error"] = (
+                    f"browser unavailable; open {url} on the Wavebench host. Browser log: {log}"
+                )
+        except (OSError, ValueError, RuntimeError, asyncio.TimeoutError) as exc:
+            # Presentation never changes a successful runtime result or silently
+            # falls back to a different machine's browser.
+            attempt["presentation_error"] = str(exc)
+        self.preview_watch = asyncio.create_task(self.watch_preview(attempt))
+
+    async def watch_preview(self, attempt: dict) -> None:
+        waits = [asyncio.create_task(self.preview.process.wait())]
+        if self.remote_preview:
+            waits.append(asyncio.create_task(self.remote_preview.process.wait()))
+        try:
+            await asyncio.wait(
+                waits, timeout=MAX_PREVIEW_SECONDS, return_when=asyncio.FIRST_COMPLETED
+            )
+            await self.preview.stop()
+            if self.remote_preview:
+                await self.remote_preview.close()
+            attempt["presentation_status"] = "Preview stopped or expired"
+        finally:
+            for task in waits:
+                task.cancel()
+            await asyncio.gather(*waits, return_exceptions=True)
+
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         try:
+            if self.preview_watch:
+                self.preview_watch.cancel()
+                await asyncio.gather(self.preview_watch, return_exceptions=True)
+            if self.remote_preview:
+                await self.remote_preview.close()
             await self.runtime.close()
             self.save()
         finally:
@@ -1203,38 +1245,67 @@ class HarnessBatch:
                 self.results[session.name] = session.result()
 
     async def review(self) -> None:
-        previews = [
-            session for session in self.sessions if session.preview and not session.preview._stopped
-        ]
+        done = asyncio.Event()
+        monitor = None
+        reader_added = False
+        loop = asyncio.get_running_loop()
+
+        async def monitor_previews():
+            messages = {}
+            while not done.is_set():
+                active = [s for s in self.sessions if s.preview and not s.preview._stopped]
+                if not active:
+                    done.set()
+                    return
+                clients = {}
+                for session in active:
+                    remote = session.remote_preview
+                    if not remote:
+                        continue
+                    key = (remote.helper, remote.session)
+                    if key not in clients:
+                        try:
+                            clients[key] = await client_status(*key)
+                        except (OSError, ValueError, RuntimeError, asyncio.TimeoutError):
+                            clients[key] = {}
+                    message = remote.message(clients[key])
+                    session.attempts[-1]["presentation_status"] = message
+                    if messages.get(session.name) != message:
+                        print(f"  {session.name}: {message}", flush=True)
+                        messages[session.name] = message
+                await asyncio.sleep(3)
+
         try:
-            if not previews:
-                return
-            seconds = self.sessions[0].limits.review_seconds
-            for session in previews:
-                print(f"  {session.name} preview: {session.preview.url}")
+            previews = [s for s in self.sessions if s.preview and not s.preview._stopped]
+            for session in self.sessions:
                 if session.attempts and session.attempts[-1].get("presentation_error"):
                     print(f"  {session.name}: {session.attempts[-1]['presentation_error']}")
+            if not previews:
+                return
+            seconds = min(self.sessions[0].limits.review_seconds, MAX_PREVIEW_SECONDS)
+            for session in previews:
+                print(f"  {session.name} preview: {session.preview.url}")
             print(
                 f"  Managed previews remain open for up to {seconds}s. Press Enter or Ctrl-C to stop.",
                 flush=True,
             )
             if sys.stdin.isatty():
-                loop = asyncio.get_running_loop()
-                done = loop.create_future()
 
                 def entered():
                     os.read(sys.stdin.fileno(), 1024)
-                    if not done.done():
-                        done.set_result(None)
+                    done.set()
 
                 loop.add_reader(sys.stdin.fileno(), entered)
-                try:
-                    await asyncio.wait_for(done, seconds)
-                except asyncio.TimeoutError:
-                    pass
-                finally:
-                    loop.remove_reader(sys.stdin.fileno())
-            else:
-                await asyncio.sleep(seconds)
+                reader_added = True
+            monitor = asyncio.create_task(monitor_previews())
+            try:
+                await asyncio.wait_for(done.wait(), seconds)
+            except asyncio.TimeoutError:
+                pass
         finally:
+            if reader_added:
+                loop.remove_reader(sys.stdin.fileno())
+            if monitor:
+                monitor.cancel()
+                await asyncio.gather(monitor, return_exceptions=True)
             await asyncio.gather(*(session.close() for session in self.sessions))

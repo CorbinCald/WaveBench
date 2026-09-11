@@ -108,6 +108,7 @@ def load_config() -> dict[str, Any]:
         "analytics_sort": "runs",
         "theme": "default",
         "auto_open": "incremental",
+        "preview_destination": "automatic",
         "auto_install": "off",
         "directory_naming": "llm",
         "tts_voice": "alloy",
