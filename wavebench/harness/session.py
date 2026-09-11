@@ -19,16 +19,25 @@ from wavebench.web_search import BraveSearch
 from . import HARNESS_VERSION
 from .accounting import cache_read_ratio, reported_total
 from .browser import open_preview
+from .budget import (
+    FINISH_OUTPUT_TOKENS,
+    FINISH_TOOL_TOKENS,
+    FINISH_WARNING_TOKENS,
+    finish_output_tokens,
+    finish_reserve,
+    finish_tool_tokens,
+    finishing_trigger,
+)
 from .commands import TOOL_SCHEMA, Dispatcher  # noqa: F401 — historical import compatibility
 from .config import Limits
 from .context import (
     COMPACTION_EFFORT,
     COMPACTION_MODEL,
-    COMPACTION_OUTPUT_TOKENS,
     COMPACTION_THRESHOLD,
     compaction_reason,
     plan_compaction,
 )
+from .failure import failure_record
 from .runtime import Runtime, SetupError
 from .transport import TurnError, capability
 from .workspace import allocate_project
@@ -117,11 +126,15 @@ class HarnessSession:
         self.repair = "not_needed"
         self.status = "failed"
         self.error = None
+        self.failure: dict | None = None
         self.phase_name = "pending"
         self.submitted_at: float | None = None
         self.descriptor = None
         self.preview = None
         self.budget_tokens = 0
+        self.finishing = False
+        self.budget_decisions: list[dict] = []
+        self._finishing_warning: dict | None = None
         self.prompt_estimate = PromptEstimate()
         self.cache_policy = CachePolicy(model_id)
         self.compactions: list[dict] = []
@@ -138,9 +151,36 @@ class HarnessSession:
         self._closed = False
         self.tool_capability = None
         self._turn_usage: dict = {}
+        self._turn_output_tokens = 0
+        self._next_input_tokens: int | None = None
+        self._stream_diagnostics: dict = {}
+
+    def budget_record(self) -> dict:
+        return {
+            "used_tokens": self.budget_tokens,
+            "limit_tokens": self.limits.total_tokens,
+            "remaining_tokens": max(0, self.limits.total_tokens - self.budget_tokens),
+            "estimated": any(reported_total(turn["usage"]) is None for turn in self.turns),
+            "next_input_tokens_estimate": self._next_input_tokens,
+        }
+
+    def on_diagnostics(self, diagnostics: dict) -> None:
+        self._stream_diagnostics = diagnostics
+
+    def record_failure(self, exc: BaseException, *, runtime: bool = False) -> dict:
+        return failure_record(
+            exc,
+            phase=self.phase_name,
+            budget=self.budget_record(),
+            stream=self._stream_diagnostics
+            if isinstance(exc, (TurnError, asyncio.CancelledError))
+            else None,
+            runtime=runtime,
+        )
 
     def on_usage(self, usage: dict, output_tokens: int) -> None:
         self._turn_usage = usage
+        self._turn_output_tokens = max(self._turn_output_tokens, output_tokens)
         if self.tracker and self.tracker.is_running:
             self.tracker.update_harness_stream(self.name, usage, output_tokens)
 
@@ -159,7 +199,9 @@ class HarnessSession:
         self.phase_name = phase
         self.events.append({"phase": phase, "timestamp": time.time()})
         if self.tracker and self.tracker.is_running:
-            self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
+            self.tracker.update_harness(
+                self.name, self.usage(), self.api_seconds, budget=self.budget_record()
+            )
             self.on_tool_result(self.dispatcher.tool_usage)
             self.tracker.set_phase(self.name, phase)
         else:
@@ -224,6 +266,7 @@ class HarnessSession:
             if self.descriptor
             else None,
             "error": self.error,
+            "failure": self.failure if self.status != "success" else None,
             "usage": self.usage(),
             "retries": self.retries,
             "harness": {
@@ -269,6 +312,14 @@ class HarnessSession:
                     "compaction_s": self.compaction_seconds,
                 },
                 "budget_tokens": self.budget_tokens,
+                "budget": self.budget_record(),
+                "finishing_budget": {
+                    "output_tokens": FINISH_OUTPUT_TOKENS,
+                    "warning_tokens": FINISH_WARNING_TOKENS,
+                    "tool_result_tokens": FINISH_TOOL_TOKENS,
+                    "warning_injected": self.finishing,
+                    "records": self.budget_decisions,
+                },
                 "diagnostics": str(self.metadata),
                 "prompt_schema_bytes": len(
                     json.dumps(
@@ -287,43 +338,216 @@ class HarnessSession:
             json.dumps(self.messages, indent=2, ensure_ascii=False)
         )
 
-    async def compact(self, reason: str, before: int, timeout: float) -> None:
-        """Archive first; replace context only after a complete, useful Luna summary."""
-        try:
-            plan = plan_compaction(self.messages)
-        except ValueError as exc:
-            raise BudgetError(f"context cannot be compacted: {exc}") from exc
-        request = plan.request()
-        local_input = prompt_tokens(request, [])
-        input_bound = PromptEstimate().bound(local_input)
-        output_tokens = min(
-            COMPACTION_OUTPUT_TOKENS,
-            self.limits.total_tokens - self.budget_tokens - input_bound,
+    def budget_decision(self, kind: str, **details) -> dict:
+        record = {
+            "kind": kind,
+            "phase": self.phase_name,
+            "turn": len(self.turns) + 1,
+            "remaining_tokens": self.limits.total_tokens - self.budget_tokens,
+            **details,
+        }
+        self.budget_decisions.append(record)
+        return record
+
+    def prepare_finishing(
+        self, local_input: int, input_bound: int, output_tokens: int, turns_left: int
+    ) -> tuple[int, int, int]:
+        """Warn once and bound output while keeping a validation round trip affordable."""
+        remaining = self.limits.total_tokens - self.budget_tokens
+        reserve = finish_reserve(input_bound, output_tokens, self.limits.output_chars)
+        first_warning = not self.finishing and (
+            remaining
+            <= finishing_trigger(input_bound, output_tokens, reserve, self.limits.output_chars)
+            or turns_left <= 2
         )
-        if output_tokens < 1024:
-            raise BudgetError(
-                "total token budget cannot fit Luna context compaction "
-                f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used; "
-                f"compaction input estimate {input_bound:,} tokens)"
+        if first_warning:
+            warning = {
+                "role": "user",
+                "content": (
+                    "[WaveBench budget warning] "
+                    f"{remaining:,} total tokens remain, including repeated conversation input "
+                    f"and all output. The estimated finishing reserve is {reserve:,} tokens "
+                    f"for final fixes and validation, its tool results, then submission. "
+                    f"At most {turns_left} model requests remain in this phase. "
+                    "Finish now: batch any essential file edits with wb lint, inspect the results, "
+                    "then call wb done alone with runtime and entry. Avoid optional work and "
+                    "large reads. "
+                    f"Further responses are capped at {finish_output_tokens(output_tokens):,} tokens. "
+                    + (
+                        "The full finishing sequence no longer fits the estimate; use the remaining "
+                        "capacity carefully. "
+                        if remaining < reserve or turns_left < 2
+                        else ""
+                    )
+                    + "The budget stays fixed. Only your done call submits the project."
+                ),
+            }
+            warned_local = prompt_tokens([*self.messages, warning], self.tools)
+            warned_bound = self.prompt_estimate.bound(warned_local)
+            if warned_bound >= remaining:
+                self.budget_decision(
+                    "warning_not_deliverable",
+                    input_tokens_bound=warned_bound,
+                    reserve_tokens=reserve,
+                    outcome="insufficient_budget",
+                )
+                return local_input, input_bound, output_tokens
+            self.messages.append(warning)
+            self.finishing = True
+            self._finishing_warning = self.budget_decision(
+                "warning",
+                input_tokens_bound=warned_bound,
+                warning_input_tokens=warned_bound - input_bound,
+                reserve_tokens=reserve,
+                reserve_affordable=remaining >= reserve and turns_left >= 2,
+                status="pending",
             )
+            if warned_bound - input_bound > FINISH_WARNING_TOKENS:
+                self.budget_decision(
+                    "estimate_exceeded",
+                    source="warning_input",
+                    estimated_tokens=FINISH_WARNING_TOKENS,
+                    actual_tokens=warned_bound - input_bound,
+                )
+            local_input, input_bound = warned_local, warned_bound
+        if not self.finishing:
+            return local_input, input_bound, output_tokens
+
+        output_tokens = finish_output_tokens(output_tokens)
+        # On the first warning, protect the next input (including this response
+        # and its tool results) plus a bounded done response. Later requests can
+        # consume that reserve; the agent remains responsible for calling done.
+        if first_warning:
+            actual_reserve = (
+                finish_reserve(input_bound, output_tokens, self.limits.output_chars)
+                - 2 * FINISH_WARNING_TOKENS
+            )
+            if remaining >= actual_reserve and turns_left >= 2:
+                outcome = "reserved"
+            else:
+                outcome = "insufficient_reserve"
+                # Do not force a tiny, likely truncated response if the full
+                # round trip is already unaffordable. The fixed total still
+                # bounds this request and the shortfall remains explicit.
+            self.budget_decision(
+                "reserve",
+                outcome=outcome,
+                input_tokens_bound=input_bound,
+                reserve_tokens=actual_reserve,
+                max_output_tokens=output_tokens,
+            )
+        return local_input, input_bound, output_tokens
+
+    async def compact(self, reason: str, before: int, timeout: float) -> bool:
+        """Replace history only when a complete summary leaves useful request capacity."""
+        from .budget import finish_output_tokens, finish_reserve
+        from .context import BUDGET_COMPACTION_REASON, SUMMARY_MAX_TOKENS, admit_compaction
+
+        budget_driven = reason == BUDGET_COMPACTION_REASON
+        attempted = getattr(self, "_budget_compaction_before", None)
+        if (
+            budget_driven
+            and attempted is not None
+            and before < attempted + max(8192, attempted // 4)
+        ):
+            return False
+        if budget_driven:
+            self._budget_compaction_before = before
+        remaining = self.limits.total_tokens - self.budget_tokens
         number = len(self.compactions) + 1
-        archive = f"conversation-before-compaction-{number:03d}.json"
-        (self.metadata / archive).write_text(
-            json.dumps(self.messages, ensure_ascii=False, indent=2)
-        )
         record = {
             "number": number,
             "reason": reason,
             "before_tokens": before,
+            "remaining_tokens": remaining,
             "model": COMPACTION_MODEL,
             "reasoning_effort": COMPACTION_EFFORT,
-            "archive": archive,
             "status": "pending",
         }
+
+        def skip(message: str) -> bool:
+            record.update(status="skipped", skip_reason=message, usage={}, charged_tokens=0)
+            if budget_driven:
+                self.compactions.append(record)
+            else:
+                # Preserve the hard-limit failure contract while recording why
+                # admission failed before any paid request was attempted.
+                self.events.append({"phase": "compacting", "timestamp": time.time(), **record})
+            self.save()
+            if not budget_driven:
+                raise BudgetError(message)
+            return False
+
+        if budget_driven and getattr(self, "finishing", False):
+            return skip("finishing reserve is already active; continue validation and submission")
+        try:
+            plan = plan_compaction(self.messages)
+        except ValueError as exc:
+            return skip(f"context cannot be compacted: {exc}")
+        # Reserve an explicit summary maximum, including the calibrated vendor
+        # tokenizer ratio. Small histories need correspondingly small handoffs.
+        summary_tokens = min(SUMMARY_MAX_TOKENS, max(1024, prompt_tokens(plan.middle, []) // 8))
+        request = plan.request(summary_tokens)
+        local_input = prompt_tokens(request, [])
+        input_bound = PromptEstimate().bound(local_input)
+        replacement_estimate = self.prompt_estimate.after_compaction()
+        protected = prompt_tokens(plan.apply("Summary", summary_tokens), self.tools)
+        projected_bound = replacement_estimate.bound(protected + summary_tokens)
+        normal_output = min(
+            self.limits.turn_tokens,
+            api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+        )
+        if self.finishing:
+            normal_output = finish_output_tokens(normal_output)
+        reserve = finish_reserve(projected_bound, normal_output, self.limits.output_chars)
+        admission = admit_compaction(
+            remaining_tokens=remaining,
+            input_bound=input_bound,
+            before_bound=self.prompt_estimate.bound(prompt_tokens(self.messages, self.tools)),
+            after_bound=projected_bound,
+            reserve_tokens=reserve,
+            followup_output_tokens=finish_output_tokens(normal_output),
+            require_savings=budget_driven,
+        )
+        record.update(
+            input_tokens_bound=input_bound,
+            projected_after_tokens=projected_bound,
+            summary_max_tokens=summary_tokens,
+            finishing_reserve_tokens=reserve,
+            followup_turns=admission.followup_turns,
+            projected_savings_tokens=admission.projected_savings_tokens,
+            output_tokens=admission.output_tokens,
+        )
+        if compaction_reason(
+            replacement_estimate.estimate(protected),
+            replacement_estimate.bound(protected),
+            api._MODEL_CONTEXT_CACHE.get(self.model_id, 128_000),
+            normal_output,
+        ):
+            return skip(
+                "compaction cannot fit preserved messages and summary into the context budget"
+            )
+        if admission.skip_reason:
+            return skip(
+                f"total token budget cannot fit Luna context compaction: {admission.skip_reason} "
+                f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used; "
+                f"compaction input estimate {input_bound:,} tokens; finishing reserve {reserve:,} tokens)"
+                if admission.output_tokens < 1024
+                else admission.skip_reason
+            )
+        output_tokens = admission.output_tokens
+        archive = f"conversation-before-compaction-{number:03d}.json"
+        (self.metadata / archive).write_text(
+            json.dumps(self.messages, ensure_ascii=False, indent=2)
+        )
+        record["archive"] = archive
         self.compactions.append(record)
         self.phase("compacting")
         started = time.monotonic()
         self._turn_usage = {}
+        self._turn_output_tokens = 0
+        self._stream_diagnostics = {}
+        self._next_input_tokens = input_bound
         if self.tracker and self.tracker.is_running:
             self.tracker.start_harness_turn(self.name, local_input, model_id=COMPACTION_MODEL)
         turn = None
@@ -344,11 +568,13 @@ class HarnessSession:
                     strict_reasoning=True,
                     cache_reuse=False,
                     input_tokens_bound=input_bound,
+                    stream_limits=self.limits,
                     on_progress=(lambda chars: self.tracker.update(self.name, chars))
                     if self.tracker and self.tracker.is_running
                     else None,
                     on_retry=self.on_retry,
                     on_usage=self.on_usage,
+                    on_diagnostics=self.on_diagnostics,
                 ),
                 timeout,
             )
@@ -356,41 +582,64 @@ class HarnessSession:
                 raise ValueError("compactor did not return a complete text summary")
             if turn.model != COMPACTION_MODEL:
                 raise ValueError(f"compactor returned unexpected model {turn.model!r}")
-            replacement = plan.apply(turn.message.get("content"))
+            replacement = plan.apply(turn.message.get("content"), summary_tokens)
             after = prompt_tokens(replacement, self.tools)
-            replacement_estimate = self.prompt_estimate.after_compaction()
+            record["after_tokens"] = replacement_estimate.estimate(after)
+            charged = reported_total(turn.usage)
+            if charged is None:
+                charged = input_bound + max(
+                    prompt_tokens([turn.message], []), self._turn_output_tokens
+                )
+            if self.budget_tokens + charged > self.limits.total_tokens:
+                raise BudgetError("total token budget exhausted during context compaction")
             # Preserve everything on failure, including if required boundaries
             # alone are too large. Never loop compacting an ineffective summary.
             if replacement_estimate.estimate(after) >= before or compaction_reason(
                 replacement_estimate.estimate(after),
                 replacement_estimate.bound(after),
                 api._MODEL_CONTEXT_CACHE.get(self.model_id, 128_000),
-                min(
-                    self.limits.turn_tokens,
-                    api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
-                ),
+                normal_output,
             ):
+                if budget_driven:
+                    record.update(
+                        status="ineffective", skip_reason="summary did not reduce usable context"
+                    )
+                    return False
                 raise BudgetError(
                     "compaction cannot fit preserved messages and summary into the context budget"
                 )
-            charged = reported_total(turn.usage)
-            if charged is None:
-                charged = input_bound + prompt_tokens([turn.message], [])
-            if self.budget_tokens + charged > self.limits.total_tokens:
-                raise BudgetError("total token budget exhausted during context compaction")
+            actual_reserve = finish_reserve(
+                replacement_estimate.bound(after), normal_output, self.limits.output_chars
+            )
+            record.update(
+                remaining_after_tokens=remaining - charged,
+                actual_finishing_reserve_tokens=actual_reserve,
+                reserve_outcome="preserved"
+                if remaining - charged >= actual_reserve
+                else "underestimated",
+            )
             self.messages = replacement
             self.prompt_estimate = replacement_estimate
             self.cache_policy.reset()
             record.update(status="completed", after_tokens=replacement_estimate.estimate(after))
+            if budget_driven:
+                self._budget_compaction_before = replacement_estimate.estimate(after)
+            return True
         except BaseException as exc:
             failed_usage = getattr(exc, "usage", None) or self._turn_usage
             request_sent = getattr(exc, "request_sent", True)
-            record.update(status="failed", error=str(exc) or type(exc).__name__)
+            record.update(
+                status="failed",
+                error=str(exc) or type(exc).__name__,
+                failure=self.record_failure(exc),
+                stream=self._stream_diagnostics,
+            )
             raise
         finally:
             elapsed = time.monotonic() - started
             self.compaction_seconds += elapsed
             usage = turn.usage if turn else failed_usage
+            charged = 0
             if request_sent:
                 self.turns.append(
                     {
@@ -400,17 +649,23 @@ class HarnessSession:
                         "provider": turn.provider if turn else None,
                         "adjustments": turn.adjustments if turn else {},
                         "error": record.get("error"),
+                        "failure": record.get("failure"),
+                        "stream": self._stream_diagnostics,
+                        "input_tokens_bound": input_bound,
                     }
                 )
                 charged = reported_total(usage)
-                self.budget_tokens += (
-                    charged
-                    if charged is not None
-                    else (input_bound + (prompt_tokens([turn.message], []) if turn else 0))
-                )
+                if charged is None:
+                    charged = input_bound + max(
+                        prompt_tokens([turn.message], []) if turn else 0,
+                        self._turn_output_tokens,
+                    )
+                self.budget_tokens += charged
             if self.tracker and self.tracker.is_running:
-                self.tracker.update_harness(self.name, self.usage(), self.api_seconds + elapsed)
-            record.update(time_s=elapsed, usage=usage)
+                self.tracker.update_harness(
+                    self.name, self.usage(), self.api_seconds + elapsed, budget=self.budget_record()
+                )
+            record.update(time_s=elapsed, usage=usage, charged_tokens=charged)
             (self.metadata / f"compaction-{number:03d}.json").write_text(
                 json.dumps(
                     {
@@ -429,11 +684,22 @@ class HarnessSession:
         max_seconds = self.limits.repair_seconds if repair else self.limits.build_seconds
         active = 0.0
         phase = "repairing" if repair else "building"
+        if repair and self.finishing:
+            self.budget_decision(
+                "repair", phase=phase, outcome="reusing_warning_and_remaining_budget"
+            )
         try:
-            for _ in range(max_turns):
+            for turn_index in range(max_turns):
                 self.phase(phase)
                 local_input = await asyncio.to_thread(prompt_tokens, self.messages, self.tools)
                 input_bound = self.prompt_estimate.bound(local_input)
+                self._next_input_tokens = input_bound
+                output_tokens = min(
+                    self.limits.turn_tokens,
+                    api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+                )
+                if self.finishing:
+                    output_tokens = finish_output_tokens(output_tokens)
                 if active >= max_seconds:
                     raise BudgetError(
                         f"{phase} active time budget exhausted ({active:.1f}s / {max_seconds}s)"
@@ -442,10 +708,12 @@ class HarnessSession:
                     self.prompt_estimate.estimate(local_input),
                     input_bound,
                     api._MODEL_CONTEXT_CACHE.get(self.model_id, 128_000),
-                    min(
-                        self.limits.turn_tokens,
-                        api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+                    output_tokens,
+                    remaining_tokens=self.limits.total_tokens - self.budget_tokens,
+                    finishing_reserve_tokens=finish_reserve(
+                        input_bound, output_tokens, self.limits.output_chars
                     ),
+                    output_chars=self.limits.output_chars,
                 )
                 if reason:
                     async with self.api_slots:
@@ -463,12 +731,30 @@ class HarnessSession:
                     self.phase(phase)
                     local_input = prompt_tokens(self.messages, self.tools)
                     input_bound = self.prompt_estimate.bound(local_input)
+                local_input, input_bound, output_tokens = self.prepare_finishing(
+                    local_input, input_bound, output_tokens, max_turns - turn_index
+                )
+                self._next_input_tokens = input_bound
                 remaining_tokens = self.limits.total_tokens - self.budget_tokens - input_bound
                 if remaining_tokens <= 0:
+                    self.budget_decision(
+                        "request_blocked",
+                        outcome="insufficient_budget",
+                        input_tokens_bound=input_bound,
+                    )
                     raise BudgetError(
                         "total token budget cannot fit another request "
                         f"({self.budget_tokens:,} / {self.limits.total_tokens:,} tokens used; "
                         f"next input estimate {input_bound:,} tokens)"
+                    )
+                request_output = min(output_tokens, remaining_tokens)
+                request_budget = None
+                if self.finishing:
+                    request_budget = self.budget_decision(
+                        "finishing_request",
+                        input_tokens_bound=input_bound,
+                        max_output_tokens=request_output,
+                        status="pending",
                     )
                 turn = None
                 started = None
@@ -476,7 +762,10 @@ class HarnessSession:
                     async with self.api_slots:
                         started = time.monotonic()
                         self._turn_usage = {}
+                        self._turn_output_tokens = 0
+                        self._stream_diagnostics = {}
                         if self.tracker and self.tracker.is_running:
+                            self.tracker.update_harness_budget(self.name, self.budget_record())
                             self.tracker.start_harness_turn(
                                 self.name, self.prompt_estimate.estimate(local_input)
                             )
@@ -487,8 +776,9 @@ class HarnessSession:
                                 self.model_id,
                                 self.messages,
                                 self.tools,
-                                max_tokens=min(self.limits.turn_tokens, remaining_tokens),
+                                max_tokens=request_output,
                                 input_tokens_bound=input_bound,
+                                stream_limits=self.limits,
                                 cache_policy=self.cache_policy,
                                 reasoning_effort=self.reasoning_effort,
                                 on_progress=(lambda chars: self.tracker.update(self.name, chars))
@@ -496,6 +786,7 @@ class HarnessSession:
                                 else None,
                                 on_retry=self.on_retry,
                                 on_usage=self.on_usage,
+                                on_diagnostics=self.on_diagnostics,
                             ),
                             max_seconds - active,
                         )
@@ -508,9 +799,24 @@ class HarnessSession:
                                 "finish_reason": turn.finish_reason,
                                 "adjustments": turn.adjustments,
                                 "input_tokens_bound": input_bound,
+                                "max_output_tokens": request_output,
                             }
                         )
+                        if request_budget is not None:
+                            request_budget["status"] = "completed"
+                        if (
+                            self._finishing_warning
+                            and self._finishing_warning["status"] == "pending"
+                        ):
+                            self._finishing_warning["status"] = "received_response"
                 except BaseException as exc:
+                    if request_budget is not None:
+                        request_budget.update(
+                            status="cancelled"
+                            if isinstance(exc, asyncio.CancelledError)
+                            else "failed",
+                            error=str(exc) or type(exc).__name__,
+                        )
                     if started is not None and getattr(exc, "request_sent", True):
                         usage = getattr(exc, "usage", None) or self._turn_usage
                         self.turns.append(
@@ -518,10 +824,17 @@ class HarnessSession:
                                 "phase": phase,
                                 "usage": usage,
                                 "error": str(exc) or type(exc).__name__,
+                                "failure": self.record_failure(exc),
+                                "stream": getattr(exc, "diagnostics", None)
+                                or self._stream_diagnostics,
                             }
                         )
                         charged = reported_total(usage)
-                        self.budget_tokens += charged if charged is not None else input_bound
+                        self.budget_tokens += (
+                            charged
+                            if charged is not None
+                            else input_bound + self._turn_output_tokens
+                        )
                     raise
                 finally:
                     if started is not None:
@@ -529,7 +842,12 @@ class HarnessSession:
                         active += elapsed
                         self.api_seconds += elapsed
                         if self.tracker and self.tracker.is_running:
-                            self.tracker.update_harness(self.name, self.usage(), self.api_seconds)
+                            self.tracker.update_harness(
+                                self.name,
+                                self.usage(),
+                                self.api_seconds,
+                                budget=self.budget_record(),
+                            )
                 explicit_cache = (turn.adjustments.get("cache") or {}).get("breakpoints")
                 measured_context = context_usage(
                     turn.usage, self.cache_policy.family if explicit_cache else "automatic"
@@ -537,11 +855,33 @@ class HarnessSession:
                 self.prompt_estimate.observe(local_input, measured_context)
                 self.turns[-1]["context_prompt_tokens"] = measured_context.get("prompt_tokens")
                 charged = reported_total(turn.usage)
-                self.budget_tokens += (
+                charged = (
                     charged
                     if charged is not None
-                    else (input_bound + prompt_tokens([turn.message], []))
+                    else (
+                        input_bound
+                        + max(prompt_tokens([turn.message], []), self._turn_output_tokens)
+                    )
                 )
+                self.budget_tokens += charged
+                if self.tracker and self.tracker.is_running:
+                    self.tracker.update_harness_budget(self.name, self.budget_record())
+                actual_input = turn.usage.get("prompt_tokens")
+                if charged > input_bound + request_output or (
+                    type(actual_input) is int and actual_input > input_bound
+                ):
+                    self.budget_decision(
+                        "estimate_exceeded",
+                        source="request_usage",
+                        turn=len(self.turns),
+                        input_tokens_bound=input_bound,
+                        actual_input_tokens=actual_input,
+                        estimated_tokens=input_bound + request_output,
+                        actual_tokens=charged,
+                        outcome="budget_exhausted"
+                        if self.budget_tokens > self.limits.total_tokens
+                        else "recalculate_next_request",
+                    )
                 self.messages.append(turn.message)
                 if self.budget_tokens > self.limits.total_tokens:
                     raise BudgetError(
@@ -551,7 +891,10 @@ class HarnessSession:
                     )
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
-                    raise TurnError("project abandoned: model ended without wb done")
+                    raise TurnError(
+                        "project abandoned: model ended without wb done",
+                        failure_code="project_abandoned",
+                    )
                 native = [
                     {
                         "id": call["id"],
@@ -577,9 +920,28 @@ class HarnessSession:
                     }
                     for result in results
                 )
+                if self.finishing:
+                    result_tokens = (
+                        prompt_tokens(self.messages[-len(results) :], []) if results else 0
+                    )
+                    result_bound = finish_tool_tokens(self.limits.output_chars)
+                    if result_tokens > result_bound:
+                        self.budget_decision(
+                            "estimate_exceeded",
+                            source="tool_results",
+                            turn=len(self.turns),
+                            estimated_tokens=result_bound,
+                            actual_tokens=result_tokens,
+                            outcome="recalculate_next_request",
+                        )
                 self.save()
                 if self.dispatcher.submission:
                     self.descriptor = self.dispatcher.submission
+                    if self.finishing:
+                        self.budget_decision(
+                            "submission", turn=len(self.turns), outcome="submitted_by_agent"
+                        )
+                        self.save()
                     return
             raise BudgetError(f"{phase} exceeded {max_turns} model turns")
         except asyncio.TimeoutError as exc:
@@ -589,6 +951,8 @@ class HarnessSession:
                 ) from exc
             raise
         finally:
+            if self._finishing_warning and self._finishing_warning["status"] == "pending":
+                self._finishing_warning["status"] = "interrupted"
             if repair:
                 self.repair_seconds += active
             else:
@@ -611,9 +975,10 @@ class HarnessSession:
             self.generation = "submitted"
             self.submitted_at = time.monotonic()
             self.phase("queued")
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             self.status = self.generation = "cancelled"
             self.error = "cancelled during initial generation"
+            self.failure = self.record_failure(exc)
             await self.runtime.close()
             self.phase("finished")
         except Exception as exc:
@@ -624,6 +989,7 @@ class HarnessSession:
                     else "failed"
                 )
             self.error = str(exc) or type(exc).__name__
+            self.failure = self.record_failure(exc)
             self.phase("finished")
 
     async def execute(self) -> None:
@@ -658,6 +1024,7 @@ class HarnessSession:
                     if attempt["outcome"] == "success":
                         self.status = "success"
                         self.error = None
+                        self.failure = None
                         if self.preview:
                             if self.auto_open == "off":
                                 await self.preview.stop()
@@ -687,6 +1054,7 @@ class HarnessSession:
                         attempt.get("error")
                         or f"runtime exited with code {attempt.get('exit_code')}"
                     )
+                    self.failure = failure_record(self.error, phase="running", runtime=True)
                     if number == 2:
                         break
                     # Failure cleanup has completed. Same conversation/model gets one repair phase.
@@ -701,11 +1069,12 @@ class HarnessSession:
                     )
                     await self.conversation(repair=True)
                     self.repair = "submitted"
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
                 self.status = "cancelled"
                 if self.repair == "repairing":
                     self.repair = "cancelled"
                 self.error = "cancelled; no pending launch will restart"
+                self.failure = self.record_failure(exc)
                 await self.runtime.close()
             except Exception as exc:
                 if self.repair == "repairing":
@@ -717,6 +1086,7 @@ class HarnessSession:
                 self.error = (
                     f"{self.error + '; ' if self.error else ''}{str(exc) or type(exc).__name__}"
                 )
+                self.failure = self.record_failure(exc, runtime=self.phase_name == "running")
             finally:
                 self.phase("finished")
 
@@ -760,6 +1130,7 @@ class HarnessBatch:
                 if session.phase_name != "finished":
                     session.status = "cancelled"
                     session.error = "cancelled while queued"
+                    session.failure = session.record_failure(asyncio.CancelledError())
                     session.phase("finished")
                 await session.runtime.close()
             raise

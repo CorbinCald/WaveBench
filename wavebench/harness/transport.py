@@ -3,16 +3,133 @@
 from __future__ import annotations
 
 import asyncio
-import codecs
 import copy
 import json
-from dataclasses import dataclass
+import re
+import time
+from dataclasses import asdict, dataclass
 
 import aiohttp
 
 from wavebench import api
 from wavebench.prompt_cache import CachePolicy, affinity
 from wavebench.tokens import count_tokens
+
+from .config import Limits
+
+# Public display names from https://openrouter.ai/api/v1/providers, 2026-09-11.
+# Unknown labels are omitted from diagnostics until this snapshot is refreshed.
+# Do not fetch a provider catalogue during model requests or trust streamed prose.
+PUBLIC_PROVIDER_NAMES = frozenset(
+    {
+        "AI21",
+        "AionLabs",
+        "AkashML",
+        "Alibaba",
+        "Amazon Bedrock",
+        "Amazon Nova",
+        "Ambient",
+        "Anthropic",
+        "Arcee AI",
+        "AtlasCloud",
+        "Avian",
+        "Azure",
+        "Baidu",
+        "BaseTen",
+        "Black Forest Labs",
+        "Cerebras",
+        "Chutes",
+        "Cirrascale",
+        "Clarifai",
+        "Claude Platform on AWS",
+        "Cloudflare",
+        "Cohere",
+        "CoreWeave",
+        "Cosine",
+        "Crucible",
+        "Crusoe",
+        "Darkbloom",
+        "Databricks",
+        "Decart",
+        "DeepInfra",
+        "DeepSeek",
+        "Deepgram",
+        "DekaLLM",
+        "DigitalOcean",
+        "FakeProvider",
+        "Featherless",
+        "Fireworks",
+        "Fish Audio",
+        "Friendli",
+        "GMICloud",
+        "Google",
+        "Google AI Studio",
+        "Groq",
+        "HeyGen",
+        "Inception",
+        "Inceptron",
+        "Inferact vLLM",
+        "InferenceNet",
+        "Infermatic",
+        "Inflection",
+        "Io Net",
+        "Ionstream",
+        "Krea",
+        "Liquid",
+        "Makora",
+        "Mancer 2",
+        "Mara",
+        "Meta",
+        "Minimax",
+        "Mistral",
+        "Modal",
+        "ModelRun",
+        "Modular",
+        "Moonshot AI",
+        "Morph",
+        "Near AI",
+        "Nebius",
+        "Nex AGI",
+        "NextBit",
+        "Novita",
+        "Nvidia",
+        "Ollama",
+        "OpenAI",
+        "OpenInference",
+        "Parasail",
+        "Perceptron",
+        "Perplexity",
+        "Phala",
+        "Poolside",
+        "PrimeIntellect",
+        "Quiver",
+        "Recraft",
+        "Reka",
+        "Relace",
+        "Runway",
+        "Sail Research",
+        "Sakana AI",
+        "SambaNova",
+        "Seed",
+        "SiliconFlow",
+        "Sourceful",
+        "Stealth",
+        "StepFun",
+        "StreamLake",
+        "Switchpoint",
+        "Tencent",
+        "Tenstorrent",
+        "Thinking Machines",
+        "Together",
+        "Upstage",
+        "Venice",
+        "VoyageAI by MongoDB",
+        "Wafer",
+        "Xiaomi",
+        "Z.AI",
+        "xAI",
+    }
+)
 
 
 @dataclass
@@ -26,16 +143,64 @@ class Turn:
 
 
 class TurnError(RuntimeError):
-    def __init__(self, message: str, usage: dict | None = None, *, request_sent: bool = True):
+    def __init__(
+        self,
+        message: str,
+        usage: dict | None = None,
+        *,
+        request_sent: bool = True,
+        failure_code: str | None = None,
+        diagnostics: dict | None = None,
+    ):
         super().__init__(message)
         self.usage = usage or {}
         self.request_sent = request_sent
+        self.failure_code = failure_code
+        self.diagnostics = diagnostics or {}
+
+
+@dataclass(frozen=True)
+class StreamPolicy:
+    """Effective byte guards for one resolved output allowance, not token usage."""
+
+    output_tokens: int
+    raw_bytes: int
+    output_bytes: int
+    frame_bytes: int
+    assembly_bytes: int
+    seconds: int
+    idle_seconds: int
+
+    @classmethod
+    def resolve(cls, limits: Limits, max_tokens: int) -> StreamPolicy:
+        return cls(
+            output_tokens=max_tokens,
+            raw_bytes=min(
+                limits.stream_raw_max_bytes,
+                max(limits.stream_raw_min_bytes, max_tokens * limits.stream_raw_bytes_per_token),
+            ),
+            output_bytes=min(
+                limits.stream_output_max_bytes,
+                max(
+                    limits.stream_output_min_bytes,
+                    max_tokens * limits.stream_output_bytes_per_token,
+                ),
+            ),
+            frame_bytes=limits.stream_frame_bytes,
+            assembly_bytes=limits.stream_assembly_bytes,
+            seconds=limits.stream_seconds,
+            idle_seconds=limits.stream_idle_seconds,
+        )
+
+    def record(self) -> dict:
+        return asdict(self)
 
 
 class StreamAssembly:
     """No tools can be dispatched until finish, full JSON validation, and EOF agree."""
 
-    def __init__(self):
+    def __init__(self, policy: StreamPolicy | None = None):
+        self.policy = policy or StreamPolicy.resolve(Limits(), Limits().turn_tokens)
         self.message = {"role": "assistant", "content": ""}
         self.calls: dict[int, dict] = {}
         self.details: dict[int, dict] = {}
@@ -44,6 +209,67 @@ class StreamAssembly:
         self.provider = None
         self.finish = ""
         self.done = False
+        self.content_bytes = 0
+        self.reasoning_bytes = 0
+        self.tool_arguments_bytes = 0
+        self.tool_name_bytes = 0
+        self.assembly_bytes = 0
+        self.events = 0
+
+    @property
+    def output_bytes(self) -> int:
+        return (
+            self.content_bytes
+            + self.reasoning_bytes
+            + self.tool_arguments_bytes
+            + self.tool_name_bytes
+        )
+
+    def retain(self, value) -> None:
+        # Charging each retained delta before merging is a conservative bound:
+        # replacements can overcount, but unknown provider fields cannot evade it.
+        self.assembly_bytes += len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+        if self.assembly_bytes > self.policy.assembly_bytes:
+            raise TurnError(
+                "stream assembly byte limit exceeded; no tools executed",
+                self.usage,
+                failure_code="stream_assembly_limit",
+            )
+
+    def count_output(self, delta: dict) -> None:
+        for key, counter in (("content", "content_bytes"), ("reasoning", "reasoning_bytes")):
+            value = delta.get(key)
+            if value is not None and not isinstance(value, str):
+                raise TurnError(
+                    "malformed streamed text", self.usage, failure_code="malformed_stream"
+                )
+            setattr(self, counter, getattr(self, counter) + len((value or "").encode("utf-8")))
+        for detail in delta.get("reasoning_details") or []:
+            for key in ("text", "summary"):
+                value = detail.get(key)
+                if value is not None and not isinstance(value, str):
+                    raise TurnError(
+                        "malformed streamed reasoning", self.usage, failure_code="malformed_stream"
+                    )
+                self.reasoning_bytes += len((value or "").encode("utf-8"))
+        for call in delta.get("tool_calls") or []:
+            function = call.get("function") or {}
+            for key, counter in (
+                ("arguments", "tool_arguments_bytes"),
+                ("name", "tool_name_bytes"),
+            ):
+                value = function.get(key)
+                if value is not None and not isinstance(value, str):
+                    raise TurnError(
+                        "malformed streamed tool text", self.usage, failure_code="malformed_stream"
+                    )
+                setattr(self, counter, getattr(self, counter) + len((value or "").encode("utf-8")))
+        if self.output_bytes > self.policy.output_bytes:
+            raise TurnError(
+                "stream generated-output byte limit exceeded; no tools executed",
+                self.usage,
+                failure_code="stream_output_limit",
+            )
 
     def output_text(self) -> str:
         """Count generated text once, excluding SSE framing and opaque signatures."""
@@ -86,24 +312,79 @@ class StreamAssembly:
                 target[key] = copy.deepcopy(value)
 
     def feed(self, payload: str) -> None:
+        try:
+            self._feed(payload)
+        except (AttributeError, TypeError, ValueError, RecursionError) as exc:
+            raise TurnError(
+                "malformed stream data; no tools executed",
+                self.usage,
+                failure_code="malformed_stream",
+            ) from exc
+
+    def _feed(self, payload: str) -> None:
+        self.events += 1
+        if self.done:
+            raise TurnError(
+                "data received after stream completion", self.usage, failure_code="malformed_stream"
+            )
         if payload == "[DONE]":
             self.done = True
             return
         try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise TurnError("malformed SSE JSON; no tools executed", self.usage) from exc
+            obj = json.loads(payload, parse_constant=self.invalid_constant)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise TurnError(
+                "malformed SSE JSON; no tools executed", self.usage, failure_code="malformed_stream"
+            ) from exc
+        if not isinstance(obj, dict):
+            raise TurnError(
+                "malformed SSE object; no tools executed",
+                self.usage,
+                failure_code="malformed_stream",
+            )
         if obj.get("usage"):
+            if not isinstance(obj["usage"], dict):
+                raise TurnError(
+                    "malformed stream usage", self.usage, failure_code="malformed_stream"
+                )
+            self.retain(obj["usage"])
             self.merge_usage(self.usage, obj["usage"])
+        for key in ("model", "provider"):
+            value = obj.get(key)
+            if value is not None:
+                if not isinstance(value, str) or len(value.encode("utf-8")) > 512:
+                    raise TurnError(
+                        "malformed stream metadata", self.usage, failure_code="malformed_stream"
+                    )
+                setattr(self, key, value or getattr(self, key))
         if obj.get("error"):
-            raise TurnError(f"mid-stream error: {str(obj['error'])[:500]}", self.usage)
-        self.model = obj.get("model") or self.model
-        self.provider = obj.get("provider") or self.provider
-        for choice in obj.get("choices") or []:
+            # Provider messages can echo request content or credentials. Keep
+            # the category and accounting, never the raw error or response.
+            raise TurnError(
+                "mid-stream provider error; no tools executed",
+                self.usage,
+                failure_code="provider_stream_error",
+            )
+        choices = obj.get("choices")
+        if choices is not None and not isinstance(choices, list):
+            raise TurnError("malformed stream choices", self.usage, failure_code="malformed_stream")
+        for choice in choices or []:
             if choice.get("index", 0) != 0:
                 continue
-            self.finish = choice.get("finish_reason") or self.finish
-            delta = dict(choice.get("delta") or choice.get("message") or {})
+            finish = choice.get("finish_reason")
+            if finish is not None and not isinstance(finish, str):
+                raise TurnError(
+                    "malformed stream finish reason", self.usage, failure_code="malformed_stream"
+                )
+            self.finish = finish or self.finish
+            source = choice.get("delta") or choice.get("message") or {}
+            if not isinstance(source, dict):
+                raise TurnError(
+                    "malformed stream delta", self.usage, failure_code="malformed_stream"
+                )
+            delta = dict(source)
+            self.count_output(delta)
+            self.retain(delta)
             for call in delta.pop("tool_calls", None) or []:
                 index = call.get("index", 0)
                 if type(index) is not int or index < 0 or index >= 256:
@@ -114,13 +395,26 @@ class StreamAssembly:
                 )
             for detail in delta.pop("reasoning_details", None) or []:
                 index = detail.get("index", len(self.details))
+                if type(index) is not int or index < 0 or index >= 256:
+                    raise TurnError(
+                        "invalid streamed reasoning index",
+                        self.usage,
+                        failure_code="malformed_stream",
+                    )
                 self.merge(self.details.setdefault(index, {}), detail)
             self.merge(self.message, delta)
 
+    @staticmethod
+    def invalid_constant(value):
+        raise ValueError("non-finite JSON number")
+
     def complete(self) -> Turn:
         if not self.done or self.finish not in {"stop", "tool_calls"}:
+            reason = self.finish if self.finish in {"length", "error", "content_filter"} else "EOF"
             raise TurnError(
-                f"incomplete response ({self.finish or 'EOF'}); no tools executed", self.usage
+                f"incomplete response ({reason}); no tools executed",
+                self.usage,
+                failure_code="output_truncated" if self.finish == "length" else "incomplete_stream",
             )
         if self.calls:
             calls = [self.calls[index] for index in sorted(self.calls)]
@@ -134,9 +428,16 @@ class StreamAssembly:
                 seen.add(call_id)
                 if call.get("type") != "function" or not isinstance(call.get("function"), dict):
                     raise TurnError("invalid tool call; no tools executed", self.usage)
+                if (
+                    not isinstance(call["function"].get("name"), str)
+                    or not call["function"]["name"]
+                ):
+                    raise TurnError("missing tool function name; no tools executed", self.usage)
                 try:
-                    arguments = json.loads(call["function"]["arguments"])
-                except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                    arguments = json.loads(
+                        call["function"]["arguments"], parse_constant=self.invalid_constant
+                    )
+                except (KeyError, TypeError, ValueError, RecursionError) as exc:
                     raise TurnError(
                         "malformed/truncated tool arguments; no tools executed", self.usage
                     ) from exc
@@ -150,6 +451,135 @@ class StreamAssembly:
                 self.details[index] for index in sorted(self.details)
             ]
         return Turn(self.message, self.usage, self.model, self.provider, self.finish, {})
+
+
+class StreamReader:
+    """Bound wire data, incomplete SSE events, and retained parsed response separately."""
+
+    def __init__(self, policy: StreamPolicy, model_id: str, api_key: str):
+        self.policy = policy
+        self.assembly = StreamAssembly(policy)
+        self.model_id = model_id
+        self.api_key = api_key
+        self.raw_bytes = 0
+        self.buffer = b""
+        self.data: list[str] = []
+        self.frame_bytes = 0
+        self.started = time.monotonic()
+        self.failure_code: str | None = None
+
+    def limit(self, code: str, label: str) -> None:
+        raise TurnError(
+            f"stream {label} limit exceeded; no tools executed",
+            self.assembly.usage,
+            failure_code=code,
+        )
+
+    def line(self, raw: bytes) -> None:
+        self.frame_bytes += len(raw)
+        if self.frame_bytes > self.policy.frame_bytes:
+            self.limit("stream_frame_limit", "incomplete-frame byte")
+        line = raw.decode("utf-8").rstrip("\r\n")
+        if not line:
+            self.dispatch()
+        elif line.startswith("data:"):
+            value = line[5:]
+            self.data.append(value[1:] if value.startswith(" ") else value)
+        elif not self.data:
+            # Comments and ignored SSE fields need no retention. A stream of
+            # valid heartbeats consumes only the raw-byte/time allowances.
+            self.frame_bytes = 0
+
+    def dispatch(self) -> None:
+        if self.data:
+            self.assembly.feed("\n".join(self.data))
+        self.data.clear()
+        self.frame_bytes = 0
+
+    def feed(self, raw: bytes) -> None:
+        self.raw_bytes += len(raw)
+        if self.raw_bytes > self.policy.raw_bytes:
+            self.limit("stream_raw_limit", "raw-wire byte")
+        self.buffer += raw
+        while b"\n" in self.buffer:
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            self.line(line + b"\n")
+        if self.frame_bytes + len(self.buffer) > self.policy.frame_bytes:
+            self.limit("stream_frame_limit", "incomplete-frame byte")
+
+    def complete(self) -> Turn:
+        if self.buffer:
+            self.line(self.buffer)
+            self.buffer = b""
+        self.dispatch()
+        return self.assembly.complete()
+
+    def identifier(self, value) -> str | None:
+        # Character and credential checks supplement the identity allowlists.
+        # A short prose string alone is not a safe model or provider identifier.
+        if not isinstance(value, str) or not re.fullmatch(r"[\w ./():-]{1,128}", value):
+            return None
+        if self.api_key and self.api_key in value:
+            return None
+        if re.search(r"(?i)(bearer|api[ _-]?key|sk-)", value):
+            return None
+        return value
+
+    def model_identifier(self, value) -> str | None:
+        value = self.identifier(value)
+        pattern = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}"
+        if value is None or not re.fullmatch(pattern, value):
+            return None
+        if value in {self.model_id, self.model_id.rsplit("/", 1)[-1]}:
+            canonical = self.identifier(self.model_id)
+            return canonical if canonical and re.fullmatch(pattern, canonical) else None
+        # The existing model catalogue is loaded before streaming begins. Use
+        # only its exact public IDs, never a label supplied by the response.
+        return value if value in api._MODEL_CONTEXT_CACHE else None
+
+    def provider_identifier(self, value) -> str | None:
+        value = self.identifier(value)
+        return value if value in PUBLIC_PROVIDER_NAMES else None
+
+    def diagnostics(self) -> dict:
+        assembly = self.assembly
+        return {
+            "policy": self.policy.record(),
+            "failure_code": self.failure_code,
+            "limit": {
+                "stream_raw_limit": "raw_bytes",
+                "stream_output_limit": "output_bytes",
+                "stream_frame_limit": "frame_bytes",
+                "stream_assembly_limit": "assembly_bytes",
+                "stream_timeout": "seconds",
+                "stream_idle_timeout": "idle_seconds",
+            }.get(self.failure_code),
+            "bytes": {
+                "raw": self.raw_bytes,
+                "content": assembly.content_bytes,
+                "reasoning": assembly.reasoning_bytes,
+                "tool_arguments": assembly.tool_arguments_bytes,
+                "tool_names": assembly.tool_name_bytes,
+                "output": assembly.output_bytes,
+                "assembly": assembly.assembly_bytes,
+            },
+            "parsing": {
+                "events": assembly.events,
+                "pending_line_bytes": len(self.buffer),
+                "pending_frame_bytes": self.frame_bytes + len(self.buffer),
+                "tool_calls": len(assembly.calls),
+                "reasoning_details": len(assembly.details),
+                "finish_reason": assembly.finish
+                if assembly.finish in {"stop", "tool_calls", "length", "error", "content_filter"}
+                else None,
+                "done": assembly.done,
+            },
+            "requested_model": self.model_identifier(self.model_id),
+            "model": self.model_identifier(assembly.model),
+            "provider": self.provider_identifier(assembly.provider),
+            "provider_usage_available": bool(assembly.usage),
+            "elapsed_seconds": round(time.monotonic() - self.started, 3),
+        }
 
 
 async def capability(session, api_key, model_id) -> bool | None:
@@ -170,9 +600,11 @@ async def call_conversation(
     cache_policy: CachePolicy | None = None,
     cache_reuse: bool = True,
     strict_reasoning: bool = False,
+    stream_limits: Limits | None = None,
     on_progress=None,
     on_usage=None,
     on_retry=None,
+    on_diagnostics=None,
 ) -> Turn:
     """Retry rejected HTTP requests only; never replay a partially received turn.
 
@@ -240,7 +672,15 @@ async def call_conversation(
             f"{api.API_URL}/chat/completions", headers=headers, json=data
         ) as response:
             if response.status != 200:
-                error = (await response.text())[:2000]
+                # Rejected responses are untrusted too. Read a bounded prefix
+                # for retry negotiation, and never copy provider bodies into
+                # shared errors: they can echo credentials or private prompts.
+                error = (
+                    await asyncio.wait_for(
+                        response.content.read(4096),
+                        (stream_limits or Limits()).stream_idle_seconds,
+                    )
+                ).decode("utf-8", errors="replace")
                 retryable = response.status in api._RETRYABLE_STATUSES
                 if (
                     response.status == 400
@@ -256,12 +696,16 @@ async def call_conversation(
                     resolved = token_limit
                     retryable = True
                 if not retryable or request_index == api._MAX_RETRIES:
-                    label = (
-                        "unsupported tool calling"
-                        if "tool" in error.lower() and response.status in {400, 404, 422}
-                        else f"HTTP {response.status}"
+                    code, label = "http_error", f"HTTP {response.status}"
+                    if "tool" in error.lower() and response.status in {400, 404, 422}:
+                        code, label = "unsupported_tools", "unsupported tool calling"
+                    elif "reasoning" in error.lower() and response.status == 400:
+                        code, label = "reasoning_rejected", "reasoning configuration rejected"
+                    raise TurnError(
+                        f"{label}; provider rejected the request",
+                        failure_code=code,
+                        diagnostics={"http_status": response.status},
                     )
-                    raise TurnError(f"{label}: {error[:500]}")
                 wait = (
                     api._retry_wait_seconds(response.headers.get("Retry-After"), request_index + 1)
                     if response.status in api._RETRYABLE_STATUSES
@@ -271,10 +715,9 @@ async def call_conversation(
                 if on_retry:
                     on_retry(response.status, request_index + 1, api._MAX_RETRIES, wait)
             else:
-                assembly = StreamAssembly()
-                decoder = codecs.getincrementaldecoder("utf-8")("strict")
-                buffer = ""
-                received = 0
+                policy = StreamPolicy.resolve(stream_limits or Limits(), resolved)
+                reader = StreamReader(policy, model_id, api_key)
+                assembly = reader.assembly
                 output_tokens = 0
                 last_text = ""
                 last_usage = {}
@@ -296,30 +739,82 @@ async def call_conversation(
                         last_usage = copy.deepcopy(assembly.usage)
 
                 try:
-                    async for raw in response.content.iter_any():
-                        received += len(raw)
-                        if received > 8 * 1024 * 1024:
-                            raise TurnError("stream byte budget exhausted", assembly.usage)
-                        buffer += decoder.decode(raw)
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            if line.startswith("data:"):
-                                assembly.feed(line[5:].strip())
+                    # Small reads keep transient memory bounded even when one
+                    # response event contains a large tool-argument fragment.
+                    chunks = response.content.iter_chunked(64 * 1024).__aiter__()
+                    while True:
+                        remaining = policy.seconds - (time.monotonic() - reader.started)
+                        if remaining <= 0:
+                            reader.limit("stream_timeout", "total time")
+                        try:
+                            raw = await asyncio.wait_for(
+                                chunks.__anext__(), min(remaining, policy.idle_seconds)
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError as exc:
+                            code = (
+                                "stream_timeout"
+                                if remaining <= policy.idle_seconds
+                                else "stream_idle_timeout"
+                            )
+                            raise TurnError(
+                                "stream total time limit exceeded"
+                                if code == "stream_timeout"
+                                else "stream idle time limit exceeded",
+                                assembly.usage,
+                                failure_code=code,
+                            ) from exc
+                        reader.feed(raw)
                         if on_progress:
                             on_progress(assembly.chars)
                         await report_usage()
-                    buffer += decoder.decode(b"", final=True)
-                    if buffer.startswith("data:"):
-                        assembly.feed(buffer[5:].strip())
+                    turn = reader.complete()
                     await report_usage(force=True)
-                    turn = assembly.complete()
+                except asyncio.CancelledError:
+                    reader.failure_code = "stream_cancelled"
+                    raise
+                except TurnError as exc:
+                    reader.failure_code = exc.failure_code or "malformed_stream"
+                    exc.failure_code = reader.failure_code
+                    exc.diagnostics = reader.diagnostics()
+                    raise
                 except (aiohttp.ClientError, UnicodeError) as exc:
-                    raise TurnError(f"incomplete stream: {exc}", assembly.usage) from exc
+                    reader.failure_code = (
+                        "malformed_stream"
+                        if isinstance(exc, UnicodeError)
+                        else "stream_disconnected"
+                    )
+                    raise TurnError(
+                        "malformed UTF-8 stream; no tools executed"
+                        if isinstance(exc, UnicodeError)
+                        else "incomplete stream: connection interrupted; no tools executed",
+                        assembly.usage,
+                        failure_code=reader.failure_code,
+                        diagnostics=reader.diagnostics(),
+                    ) from exc
                 finally:
-                    # Preserve any reported billable usage even on timeout/cancellation.
-                    if on_usage:
-                        on_usage(copy.deepcopy(assembly.usage), output_tokens)
-                turn.adjustments = {**adjustments, "reasoning": reasoning[reasoning_index]}
+                    # One network read can contain valid output followed by a
+                    # malformed event. Reconcile that retained output even when
+                    # feed() or its tokenization was interrupted, without
+                    # inventing provider usage. Cancellation waits for this
+                    # bounded accounting cleanup before leaving the request.
+                    try:
+                        if on_usage:
+                            final_usage = asyncio.create_task(report_usage(force=True))
+                            try:
+                                await asyncio.shield(final_usage)
+                            except asyncio.CancelledError:
+                                await final_usage
+                                raise
+                    finally:
+                        if on_diagnostics:
+                            on_diagnostics(reader.diagnostics())
+                turn.adjustments = {
+                    **adjustments,
+                    "reasoning": reasoning[reasoning_index],
+                    "stream": reader.diagnostics(),
+                }
                 return turn
         await asyncio.sleep(wait)
     raise TurnError("HTTP retry budget exhausted")

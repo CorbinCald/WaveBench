@@ -16,6 +16,7 @@ import asyncio
 import math
 import shutil
 import sys
+import textwrap
 import time
 from typing import Any
 
@@ -28,9 +29,11 @@ from wavebench.harness.accounting import (
     Measurement,
     cache_read_ratio,
     estimate_cost,
+    reported_total,
     settled,
     valid_number,
 )
+from wavebench.harness.failure import budget_record, failure_summary
 from wavebench.tui import styles as _styles
 from wavebench.tui.analytics.cost import compute_cost
 from wavebench.tui.progress.wave import (
@@ -246,7 +249,9 @@ class ProgressTracker:
             self.finish_parsing(model_name)
             self._harness_samples.pop(model_name, None)
 
-    def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
+    def update_harness(
+        self, model_name: str, usage: dict, api_seconds: float, *, budget: dict | None = None
+    ) -> None:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
         previous = self._harness.get(model_name, {})
         self._harness[model_name] = {
@@ -254,7 +259,12 @@ class ProgressTracker:
             "api_s": api_seconds,
             "tool_usage": previous.get("tool_usage", {}),
             "web_search": previous.get("web_search", {}),
+            "budget": budget if budget is not None else previous.get("budget", {}),
         }
+
+    def update_harness_budget(self, model_name: str, budget: dict) -> None:
+        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
+        metrics["budget"] = budget.copy()
 
     def update_harness_tools(
         self, model_name: str, usage: dict, *, web_search: dict | None = None
@@ -303,7 +313,7 @@ class ProgressTracker:
         previous = metrics["current_usage"]
         # An intermediate provider snapshot covers output received up to here.
         # Estimate only subsequent output until the next native measurement.
-        for key in ("completion_tokens", "cost"):
+        for key in ("completion_tokens", "total_tokens", "cost"):
             value = usage.get(key)
             old = previous.get(key)
             if key not in metrics["usage_anchors"] or value != old:
@@ -344,6 +354,7 @@ class ProgressTracker:
             tools = harness.get("tool_usage") or {}
             searches = harness.get("web_search") or {}
             metrics = {}
+            budget = budget_record(harness).copy()
         else:
             metrics = self._harness[name]
             usage = metrics["usage"]
@@ -351,6 +362,7 @@ class ProgressTracker:
             turns = usage.get("api_turns", 0)
             tools = metrics.get("tool_usage") or {}
             searches = metrics.get("web_search") or {}
+            budget = (metrics.get("budget") or {}).copy()
         cache_usages = [usage] if turns else []
         tokens = settled(usage, "completion_tokens", turns)
         completion = usage.get("completion_tokens")
@@ -389,12 +401,28 @@ class ProgressTracker:
                     cost += estimate_cost(0, extra, {**pricing, "prompt": "0", "request": "0"})
             else:
                 cost += estimate_cost(prompt, output, pricing)
+            if budget:
+                current_total = reported_total(current)
+                total = current.get("total_tokens")
+                anchor = (
+                    "total_tokens" if type(total) is int and total >= 0 else "completion_tokens"
+                )
+                extra = max(
+                    0,
+                    metrics["output_tokens"] - metrics["usage_anchors"].get(anchor, 0),
+                )
+                estimated = current_total is None or bool(extra)
+                current_total = prompt + output if current_total is None else current_total + extra
+                budget["used_tokens"] += current_total
+                budget["remaining_tokens"] = max(0, budget["limit_tokens"] - budget["used_tokens"])
+                budget["estimated"] = budget.get("estimated", False) or estimated
         # Input estimates must not look like generated output. Before any output
         # or completed call, the display has no output count to publish yet.
         if result is None and not usage.get("api_turns", 0) and tokens.value == 0:
             tokens = Measurement(None)
         return {
             "tokens": tokens,
+            "budget": budget,
             "cost": cost,
             "turns": turns,
             "rate": rate,
@@ -668,6 +696,29 @@ class ProgressTracker:
         separator = " " * self._harness_column_gap(inner_w)
         return f"{symbol} {separator.join(cells)}"
 
+    def _format_harness_details(
+        self, name: str, inner_w: int, result: dict | None = None
+    ) -> list[str]:
+        """Give cumulative accounting its own line so narrow rows retain OUT and WEB."""
+        budget = self._harness_metrics(name, result)["budget"]
+        details = []
+        if budget:
+            prefix = "~" if budget.get("estimated") else ""
+            details.append(
+                f"Budget {prefix}{budget['used_tokens']:,} / {budget['limit_tokens']:,} tk; "
+                f"{prefix}{budget['remaining_tokens']:,} left"
+            )
+        if result is not None:
+            summary = failure_summary(result)
+            if summary:
+                details.append(summary)
+        return [
+            f"{S.DIM}  {line}{S.RST}"
+            for detail in details
+            for paragraph in detail.splitlines()
+            for line in textwrap.wrap(paragraph, max(1, inner_w - 2))
+        ]
+
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
         self._parsing.pop(model_name, None)
@@ -860,7 +911,12 @@ class ProgressTracker:
 
     def _format_result_row(self, name: str, info: dict[str, Any], rank: int, inner_w: int) -> str:
         if info.get("harness"):
-            return self._format_harness_row(name, inner_w, info, rank)
+            return "\n".join(
+                [
+                    self._format_harness_row(name, inner_w, info, rank),
+                    *self._format_harness_details(name, inner_w, info),
+                ]
+            )
         st = info.get("status", "failed")
         t = format_duration(info.get("time_s", 0))
         cost = self._model_cost(name, info)
@@ -1033,7 +1089,12 @@ class ProgressTracker:
                             name, self._results[name], completed_idx, inner_w
                         )
                     elif harness:
-                        row = self._format_harness_row(name, inner_w, tick=idx)
+                        row = "\n".join(
+                            [
+                                self._format_harness_row(name, inner_w, tick=idx),
+                                *self._format_harness_details(name, inner_w),
+                            ]
+                        )
                     elif name in self._parsing:
                         pinfo = self._parsing[name]
                         mel = format_duration(time.monotonic() - pinfo["start"])

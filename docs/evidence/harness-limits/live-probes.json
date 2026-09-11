@@ -1,0 +1,1574 @@
+{
+  "deepseek-stream": {
+    "case": "stream",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "status": "success",
+    "generation": "submitted",
+    "failure": null,
+    "limits": {
+      "build_turns": 14,
+      "repair_turns": 2,
+      "total_tokens": 320000,
+      "turn_tokens": 64000,
+      "build_seconds": 240,
+      "repair_seconds": 30,
+      "process_seconds": 60,
+      "startup_seconds": 20,
+      "setup_seconds": 120,
+      "lint_seconds": 30,
+      "review_seconds": 1,
+      "output_chars": 16000,
+      "diagnostic_bytes": 8388608,
+      "workspace_bytes": 536870912,
+      "parallel_calls": 4,
+      "batch_calls": 64,
+      "process_concurrency": 1,
+      "web_search_calls": 20,
+      "stream_raw_min_bytes": 16777216,
+      "stream_raw_bytes_per_token": 1024,
+      "stream_raw_max_bytes": 134217728,
+      "stream_output_min_bytes": 1048576,
+      "stream_output_bytes_per_token": 64,
+      "stream_output_max_bytes": 33554432,
+      "stream_frame_bytes": 2097152,
+      "stream_assembly_bytes": 33554432,
+      "stream_seconds": 300,
+      "stream_idle_seconds": 60
+    },
+    "budget_tokens": 6032,
+    "usage": {
+      "api_turns": 3,
+      "usage_complete": true,
+      "known_prompt_tokens": 4903,
+      "prompt_tokens": 4903,
+      "known_completion_tokens": 1129,
+      "completion_tokens": 1129,
+      "known_total_tokens": 6032,
+      "total_tokens": 6032,
+      "known_cost": 0.000886002,
+      "cost": 0.000886002,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 3584,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.7309810320212115
+    },
+    "tool_usage": {
+      "calls": 6,
+      "failures": 0
+    },
+    "commands_in_retained_context": [
+      "write",
+      "write",
+      "write",
+      "write",
+      "lint",
+      "done"
+    ],
+    "compactions": [],
+    "budget_events": [
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 318262,
+        "outcome": "recalculate_next_request"
+      }
+    ],
+    "warning_received": false,
+    "streams": [
+      {
+        "policy": {
+          "output_tokens": 64000,
+          "raw_bytes": 65536000,
+          "output_bytes": 4096000,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 313668,
+          "content": 70,
+          "reasoning": 48,
+          "tool_arguments": 2480,
+          "tool_names": 8,
+          "output": 2606,
+          "assembly": 80615
+        },
+        "parsing": {
+          "events": 788,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 4,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "deepseek/deepseek-v4.1-flash",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "provider": "DeepSeek",
+        "provider_usage_available": true,
+        "elapsed_seconds": 2.714
+      },
+      {
+        "policy": {
+          "output_tokens": 64000,
+          "raw_bytes": 65536000,
+          "output_bytes": 4096000,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 10473,
+          "content": 64,
+          "reasoning": 0,
+          "tool_arguments": 19,
+          "tool_names": 2,
+          "output": 85,
+          "assembly": 2293
+        },
+        "parsing": {
+          "events": 28,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 0,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "deepseek/deepseek-v4.1-flash",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "provider": "DeepSeek",
+        "provider_usage_available": true,
+        "elapsed_seconds": 1.088
+      },
+      {
+        "policy": {
+          "output_tokens": 64000,
+          "raw_bytes": 65536000,
+          "output_bytes": 4096000,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 41815,
+          "content": 256,
+          "reasoning": 68,
+          "tool_arguments": 89,
+          "tool_names": 2,
+          "output": 415,
+          "assembly": 8575
+        },
+        "parsing": {
+          "events": 112,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "deepseek/deepseek-v4.1-flash",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "provider": "DeepSeek",
+        "provider_usage_available": true,
+        "elapsed_seconds": 1.056
+      }
+    ],
+    "checks": {
+      "runtime_success": true,
+      "actual_tools": true,
+      "lint": true,
+      "submitted": true,
+      "fixed_budget": true
+    },
+    "passed": true
+  },
+  "gemini-compaction-initial": {
+    "case": "compaction",
+    "model": "google/gemini-3.8-flash",
+    "status": "failed",
+    "generation": "failed",
+    "failure": {
+      "category": "model_protocol",
+      "code": "invalid_response",
+      "summary": "Response or tool protocol failed",
+      "phase": "building",
+      "diagnostics": {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2261,
+          "content": 92,
+          "reasoning": 0,
+          "tool_arguments": 0,
+          "tool_names": 0,
+          "output": 92,
+          "assembly": 1003
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 0,
+          "reasoning_details": 1,
+          "finish_reason": "stop",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.034
+      }
+    },
+    "limits": {
+      "build_turns": 14,
+      "repair_turns": 2,
+      "total_tokens": 160000,
+      "turn_tokens": 4096,
+      "build_seconds": 240,
+      "repair_seconds": 30,
+      "process_seconds": 60,
+      "startup_seconds": 20,
+      "setup_seconds": 120,
+      "lint_seconds": 30,
+      "review_seconds": 1,
+      "output_chars": 16000,
+      "diagnostic_bytes": 8388608,
+      "workspace_bytes": 536870912,
+      "parallel_calls": 4,
+      "batch_calls": 64,
+      "process_concurrency": 1,
+      "web_search_calls": 20,
+      "stream_raw_min_bytes": 16777216,
+      "stream_raw_bytes_per_token": 1024,
+      "stream_raw_max_bytes": 134217728,
+      "stream_output_min_bytes": 1048576,
+      "stream_output_bytes_per_token": 64,
+      "stream_output_max_bytes": 33554432,
+      "stream_frame_bytes": 2097152,
+      "stream_assembly_bytes": 33554432,
+      "stream_seconds": 300,
+      "stream_idle_seconds": 60
+    },
+    "budget_tokens": 78543,
+    "usage": {
+      "api_turns": 6,
+      "usage_complete": true,
+      "known_prompt_tokens": 77750,
+      "prompt_tokens": 77750,
+      "known_completion_tokens": 793,
+      "completion_tokens": 793,
+      "known_total_tokens": 78543,
+      "total_tokens": 78543,
+      "known_cost": 0.0373302,
+      "cost": 0.0373302,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 15732,
+        "cache_write_tokens": 7866
+      },
+      "cache_read_ratio": 0.20234083601286174
+    },
+    "tool_usage": {
+      "calls": 4,
+      "failures": 0
+    },
+    "commands_in_retained_context": [
+      "read"
+    ],
+    "compactions": [
+      {
+        "reason": "remaining token budget needs cheaper follow-up requests",
+        "status": "completed",
+        "before_tokens": 29552,
+        "after_tokens": 8172,
+        "usage": {
+          "prompt_tokens": 22944,
+          "completion_tokens": 410,
+          "total_tokens": 23354,
+          "cost": 0.0050808,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0050808,
+            "upstream_inference_prompt_cost": 0.0045888,
+            "upstream_inference_completions_cost": 0.000492
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 122,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "time_s": 4.846290684999985
+      }
+    ],
+    "budget_events": [
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 151091,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 135712,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 113050,
+        "outcome": "recalculate_next_request"
+      }
+    ],
+    "warning_received": false,
+    "streams": [
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 3673,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 2425
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.021
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2526,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1278
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.016
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2541,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1293
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.013
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2538,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1290
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.008
+      },
+      {
+        "policy": {
+          "output_tokens": 16384,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 81376,
+          "content": 1155,
+          "reasoning": 0,
+          "tool_arguments": 0,
+          "tool_names": 0,
+          "output": 1155,
+          "assembly": 14282
+        },
+        "parsing": {
+          "events": 286,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 0,
+          "reasoning_details": 1,
+          "finish_reason": "stop",
+          "done": true
+        },
+        "requested_model": "openai/gpt-5.6-luna",
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "provider_usage_available": true,
+        "elapsed_seconds": 4.288
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2261,
+          "content": 92,
+          "reasoning": 0,
+          "tool_arguments": 0,
+          "tool_names": 0,
+          "output": 92,
+          "assembly": 1003
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 0,
+          "reasoning_details": 1,
+          "finish_reason": "stop",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google AI Studio",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.034
+      }
+    ],
+    "checks": {
+      "runtime_success": false,
+      "actual_tools": true,
+      "lint": false,
+      "submitted": false,
+      "fixed_budget": true,
+      "budget_compaction_completed": true
+    },
+    "passed": false
+  },
+  "gemini-compaction-continued": {
+    "case": "compaction",
+    "model": "google/gemini-3.8-flash",
+    "status": "success",
+    "generation": "submitted",
+    "failure": null,
+    "limits": {
+      "build_turns": 14,
+      "repair_turns": 2,
+      "total_tokens": 160000,
+      "turn_tokens": 4096,
+      "build_seconds": 240,
+      "repair_seconds": 30,
+      "process_seconds": 60,
+      "startup_seconds": 20,
+      "setup_seconds": 120,
+      "lint_seconds": 30,
+      "review_seconds": 1,
+      "output_chars": 16000,
+      "diagnostic_bytes": 8388608,
+      "workspace_bytes": 536870912,
+      "parallel_calls": 4,
+      "batch_calls": 64,
+      "process_concurrency": 1,
+      "web_search_calls": 20,
+      "stream_raw_min_bytes": 16777216,
+      "stream_raw_bytes_per_token": 1024,
+      "stream_raw_max_bytes": 134217728,
+      "stream_output_min_bytes": 1048576,
+      "stream_output_bytes_per_token": 64,
+      "stream_output_max_bytes": 33554432,
+      "stream_frame_bytes": 2097152,
+      "stream_assembly_bytes": 33554432,
+      "stream_seconds": 300,
+      "stream_idle_seconds": 60
+    },
+    "budget_tokens": 109579,
+    "usage": {
+      "api_turns": 8,
+      "usage_complete": true,
+      "known_prompt_tokens": 108560,
+      "prompt_tokens": 108560,
+      "known_completion_tokens": 1019,
+      "completion_tokens": 1019,
+      "known_total_tokens": 109579,
+      "total_tokens": 109579,
+      "known_cost": 0.06354847500000001,
+      "cost": 0.06354847500000001,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 12057,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.11106300663227708
+    },
+    "tool_usage": {
+      "calls": 8,
+      "failures": 0
+    },
+    "commands_in_retained_context": [
+      "read",
+      "read",
+      "write",
+      "lint",
+      "done"
+    ],
+    "compactions": [
+      {
+        "reason": "remaining token budget needs cheaper follow-up requests",
+        "status": "completed",
+        "before_tokens": 29229,
+        "after_tokens": 7933,
+        "usage": {
+          "prompt_tokens": 23193,
+          "completion_tokens": 313,
+          "total_tokens": 23506,
+          "cost": 0.0050142,
+          "is_byok": false,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "audio_tokens": 0,
+            "video_tokens": 0
+          },
+          "cost_details": {
+            "upstream_inference_cost": 0.0050142,
+            "upstream_inference_prompt_cost": 0.0046386,
+            "upstream_inference_completions_cost": 0.0003756
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 79,
+            "image_tokens": 0,
+            "audio_tokens": 0
+          }
+        },
+        "time_s": 4.294355283000186
+      },
+      {
+        "reason": "remaining token budget needs cheaper follow-up requests",
+        "status": "skipped",
+        "before_tokens": 17300,
+        "after_tokens": null,
+        "usage": {},
+        "time_s": null
+      }
+    ],
+    "budget_events": [
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 151250,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 135979,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 113449,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "warning",
+        "phase": "building",
+        "remaining_tokens": 81872,
+        "reserve_tokens": 50460,
+        "status": "received_response"
+      },
+      {
+        "kind": "reserve",
+        "phase": "building",
+        "remaining_tokens": 81872,
+        "reserve_tokens": 49774,
+        "outcome": "reserved"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 81872,
+        "status": "completed"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 66245,
+        "status": "completed"
+      },
+      {
+        "kind": "submission",
+        "phase": "building",
+        "remaining_tokens": 50421,
+        "outcome": "submitted_by_agent"
+      }
+    ],
+    "warning_received": true,
+    "streams": [
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 4698,
+          "content": 0,
+          "reasoning": 432,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 497,
+          "assembly": 3272
+        },
+        "parsing": {
+          "events": 7,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.359
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2512,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1314
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.107
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2460,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1262
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.018
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2444,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1246
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.11
+      },
+      {
+        "policy": {
+          "output_tokens": 16384,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 105481,
+          "content": 954,
+          "reasoning": 924,
+          "tool_arguments": 0,
+          "tool_names": 0,
+          "output": 1878,
+          "assembly": 29125
+        },
+        "parsing": {
+          "events": 330,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 0,
+          "reasoning_details": 2,
+          "finish_reason": "stop",
+          "done": true
+        },
+        "requested_model": "openai/gpt-5.6-luna",
+        "model": "openai/gpt-5.6-luna",
+        "provider": "OpenAI",
+        "provider_usage_available": true,
+        "elapsed_seconds": 3.618
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2447,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1249
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.056
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 5483,
+          "content": 0,
+          "reasoning": 592,
+          "tool_arguments": 104,
+          "tool_names": 4,
+          "output": 700,
+          "assembly": 3572
+        },
+        "parsing": {
+          "events": 9,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 2,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.731
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2468,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 55,
+          "tool_names": 2,
+          "output": 57,
+          "assembly": 1270
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.097
+      }
+    ],
+    "checks": {
+      "runtime_success": true,
+      "actual_tools": true,
+      "lint": true,
+      "submitted": true,
+      "fixed_budget": true,
+      "budget_compaction_completed": true
+    },
+    "passed": true
+  },
+  "gemini-reserve-24k": {
+    "case": "reserve",
+    "model": "google/gemini-3.8-flash",
+    "status": "failed",
+    "generation": "budget_exhausted",
+    "failure": {
+      "category": "token_budget",
+      "code": "token_budget_exhausted",
+      "summary": "Token budget exhausted",
+      "phase": "building",
+      "budget": {
+        "used_tokens": 16367,
+        "limit_tokens": 24000,
+        "remaining_tokens": 7633,
+        "estimated": false,
+        "next_input_tokens_estimate": 8327
+      }
+    },
+    "limits": {
+      "build_turns": 14,
+      "repair_turns": 2,
+      "total_tokens": 24000,
+      "turn_tokens": 4096,
+      "build_seconds": 240,
+      "repair_seconds": 30,
+      "process_seconds": 60,
+      "startup_seconds": 20,
+      "setup_seconds": 120,
+      "lint_seconds": 30,
+      "review_seconds": 1,
+      "output_chars": 16000,
+      "diagnostic_bytes": 8388608,
+      "workspace_bytes": 536870912,
+      "parallel_calls": 4,
+      "batch_calls": 64,
+      "process_concurrency": 1,
+      "web_search_calls": 20,
+      "stream_raw_min_bytes": 16777216,
+      "stream_raw_bytes_per_token": 1024,
+      "stream_raw_max_bytes": 134217728,
+      "stream_output_min_bytes": 1048576,
+      "stream_output_bytes_per_token": 64,
+      "stream_output_max_bytes": 33554432,
+      "stream_frame_bytes": 2097152,
+      "stream_assembly_bytes": 33554432,
+      "stream_seconds": 300,
+      "stream_idle_seconds": 60
+    },
+    "budget_tokens": 16367,
+    "usage": {
+      "api_turns": 3,
+      "usage_complete": true,
+      "known_prompt_tokens": 16221,
+      "prompt_tokens": 16221,
+      "known_completion_tokens": 146,
+      "completion_tokens": 146,
+      "known_total_tokens": 16367,
+      "total_tokens": 16367,
+      "known_cost": 0.010043625,
+      "cost": 0.010043625,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 3955,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.24381973984341285
+    },
+    "tool_usage": {
+      "calls": 4,
+      "failures": 0
+    },
+    "commands_in_retained_context": [
+      "read",
+      "write",
+      "write",
+      "lint"
+    ],
+    "compactions": [],
+    "budget_events": [
+      {
+        "kind": "warning",
+        "phase": "building",
+        "remaining_tokens": 24000,
+        "reserve_tokens": 20656,
+        "status": "received_response"
+      },
+      {
+        "kind": "reserve",
+        "phase": "building",
+        "remaining_tokens": 24000,
+        "reserve_tokens": 19902,
+        "outcome": "reserved"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 24000,
+        "status": "completed"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 23428,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 23428,
+        "status": "completed"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 15547,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 15547,
+        "status": "completed"
+      },
+      {
+        "kind": "request_blocked",
+        "phase": "building",
+        "remaining_tokens": 7633,
+        "outcome": "insufficient_budget"
+      }
+    ],
+    "warning_received": true,
+    "streams": [
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2363,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1165
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.153
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 3302,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 252,
+          "tool_names": 4,
+          "output": 256,
+          "assembly": 1644
+        },
+        "parsing": {
+          "events": 8,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 2,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.528
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2323,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 18,
+          "tool_names": 2,
+          "output": 20,
+          "assembly": 1124
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.317
+      }
+    ],
+    "checks": {
+      "runtime_success": false,
+      "actual_tools": true,
+      "lint": true,
+      "submitted": false,
+      "fixed_budget": true,
+      "warning_received": true
+    },
+    "passed": false
+  },
+  "gemini-reserve-40k": {
+    "case": "reserve",
+    "model": "google/gemini-3.8-flash",
+    "status": "success",
+    "generation": "submitted",
+    "failure": null,
+    "limits": {
+      "build_turns": 14,
+      "repair_turns": 2,
+      "total_tokens": 40000,
+      "turn_tokens": 4096,
+      "build_seconds": 240,
+      "repair_seconds": 30,
+      "process_seconds": 60,
+      "startup_seconds": 20,
+      "setup_seconds": 120,
+      "lint_seconds": 30,
+      "review_seconds": 1,
+      "output_chars": 16000,
+      "diagnostic_bytes": 8388608,
+      "workspace_bytes": 536870912,
+      "parallel_calls": 4,
+      "batch_calls": 64,
+      "process_concurrency": 1,
+      "web_search_calls": 20,
+      "stream_raw_min_bytes": 16777216,
+      "stream_raw_bytes_per_token": 1024,
+      "stream_raw_max_bytes": 134217728,
+      "stream_output_min_bytes": 1048576,
+      "stream_output_bytes_per_token": 64,
+      "stream_output_max_bytes": 33554432,
+      "stream_frame_bytes": 2097152,
+      "stream_assembly_bytes": 33554432,
+      "stream_seconds": 300,
+      "stream_idle_seconds": 60
+    },
+    "budget_tokens": 24448,
+    "usage": {
+      "api_turns": 4,
+      "usage_complete": true,
+      "known_prompt_tokens": 24274,
+      "prompt_tokens": 24274,
+      "known_completion_tokens": 174,
+      "completion_tokens": 174,
+      "known_total_tokens": 24448,
+      "total_tokens": 24448,
+      "known_cost": 0.013528875,
+      "cost": 0.013528875,
+      "cost_requires_provider": true,
+      "prompt_tokens_details": {
+        "cached_tokens": 7895,
+        "cache_write_tokens": 0
+      },
+      "cache_read_ratio": 0.3252451182335009
+    },
+    "tool_usage": {
+      "calls": 5,
+      "failures": 0
+    },
+    "commands_in_retained_context": [
+      "read",
+      "write",
+      "write",
+      "lint",
+      "done"
+    ],
+    "compactions": [],
+    "budget_events": [
+      {
+        "kind": "warning",
+        "phase": "building",
+        "remaining_tokens": 40000,
+        "reserve_tokens": 20656,
+        "status": "received_response"
+      },
+      {
+        "kind": "reserve",
+        "phase": "building",
+        "remaining_tokens": 40000,
+        "reserve_tokens": 19902,
+        "outcome": "reserved"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 40000,
+        "status": "completed"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 39428,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 39428,
+        "status": "completed"
+      },
+      {
+        "kind": "estimate_exceeded",
+        "phase": "building",
+        "remaining_tokens": 31547,
+        "outcome": "recalculate_next_request"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 31547,
+        "status": "completed"
+      },
+      {
+        "kind": "finishing_request",
+        "phase": "building",
+        "remaining_tokens": 23635,
+        "status": "completed"
+      },
+      {
+        "kind": "submission",
+        "phase": "building",
+        "remaining_tokens": 15552,
+        "outcome": "submitted_by_agent"
+      }
+    ],
+    "warning_received": true,
+    "streams": [
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2363,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 63,
+          "tool_names": 2,
+          "output": 65,
+          "assembly": 1165
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.051
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 3302,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 255,
+          "tool_names": 4,
+          "output": 259,
+          "assembly": 1644
+        },
+        "parsing": {
+          "events": 8,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 2,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.284
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2323,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 18,
+          "tool_names": 2,
+          "output": 20,
+          "assembly": 1124
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.078
+      },
+      {
+        "policy": {
+          "output_tokens": 4096,
+          "raw_bytes": 16777216,
+          "output_bytes": 1048576,
+          "frame_bytes": 2097152,
+          "assembly_bytes": 33554432,
+          "seconds": 300,
+          "idle_seconds": 60
+        },
+        "failure_code": null,
+        "limit": null,
+        "bytes": {
+          "raw": 2364,
+          "content": 0,
+          "reasoning": 0,
+          "tool_arguments": 55,
+          "tool_names": 2,
+          "output": 57,
+          "assembly": 1166
+        },
+        "parsing": {
+          "events": 6,
+          "pending_line_bytes": 0,
+          "pending_frame_bytes": 0,
+          "tool_calls": 1,
+          "reasoning_details": 1,
+          "finish_reason": "tool_calls",
+          "done": true
+        },
+        "requested_model": "google/gemini-3.8-flash",
+        "model": "google/gemini-3.8-flash",
+        "provider": "Google",
+        "provider_usage_available": true,
+        "elapsed_seconds": 0.057
+      }
+    ],
+    "checks": {
+      "runtime_success": true,
+      "actual_tools": true,
+      "lint": true,
+      "submitted": true,
+      "fixed_budget": true,
+      "warning_received": true
+    },
+    "passed": true
+  }
+}
