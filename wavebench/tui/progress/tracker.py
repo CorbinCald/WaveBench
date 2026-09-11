@@ -511,7 +511,7 @@ class ProgressTracker:
             label = labels[key]
             if len(label) > width:
                 label = short.get(key, label[:width])
-            cells.append(f"{label:<{width}}" if key in {"name", "phase"} else f"{label:>{width}}")
+            cells.append(f"{label:<{width}}")
         return f"{S.DIM}  {'│'.join(cells)}{S.RST}"
 
     @staticmethod
