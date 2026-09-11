@@ -453,11 +453,16 @@ class ProgressTracker:
     def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
         return f" {S.DIM}·{S.RST} ".join(self._harness_metric_cells(name, result)[4:])
 
+    @staticmethod
+    def _harness_column_gap(inner_w: int) -> int:
+        """Pad dividers on wide terminals; keep all metrics visible on narrow ones."""
+        return 3 if inner_w >= 108 else 1
+
     def _harness_columns(self, inner_w: int) -> list[tuple[str, int]]:
         """Shared column widths keep every model aligned without wrapping."""
         keys = ["phase", "tokens", "rate", "cost", "turns", "cache", "tools", "fail", "time"]
         if inner_w >= 100:
-            widths = [11, 10, 6, 9, 5, 6, 5, 6, 7]
+            widths = [11, 7, 4, 7, 5, 5, 5, 5, 5]
         elif inner_w >= 72:
             widths = [9, 7, 4, 7, 5, 5, 5, 5, 5]
         elif inner_w >= 52:
@@ -478,10 +483,11 @@ class ProgressTracker:
             if 52 <= inner_w < 72:
                 widths[keys.index("phase")] = 4
                 widths[keys.index("time")] = 3
-        while widths and sum(widths) + len(widths) + 3 > inner_w:
+        gap = self._harness_column_gap(inner_w)
+        while widths and sum(widths) + gap * len(widths) + 3 > inner_w:
             keys.pop()
             widths.pop()
-        name_w = max(1, inner_w - sum(widths) - len(widths) - 2)
+        name_w = max(1, inner_w - sum(widths) - gap * len(widths) - 2)
         return [("name", name_w), *zip(keys, widths, strict=True)]
 
     def _format_harness_header(self, inner_w: int) -> str:
@@ -512,7 +518,8 @@ class ProgressTracker:
             if len(label) > width:
                 label = short.get(key, label[:width])
             cells.append(f"{label:<{width}}")
-        return f"{S.DIM}  {'│'.join(cells)}{S.RST}"
+        separator = " │ " if self._harness_column_gap(inner_w) == 3 else "│"
+        return f"{S.DIM}  {separator.join(cells)}{S.RST}"
 
     @staticmethod
     def _compact_harness_number(
@@ -658,7 +665,8 @@ class ProgressTracker:
             text = _truncate(text, width)
             text = f"{text:<{width}}" if key in {"name", "phase"} else f"{text:>{width}}"
             cells.append(f"{color}{text}{S.RST}")
-        return f"{symbol} {' '.join(cells)}"
+        separator = " " * self._harness_column_gap(inner_w)
+        return f"{symbol} {separator.join(cells)}"
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
