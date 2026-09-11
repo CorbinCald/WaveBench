@@ -1,6 +1,6 @@
 # Preview destination verification — September 11, 2026
 
-The default test suite passed locally with sandbox tests required: **957 passed,
+The default test suite passed locally with sandbox tests required: **959 passed,
 one paid API test deselected**. Ruff lint and format checks passed.
 
 Real PTY tests at 48 and 100 columns exercised the configuration menu, all three
@@ -11,7 +11,7 @@ and disconnected persistent Herdr sessions, and explicit host selection.
 The Harness integration checks used actual sandboxed static projects and
 controller-owned HTTP proxies. They covered multiple previews, all Auto-open
 policies, one preview closing without affecting another, helper expiry,
-cancellation, and a missing helper preserving runtime success. Six integration
+cancellation, startup interrupts, and a missing helper preserving runtime success. Six integration
 checks also passed against the actual candidate `herdr-review offer` helper,
 using isolated state; the regular suite uses a subprocess protocol fixture so
 Wavebench does not require Herdr to run its tests.

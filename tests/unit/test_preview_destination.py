@@ -67,3 +67,17 @@ def test_acknowledgement_requires_current_preview_and_all_ports():
     assert (
         preview.message({"fresh": True, "reviews": [ack]}) == "Waiting for laptop to open preview"
     )
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+async def test_interrupt_during_helper_startup_propagates(tmp_path, monkeypatch, interrupt):
+    monkeypatch.setattr(handoff.shutil, "which", lambda _: "/helper")
+
+    async def interrupted(*args, **kwargs):
+        raise interrupt("quit")
+
+    monkeypatch.setattr(handoff.asyncio, "create_subprocess_exec", interrupted)
+    preview = handoff.RemotePreview()
+    with pytest.raises(interrupt):
+        await preview.open("http://localhost:3000", tmp_path / "browser.log")
+    assert preview.process is None

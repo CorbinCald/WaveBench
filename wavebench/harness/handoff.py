@@ -110,7 +110,7 @@ class RemotePreview:
                 raise ValueError("Invalid preview registration")
         except BaseException as exc:
             await self.close()
-            if isinstance(exc, asyncio.CancelledError):
+            if not isinstance(exc, Exception):
                 raise
             raise RuntimeError(
                 "Laptop handoff unavailable: install or update herdr-review on the Wavebench host. "
