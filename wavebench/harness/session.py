@@ -51,7 +51,9 @@ def system_prompt(auto_install: str, web_search: bool = False) -> str:
     )
     return (
         "Build the requested project in your workspace. Use wb file tools and lint as needed; "
-        "batch independent operations. Submit with done when ready. WaveBench controls execution "
+        "batch independent operations. Finish by calling wb with command done, runtime, and entry "
+        '(for example {"command":"done","runtime":"static","entry":"index.html"}). '
+        "A text reply does not submit the project. WaveBench controls execution "
         "and allows one repair after a failed first run. Available: Python 3, Node, static HTML, "
         "and HTTP servers listening on PORT; no GUI or development reloaders. "
         + dependencies
@@ -122,6 +124,7 @@ class HarnessSession:
         self.attempts: list[dict] = []
         self.retries: list[dict] = []
         self.events: list[dict] = []
+        self.recoveries: list[dict] = []
         self.generation = "pending"
         self.repair = "not_needed"
         self.status = "failed"
@@ -300,6 +303,7 @@ class HarnessSession:
                 },
                 "model_usage": self.usage([t for t in self.turns if t["phase"] != "compacting"]),
                 "events": self.events,
+                "recoveries": self.recoveries,
                 "validation": "runtime/startup only; project quality is not scored",
                 "timing": {
                     "generation_s": self.build_seconds,
@@ -683,6 +687,8 @@ class HarnessSession:
         max_turns = self.limits.repair_turns if repair else self.limits.build_turns
         max_seconds = self.limits.repair_seconds if repair else self.limits.build_seconds
         active = 0.0
+        provider_retried = False
+        submission_reminded = False
         phase = "repairing" if repair else "building"
         if repair and self.finishing:
             self.budget_decision(
@@ -835,6 +841,25 @@ class HarnessSession:
                             if charged is not None
                             else input_bound + self._turn_output_tokens
                         )
+                    if (
+                        isinstance(exc, TurnError)
+                        and exc.failure_code == "provider_stream_error"
+                        and (exc.diagnostics.get("provider_error") or {}).get(
+                            "retryable_empty_response"
+                        )
+                        and not provider_retried
+                        and turn_index + 1 < max_turns
+                    ):
+                        provider_retried = True
+                        self.recoveries.append(
+                            {
+                                "kind": "empty_provider_retry",
+                                "phase": phase,
+                                "turn": len(self.turns),
+                            }
+                        )
+                        self.save()
+                        continue
                     raise
                 finally:
                     if started is not None:
@@ -891,6 +916,24 @@ class HarnessSession:
                     )
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
+                    if not submission_reminded and turn_index + 1 < max_turns:
+                        submission_reminded = True
+                        self.messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "WaveBench has not received a submission. Continue using tools "
+                                    "if work remains. When ready, call wb with command done, runtime, "
+                                    "and the existing entry file, alone in its turn. "
+                                    "A text reply does not submit. The existing budgets still apply."
+                                ),
+                            }
+                        )
+                        self.recoveries.append(
+                            {"kind": "submission_reminder", "phase": phase, "turn": len(self.turns)}
+                        )
+                        self.save()
+                        continue
                     raise TurnError(
                         "project abandoned: model ended without wb done",
                         failure_code="project_abandoned",

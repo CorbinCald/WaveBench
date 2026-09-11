@@ -404,6 +404,12 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
+Each build or repair phase can recover once from a provider error received before
+any model output; partial streams are never replayed. If a model sends a text
+reply without `wb done`, the controller gives it one submission reminder per
+phase. Only an actual, valid `done` tool call submits the project. These recovery
+requests consume the remaining turn, time and token budgets and are recorded in
+`harness.recoveries`; missing provider usage remains unknown.
 Live OUT TK and TK/S refresh together every 250 ms and hold between refreshes.
 TK/S is the number of locally tokenized output tokens received since the previous
 refresh divided by the actual elapsed time. Bursts are collected into that same

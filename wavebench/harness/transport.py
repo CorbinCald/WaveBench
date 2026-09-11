@@ -207,6 +207,7 @@ class StreamAssembly:
         self.usage: dict = {}
         self.model = None
         self.provider = None
+        self.provider_error: dict = {}
         self.finish = ""
         self.done = False
         self.content_bytes = 0
@@ -359,7 +360,8 @@ class StreamAssembly:
                 setattr(self, key, value or getattr(self, key))
         if obj.get("error"):
             # Provider messages can echo request content or credentials. Keep
-            # the category and accounting, never the raw error or response.
+            # only recognized codes and whether output preceded the failure.
+            self.record_provider_error(obj)
             raise TurnError(
                 "mid-stream provider error; no tools executed",
                 self.usage,
@@ -403,6 +405,87 @@ class StreamAssembly:
                     )
                 self.merge(self.details.setdefault(index, {}), detail)
             self.merge(self.message, delta)
+
+    def record_provider_error(self, obj: dict) -> None:
+        error = obj["error"]
+        code = error.get("code") if isinstance(error, dict) else None
+        known_codes = {
+            "server_error",
+            "rate_limit_exceeded",
+            "invalid_api_key",
+            "invalid_request_error",
+            "insufficient_quota",
+            "context_length_exceeded",
+        }
+        safe_code = (
+            code
+            if (type(code) is int and 400 <= code <= 599)
+            or (isinstance(code, str) and code in known_codes)
+            else None
+        )
+        has_output = any(value for key, value in self.message.items() if key != "role")
+        has_output = bool(has_output or self.calls or self.details or self.output_bytes)
+        completion_details = self.usage.get("completion_tokens_details") or {}
+        has_output |= (
+            any(completion_details.values()) if isinstance(completion_details, dict) else True
+        )
+        native_finish = None
+        has_native_finish = False
+        choices = obj.get("choices")
+        if choices is not None and not isinstance(choices, list):
+            has_output = True
+        for choice in choices if isinstance(choices, list) else []:
+            if not isinstance(choice, dict):
+                has_output = True
+                continue
+            if choice.get("index", 0) != 0:
+                continue
+            source = choice.get("delta") or choice.get("message") or {}
+            if isinstance(source, dict):
+                has_output |= any(value for key, value in source.items() if key != "role")
+            else:
+                has_output = True
+            finish = choice.get("native_finish_reason")
+            has_native_finish |= bool(finish)
+            if isinstance(finish, str) and finish in {
+                "MALFORMED_FUNCTION_CALL",
+                "UNEXPECTED_TOOL_CALL",
+                "TOO_MANY_TOOL_CALLS",
+                "MAX_TOKENS",
+                "SAFETY",
+                "RECITATION",
+                "BLOCKLIST",
+                "PROHIBITED_CONTENT",
+                "SPII",
+                "OTHER",
+                "ERROR",
+            }:
+                native_finish = finish
+            if choice.get("finish_reason") == "error":
+                self.finish = "error"
+        self.provider_error = {
+            "code": safe_code,
+            "native_finish_reason": native_finish,
+            "retryable_empty_response": (
+                not has_output
+                and not self.usage.get("completion_tokens")
+                and not has_native_finish
+                and (
+                    code is None
+                    or safe_code
+                    in {
+                        408,
+                        429,
+                        500,
+                        502,
+                        503,
+                        504,
+                        "server_error",
+                        "rate_limit_exceeded",
+                    }
+                )
+            ),
+        }
 
     @staticmethod
     def invalid_constant(value):
@@ -577,6 +660,7 @@ class StreamReader:
             "requested_model": self.model_identifier(self.model_id),
             "model": self.model_identifier(assembly.model),
             "provider": self.provider_identifier(assembly.provider),
+            "provider_error": assembly.provider_error.copy(),
             "provider_usage_available": bool(assembly.usage),
             "elapsed_seconds": round(time.monotonic() - self.started, 3),
         }

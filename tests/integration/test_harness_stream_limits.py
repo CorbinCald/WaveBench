@@ -258,6 +258,66 @@ async def test_utf8_split_and_multiline_sse_event(monkeypatch):
     assert turn.adjustments["stream"]["bytes"]["reasoning"] == len("想".encode())
 
 
+@pytest.mark.parametrize(
+    "code,native,delta,usage,expected_code,retryable",
+    [
+        (503, None, {}, {}, 503, True),
+        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 0}}, 503, True),
+        ("server_error", None, {}, {}, "server_error", True),
+        (None, None, {}, {}, None, True),
+        (400, None, {}, {}, 400, False),
+        (503, "MALFORMED_FUNCTION_CALL", {}, {}, 503, False),
+        (503, "private prompt", {}, {}, 503, False),
+        ("private prompt sk-secret-local", None, {}, {}, None, False),
+        ({"private": "sk-secret-local"}, None, {}, {}, None, False),
+        (503, None, {"content": "partial"}, {}, 503, False),
+        (503, None, {"tool_calls": [{"index": 0, "function": {"arguments": "{"}}]}, {}, 503, False),
+        (503, None, {}, {"completion_tokens": 12}, 503, False),
+        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 12}}, 503, False),
+    ],
+)
+async def test_provider_error_codes_are_safe_and_partial_errors_cannot_recover(
+    monkeypatch, code, native, delta, usage, expected_code, retryable
+):
+    async def handler(request):
+        payload = {
+            "provider": "Google AI Studio",
+            "error": {
+                "code": code,
+                "message": "private prompt sk-secret-local",
+                "metadata": {"raw": "private prompt sk-secret-local"},
+            },
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "error",
+                    "native_finish_reason": native,
+                }
+            ],
+            "usage": usage,
+        }
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\n", content_type="text/event-stream"
+        )
+
+    async with server(monkeypatch, handler) as client:
+        with pytest.raises(TurnError) as error:
+            await conversation(client)
+    diagnostics = error.value.diagnostics
+    assert diagnostics["provider_error"] == {
+        "code": expected_code,
+        "native_finish_reason": native if native == "MALFORMED_FUNCTION_CALL" else None,
+        "retryable_empty_response": retryable,
+    }
+    assert diagnostics["parsing"]["finish_reason"] == "error"
+    assert diagnostics["provider"] == "Google AI Studio"
+    assert error.value.usage == usage
+    encoded = json.dumps(diagnostics)
+    assert len(encoded.encode()) < 4096
+    assert "private prompt" not in encoded and "sk-secret-local" not in encoded
+
+
 @pytest.mark.parametrize("failure", [False, True])
 async def test_prompt_echo_in_model_and_provider_metadata_is_omitted(monkeypatch, failure):
     private = "private prompt that must not reach diagnostics"

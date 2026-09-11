@@ -45,12 +45,21 @@ Data fields separated across lines are joined for JSON parsing; UTF-8 characters
 split across network reads are decoded after the line is complete. An incomplete
 tool call never becomes executable: completion still requires the final marker,
 a successful finish reason, unique valid IDs, function names, and complete JSON
-object arguments. Streams that fail after response headers are never replayed.
+object arguments. The transport never replays a failed stream. The build/repair
+controller allows one further request per phase when an explicit provider error
+arrives before any model output, with a transient or missing error code. Partial
+output, native failure reasons, malformed streams, disconnections and limits do
+not qualify. Both requests count toward the existing turn, time and token limits;
+the failed request and its usage or budget estimate remain in the saved turns.
 
 Failure diagnostics include a stable failure code, the specific limit, effective
 policy, raw/content/reasoning/tool/assembly byte counters, pending line/event size,
 event count, completion state, elapsed time, and short sanitized model/provider
-identifiers when available. Codes distinguish raw, output, frame, assembly, idle,
+identifiers when available. Provider errors also retain numeric HTTP error codes,
+recognized symbolic codes and recognized native finish reasons (such as
+`MALFORMED_FUNCTION_CALL`), with a flag indicating eligibility for the single
+empty-response retry. Arbitrary error messages and metadata are discarded.
+Codes distinguish raw, output, frame, assembly, idle,
 and total limits from malformed data, disconnection, provider errors, truncated
 output, and cancellation. Diagnostics contain no response excerpts, prompts,
 request headers, or provider error bodies. Returned model metadata must match the
