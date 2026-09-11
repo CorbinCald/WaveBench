@@ -17,6 +17,34 @@ from wavebench.tokens import count_tokens
 
 from .config import Limits
 
+# Display names and routing slugs from OpenRouter's provider catalogue, 2026-09-11.
+GEMINI_PROVIDER_ROUTES = {"Google": "google-vertex", "Google AI Studio": "google-ai-studio"}
+
+
+def thought_signature_error(error) -> bool:
+    """Recognize the provider's error without retaining its private response body."""
+    if not isinstance(error, dict):
+        return False
+    messages = [error.get("message")]
+    metadata = error.get("metadata")
+    raw = metadata.get("raw") if isinstance(metadata, dict) else None
+    if isinstance(raw, str) and len(raw) <= 8192:
+        try:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
+            messages.append(raw)
+    if isinstance(raw, dict):
+        nested = raw.get("error", raw)
+        if isinstance(nested, dict):
+            messages.append(nested.get("message"))
+    return any(
+        isinstance(message, str)
+        and re.search(r"thought[ _-]?signature", message, re.IGNORECASE)
+        and re.search(r"\b(corrupt(?:ed)?|invalid|missing)\b", message, re.IGNORECASE)
+        for message in messages
+    )
+
+
 # Public display names from https://openrouter.ai/api/v1/providers, 2026-09-11.
 # Unknown labels are omitted from diagnostics until this snapshot is refreshed.
 # Do not fetch a provider catalogue during model requests or trust streamed prose.
@@ -362,10 +390,17 @@ class StreamAssembly:
             # Provider messages can echo request content or credentials. Keep
             # only recognized codes and whether output preceded the failure.
             self.record_provider_error(obj)
+            invalid_signature = thought_signature_error(obj["error"])
+            if invalid_signature:
+                self.provider_error["retryable_empty_response"] = False
             raise TurnError(
-                "mid-stream provider error; no tools executed",
+                "provider rejected Gemini thought signature; no tools executed"
+                if invalid_signature
+                else "mid-stream provider error; no tools executed",
                 self.usage,
-                failure_code="provider_stream_error",
+                failure_code="thought_signature_invalid"
+                if invalid_signature
+                else "provider_stream_error",
             )
         choices = obj.get("choices")
         if choices is not None and not isinstance(choices, list):
@@ -539,11 +574,12 @@ class StreamAssembly:
 class StreamReader:
     """Bound wire data, incomplete SSE events, and retained parsed response separately."""
 
-    def __init__(self, policy: StreamPolicy, model_id: str, api_key: str):
+    def __init__(self, policy: StreamPolicy, model_id: str, api_key: str, *, pinned_provider=None):
         self.policy = policy
         self.assembly = StreamAssembly(policy)
         self.model_id = model_id
         self.api_key = api_key
+        self.pinned_provider = pinned_provider
         self.raw_bytes = 0
         self.buffer = b""
         self.data: list[str] = []
@@ -660,6 +696,7 @@ class StreamReader:
             "requested_model": self.model_identifier(self.model_id),
             "model": self.model_identifier(assembly.model),
             "provider": self.provider_identifier(assembly.provider),
+            "pinned_provider": self.provider_identifier(self.pinned_provider),
             "provider_error": assembly.provider_error.copy(),
             "provider_usage_available": bool(assembly.usage),
             "elapsed_seconds": round(time.monotonic() - self.started, 3),
@@ -682,6 +719,7 @@ async def call_conversation(
     reasoning_effort: str | None,
     input_tokens_bound: int | None = None,
     cache_policy: CachePolicy | None = None,
+    gemini_provider: str | None = None,
     cache_reuse: bool = True,
     strict_reasoning: bool = False,
     stream_limits: Limits | None = None,
@@ -695,6 +733,17 @@ async def call_conversation(
     ``on_usage`` receives raw provider usage and a separate local output-token
     estimate. The estimate tracks visible streaming progress, not billable usage.
     """
+    provider_routing = {"require_parameters": True}
+    if gemini_provider is not None:
+        if gemini_provider not in GEMINI_PROVIDER_ROUTES:
+            raise TurnError(
+                "Gemini provider identity unavailable; no request sent",
+                request_sent=False,
+                failure_code="provider_identity_missing",
+            )
+        provider_routing.update(
+            only=[GEMINI_PROVIDER_ROUTES[gemini_provider]], allow_fallbacks=False
+        )
     await api._load_model_context_lengths(session, api_key)
     serialized = json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False)
     # The controller can anchor its estimate to provider-reported prompt usage.
@@ -734,6 +783,7 @@ async def call_conversation(
         "context_limit": context_limit,
         "context_bound": context_bound,
         "cache": cache_record,
+        "provider_routing": provider_routing,
     }
     for request_index in range(api._MAX_RETRIES + 1):
         data = {
@@ -741,7 +791,7 @@ async def call_conversation(
             "stream": True,
             "stream_options": {"include_usage": True},
             "max_tokens": resolved,
-            "provider": {"require_parameters": True},
+            "provider": provider_routing,
             **reasoning[reasoning_index],
             **cache_payload,
         }
@@ -765,6 +815,21 @@ async def call_conversation(
                         (stream_limits or Limits()).stream_idle_seconds,
                     )
                 ).decode("utf-8", errors="replace")
+                try:
+                    error_body = json.loads(error)
+                except (ValueError, RecursionError):
+                    error_body = {}
+                if isinstance(error_body, dict) and thought_signature_error(
+                    error_body.get("error")
+                ):
+                    raise TurnError(
+                        "provider rejected Gemini thought signature; no tools executed",
+                        failure_code="thought_signature_invalid",
+                        diagnostics={
+                            "http_status": response.status,
+                            "pinned_provider": gemini_provider,
+                        },
+                    )
                 retryable = response.status in api._RETRYABLE_STATUSES
                 if (
                     response.status == 400
@@ -800,7 +865,7 @@ async def call_conversation(
                     on_retry(response.status, request_index + 1, api._MAX_RETRIES, wait)
             else:
                 policy = StreamPolicy.resolve(stream_limits or Limits(), resolved)
-                reader = StreamReader(policy, model_id, api_key)
+                reader = StreamReader(policy, model_id, api_key, pinned_provider=gemini_provider)
                 assembly = reader.assembly
                 output_tokens = 0
                 last_text = ""
@@ -855,6 +920,12 @@ async def call_conversation(
                         await report_usage()
                     turn = reader.complete()
                     await report_usage(force=True)
+                    if gemini_provider is not None and turn.provider != gemini_provider:
+                        raise TurnError(
+                            "Gemini provider changed despite routing restriction; no tools executed",
+                            turn.usage,
+                            failure_code="provider_changed",
+                        )
                 except asyncio.CancelledError:
                     reader.failure_code = "stream_cancelled"
                     raise

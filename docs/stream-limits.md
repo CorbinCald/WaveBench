@@ -59,6 +59,13 @@ identifiers when available. Provider errors also retain numeric HTTP error codes
 recognized symbolic codes and recognized native finish reasons (such as
 `MALFORMED_FUNCTION_CALL`), with a flag indicating eligibility for the single
 empty-response retry. Arbitrary error messages and metadata are discarded.
+Recognized corrupted, invalid or missing Gemini thought-signature errors are
+classified as `thought_signature_invalid` for both HTTP rejections and SSE
+errors. Only the classification is retained from the provider's message or
+nested error body. These failures do not negotiate reasoning settings or retry
+the same invalid history. Stream diagnostics also record the pinned provider;
+`provider_changed` prevents tools from executing if a response violates that
+restriction.
 Codes distinguish raw, output, frame, assembly, idle,
 and total limits from malformed data, disconnection, provider errors, truncated
 output, and cancellation. Diagnostics contain no response excerpts, prompts,

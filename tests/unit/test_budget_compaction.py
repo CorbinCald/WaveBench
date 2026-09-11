@@ -178,7 +178,7 @@ async def test_budget_compaction_pays_cached_input_and_allows_real_tools(
                 "prompt_tokens_details": {"cached_tokens": measured - 1},
             },
             model_id,
-            "offline",
+            "Google" if model_id.startswith("google/gemini-") else "offline",
             finish,
             {},
         )
