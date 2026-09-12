@@ -869,11 +869,10 @@ def review_helper(tmp_path, monkeypatch):
         helper.symlink_to(external)
     else:
         helper.write_text("""#!/usr/bin/env python3
-import argparse,json,os,pathlib,select,sys,time,uuid
+import argparse,json,os,pathlib,sys,uuid
 parser=argparse.ArgumentParser()
 parser.add_argument('action', choices=['offer','status'])
 parser.add_argument('--session')
-parser.add_argument('--ttl',type=int,default=900)
 parser.add_argument('--url')
 args=parser.parse_args()
 if args.action=='status':
@@ -882,14 +881,13 @@ if args.action=='status':
 root=pathlib.Path(os.environ['XDG_STATE_HOME'])/'herdr-review/remote'/args.session
 root.mkdir(parents=True,exist_ok=True)
 token=uuid.uuid4().hex
-record={'id':'app-'+token,'token':token,'pid':os.getpid(),'expires':time.time()+args.ttl,
+record={'id':'app-'+token,'token':token,'pid':os.getpid(),
         'urls':[args.url],'ports':[int(args.url.split(':')[2].split('/')[0])]}
 path=root/(record['id']+'.json')
 try:
     path.write_text(json.dumps(record))
     print(json.dumps(record),flush=True)
-    if select.select([sys.stdin],[],[],args.ttl)[0]:
-        sys.stdin.read()
+    sys.stdin.read()
 finally:
     path.unlink(missing_ok=True)
 """)
@@ -945,12 +943,12 @@ async def test_remote_previews_use_existing_processes_and_cleanup(
     assert second.remote_preview.process.returncode == 0
 
 
-async def test_remote_helper_expiry_stops_generated_app(factory, review_helper, monkeypatch):
-    monkeypatch.setattr(handoff, "MAX_PREVIEW_SECONDS", 1)
+async def test_remote_helper_exit_stops_generated_app(factory, review_helper):
     session = factory(preview_destination="laptop")
     ready_static(session)
     await session.execute()
     path = review_helper / (session.remote_preview.record["id"] + ".json")
+    session.remote_preview.process.stdin.close()
     await asyncio.wait_for(session.preview_watch, 5)
     assert not path.exists()
     assert session.preview._stopped

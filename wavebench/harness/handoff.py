@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 
 DESTINATIONS = {"automatic": "Automatic", "laptop": "Connected laptop", "host": "Wavebench host"}
-MAX_PREVIEW_SECONDS = 900
 
 
 async def stop_helper(process) -> None:
@@ -96,8 +95,6 @@ class RemotePreview:
                     "offer",
                     "--session",
                     self.session,
-                    "--ttl",
-                    str(MAX_PREVIEW_SECONDS),
                     "--url",
                     url,
                     stdin=asyncio.subprocess.PIPE,

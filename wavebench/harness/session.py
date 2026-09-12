@@ -38,7 +38,7 @@ from .context import (
     plan_compaction,
 )
 from .failure import failure_record
-from .handoff import MAX_PREVIEW_SECONDS, RemotePreview, client_status, destination
+from .handoff import RemotePreview, client_status, destination
 from .runtime import Runtime, SetupError
 from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability
 from .workspace import allocate_project
@@ -1179,13 +1179,11 @@ class HarnessSession:
         if self.remote_preview:
             waits.append(asyncio.create_task(self.remote_preview.process.wait()))
         try:
-            await asyncio.wait(
-                waits, timeout=MAX_PREVIEW_SECONDS, return_when=asyncio.FIRST_COMPLETED
-            )
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
             await self.preview.stop()
             if self.remote_preview:
                 await self.remote_preview.close()
-            attempt["presentation_status"] = "Preview stopped or expired"
+            attempt["presentation_status"] = "Preview stopped"
         finally:
             for task in waits:
                 task.cancel()
@@ -1282,7 +1280,7 @@ class HarnessBatch:
                     print(f"  {session.name}: {session.attempts[-1]['presentation_error']}")
             if not previews:
                 return
-            seconds = min(self.sessions[0].limits.review_seconds, MAX_PREVIEW_SECONDS)
+            seconds = self.sessions[0].limits.review_seconds
             for session in previews:
                 print(f"  {session.name} preview: {session.preview.url}")
             print(
