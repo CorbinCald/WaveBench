@@ -89,6 +89,9 @@ def main():
                         "directory_naming": "slug",
                         "auto_install": "off",
                         "auto_open": policy,
+                        # This acceptance harness deliberately uses BROWSER as
+                        # an HTTP-checking host viewer, including on SSH hosts.
+                        "preview_destination": "host",
                         "harness": {
                             "build_turns": 16,
                             "repair_turns": 8,

@@ -6,6 +6,46 @@ and single-file artifacts remain readable and are not converted or executed.
 Existing saved Auto-open and Auto-install settings are preserved. A new config
 defaults to incremental opening and dependencies off.
 
+## Preview destination
+
+In `wavebench --config`, open **Settings → Preview destination** and press Space
+to cycle the choices. Enter saves; Esc cancels. This setting applies to Harness
+web previews, independently of Auto-open's off, incremental, and after-all timing.
+
+| Destination | Behavior |
+|---|---|
+| Automatic (default) | Use the connected laptop for SSH sessions, previously connected remote Herdr sessions, or a headless Linux host. Use the host browser in a local desktop session. A live laptop companion also takes priority. |
+| Connected laptop | Publish each ready preview to the laptop companion; never open a browser on the Wavebench host. |
+| Wavebench host | Open the browser on the machine running Wavebench, including when explicitly selected over SSH. |
+
+The saved top-level setting is `preview_destination`: `automatic`, `laptop`, or
+`host`. Existing settings gain Automatic when this field is absent. Auto-open
+off continues to validate and stop the generated app without presenting it.
+Non-web program output remains in the terminal, and generated projects remain
+in their existing output directories.
+
+Laptop previews require the server's `herdr-review` helper with the `offer`
+interface and the existing laptop `herdr-server` companion. Connect using
+`herdr-server` or `herdr-server --public`. Wavebench uses `HERDR_SESSION` (default
+`work`); run it in the same server session as the laptop connection. The laptop
+client needs no update for this feature. Plain SSH without the companion can run
+Wavebench but does not establish automatic preview forwarding.
+
+The controller publishes each existing sandbox preview's loopback proxy; it
+does not rerun the generated project. The review screen reports **Waiting for
+laptop connection**, successful laptop opening, or forwarding/browser errors.
+It never falls back to a host browser when a laptop is unavailable. Late
+connections and reconnections pick up still-active previews. Missing or outdated
+helpers produce an actionable presentation error while preserving the actual
+runtime result.
+
+Enter, Ctrl-C, review timeout, or controller exit closes the registrations and
+managed apps. Each presented preview also has a hard 15-minute lifetime from
+presentation, including time spent waiting for other generations or a laptop.
+The existing default review window remains 10 minutes after the batch completes,
+subject to that per-preview cap. Expiry closes the preview; it does not delete
+the generated project or restart it unattended.
+
 ## File tools
 
 Install WaveBench with `pip install -e .` to get `wb`, or use

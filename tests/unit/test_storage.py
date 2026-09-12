@@ -59,6 +59,7 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
         "analytics_sort": "runs",
         "theme": "default",
         "auto_open": "incremental",
+        "preview_destination": "automatic",
         "auto_install": "off",
         "directory_naming": "llm",
         "tts_voice": "alloy",
