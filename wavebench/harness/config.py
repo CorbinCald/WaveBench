@@ -24,6 +24,9 @@ class Limits:
     process_concurrency: int = 4
     web_search_calls: int = 20
     web_fetch_calls: int = 20
+    research_turns: int = 8
+    research_seconds: int = 300
+    research_tokens: int = 200_000
     stream_raw_min_bytes: int = 16 * 1024 * 1024
     stream_raw_bytes_per_token: int = 1024
     stream_raw_max_bytes: int = 128 * 1024 * 1024

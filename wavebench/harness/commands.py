@@ -151,6 +151,9 @@ class Dispatcher:
         self.web_search_usage = {"calls": 0, "failures": 0}
         self.web_fetch = WebFetch() if web_search is not None else None
         self.web_fetch_usage = {"calls": 0, "failures": 0}
+        self.research_closed: str | None = None
+        self.research_deadline: float | None = None
+        self.research_progress: dict = {}
         self.tools = (
             [*TOOL_SCHEMA, WEB_FETCH_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
         )
@@ -169,6 +172,49 @@ class Dispatcher:
 
     def reopen(self) -> None:
         self.submission = None
+
+    def available_tools(self) -> list[dict]:
+        return [
+            tool
+            for tool in self.tools
+            if tool["function"]["name"] == "wb"
+            or (
+                not self.research_closed
+                and (
+                    self.web_search_usage["calls"] < self.limits.web_search_calls
+                    if tool["function"]["name"] == "web_search"
+                    else self.web_fetch_usage["calls"] < self.limits.web_fetch_calls
+                )
+            )
+        ]
+
+    def research_budget(self) -> dict:
+        return {
+            **self.research_progress,
+            "search_calls_left": max(
+                0, self.limits.web_search_calls - self.web_search_usage["calls"]
+            ),
+            "read_calls_left": max(0, self.limits.web_fetch_calls - self.web_fetch_usage["calls"]),
+            "closed": self.research_closed,
+        }
+
+    async def _research(self, name: str, command: dict) -> dict:
+        if self.research_closed:
+            raise ValueError(
+                f"Research is closed: {self.research_closed}. Build, validate, and submit with wb done"
+            )
+        try:
+            return await asyncio.wait_for(
+                self._search(command) if name == "web_search" else self._fetch(command),
+                timeout=max(0, self.research_deadline - time.monotonic())
+                if self.research_deadline is not None
+                else None,
+            )
+        except asyncio.TimeoutError:
+            self.research_closed = "research time allowance reached"
+            raise ValueError(
+                "Research time allowance reached; use the available evidence and finish the project"
+            ) from None
 
     async def _search(self, arguments: dict) -> dict:
         if self.web_search is None:
@@ -311,10 +357,8 @@ class Dispatcher:
                                 )
                             if call.get("error"):
                                 raise ValueError(call["error"])
-                            if call.get("name") == "web_search":
-                                payload = await self._search(command)
-                            elif call.get("name") == "web_fetch":
-                                payload = await self._fetch(command)
+                            if call.get("name") in {"web_search", "web_fetch"}:
+                                payload = await self._research(call["name"], command)
                             else:
                                 payload = await self._execute(command)
                             result = {
@@ -322,6 +366,8 @@ class Dispatcher:
                                 "ok": payload.get("exit_code", 0) == 0,
                                 **payload,
                             }
+                            if call.get("name") in {"web_search", "web_fetch"}:
+                                result["research_budget"] = self.research_budget()
                             if call.get("name") == "web_fetch":
                                 result = fit_fetch_result(result, self.limits.output_chars)
                                 if not result["ok"]:
@@ -340,6 +386,8 @@ class Dispatcher:
                                 "ok": False,
                                 "error": str(exc) or type(exc).__name__,
                             }
+                            if call.get("name") in {"web_search", "web_fetch"}:
+                                result["research_budget"] = self.research_budget()
                         finally:
                             self._serial += 1
                             if "result" in locals():
