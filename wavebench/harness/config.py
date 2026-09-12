@@ -7,9 +7,9 @@ from dataclasses import asdict, dataclass, fields
 class Limits:
     build_turns: int = 32
     repair_turns: int = 12
-    total_tokens: int = 256_000
-    turn_tokens: int = 16_384
-    build_seconds: int = 900
+    total_tokens: int = 1_000_000
+    turn_tokens: int = 64_000
+    build_seconds: int = 1800
     repair_seconds: int = 300
     process_seconds: int = 60
     startup_seconds: int = 20
@@ -31,7 +31,7 @@ class Limits:
     stream_output_max_bytes: int = 32 * 1024 * 1024
     stream_frame_bytes: int = 2 * 1024 * 1024
     stream_assembly_bytes: int = 32 * 1024 * 1024
-    stream_seconds: int = 300
+    stream_seconds: int = 1800
     stream_idle_seconds: int = 60
 
     def __post_init__(self):

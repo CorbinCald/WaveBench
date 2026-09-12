@@ -298,7 +298,7 @@ active-phase limits** as generation. It consumes no project execution attempt
 and does not reset turn limits. Results include its cost in overall usage, with
 `harness.model_usage`, `harness.compaction.usage`, and `timing.compaction_s`
 separately identifying overhead. Luna's one-use summary input requests no paid
-cache writes. The default **256,000 total-token budget** includes every repeated
+cache writes. The default **1,000,000 total-token budget** includes every repeated
 input, cached input, generated output, and compaction request. Compaction never
 raises this limit. See [budget-aware compaction](budget-compaction.md) for
 affordability, savings checks, and recorded outcomes.
@@ -335,15 +335,15 @@ explicit records. The model must still submit its work itself.
 | Limit | Default |
 |---|---:|
 | Build / repair model turns | 32 / 12 |
-| Total tokens, including every input and output | 256,000 |
-| Output tokens per turn | 16,384 |
-| Active build / repair time | 900 / 300 seconds |
+| Total tokens, including every input and output | 1,000,000 |
+| Output tokens per turn | 64,000 |
+| Active build / repair time | 1,800 / 300 seconds |
 | Program / startup / lint / dependency setup | 60 / 20 / 30 / 120 seconds |
 | Managed preview review | 600 seconds, or Enter/Ctrl-C |
 | Tool response / saved subprocess diagnostics | 16,000 characters / 8 MiB per subprocess |
 | Stream body / generated text | Output-scaled, capped at 128 MiB / 32 MiB |
 | Incomplete stream event / retained parsed fields | 2 MiB / 32 MiB |
-| Stream duration / idle wait | 300 / 60 seconds, within the active-phase deadline |
+| Stream duration / idle wait | 1,800 / 60 seconds, within the active-phase deadline |
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
 | File data / project source data | 8 MiB per file / 128 MiB |
