@@ -92,10 +92,12 @@ class ProgressTracker:
         model_id_map: dict[str, str] | None = None,
         alt_screen: bool = False,
         progress_unit: str = "tokens",
+        prompt: str = "",
     ):
         self._total = total
         self._results = results
         self._label = label
+        self._prompt = " ".join(prompt.split())
         self._pad = pad
         self._running = False
         self._task: asyncio.Task | None = None
@@ -932,6 +934,13 @@ class ProgressTracker:
         sys.stdout.write("\r\033[J")
         self._drawn_lines = 0
 
+    def _format_prompt(self, inner_w: int) -> str | None:
+        """Keep a single-line prompt preview above the live model rows."""
+        if not self._prompt:
+            return None
+        preview = _truncate(self._prompt, max(1, inner_w - 10))
+        return f"{S.DIM}{'PROMPT':>8}{S.RST}  {preview}"
+
     def _format_output_dir(self, inner_w: int) -> str | None:
         if not self._output_dir:
             return None
@@ -1087,9 +1096,9 @@ class ProgressTracker:
                 buf.append(_box_top(f"{self._label} \033[22m{wave}", w) + "\033[K\n")
                 lines += 1
 
-                od = self._format_output_dir(inner_w)
-                if od:
-                    buf.append(_box_row(od, w) + "\033[K\n")
+                prompt = self._format_prompt(inner_w)
+                if prompt:
+                    buf.append(_box_row(prompt, w) + "\033[K\n")
                     buf.append(_box_sep("", w) + "\033[K\n")
                     lines += 2
                 else:

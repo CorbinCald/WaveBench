@@ -367,6 +367,7 @@ async def main_async(
             pricing_lookup=pricing_lookup or {},
             model_id_map=model_id_map,
             alt_screen=True,
+            prompt=user_prompt,
         )
         if effort_ticker_msgs:
             tracker.set_ticker(effort_ticker_msgs)
