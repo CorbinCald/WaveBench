@@ -18,6 +18,7 @@ from pathlib import Path
 import aiohttp
 
 from .config import Limits
+from .preview import PreviewIdentity
 from .workspace import Workspace
 
 
@@ -484,10 +485,20 @@ class Runtime:
                 await asyncio.sleep(0.1)
         raise RuntimeError(f"startup readiness timed out: {last}")
 
-    async def present(self, managed: ManagedProcess, preview: str) -> str:
+    async def present(
+        self,
+        managed: ManagedProcess,
+        preview: str,
+        identity: PreviewIdentity | None = None,
+        attempt: int = 1,
+    ) -> str:
         """Attach a loopback view to the existing process; never relaunch."""
         if managed.url:
             return managed.url
+        # Serve only our randomly allocated document here. App bodies, cookies,
+        # redirects, streaming and WebSockets still pass through to the same process.
+        page_path = f"/__wavebench_preview_{uuid.uuid4().hex}" if identity else None
+        page = identity.page(preview, attempt) if identity else b""
 
         async def connection(reader, writer):
             task = asyncio.current_task()
@@ -505,11 +516,52 @@ class Runtime:
                     target.write_eof()
 
             try:
+                headers = b""
+                if page_path:
+                    headers = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 30)
+                    lines = headers[:-4].split(b"\r\n")
+                    request = lines[0].split()
+                    if len(request) == 3 and request[1] == page_path.encode("ascii"):
+                        if request[0] in {b"GET", b"HEAD"}:
+                            writer.write(
+                                b"HTTP/1.1 200 OK\r\n"
+                                b"Content-Type: text/html; charset=utf-8\r\n"
+                                b"Cache-Control: no-store\r\n"
+                                b"Connection: close\r\n"
+                                + f"Content-Length: {len(page)}\r\n\r\n".encode("ascii")
+                            )
+                            if request[0] == b"GET":
+                                writer.write(page)
+                        else:
+                            writer.write(
+                                b"HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, HEAD\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+                            )
+                        await writer.drain()
+                        return
+                    # Each ordinary request must return through this dispatcher:
+                    # otherwise a reused app connection could send a wrapper reload
+                    # straight upstream. Preserve upgraded (WebSocket) connections.
+                    if not any(line.lower().startswith(b"upgrade:") for line in lines[1:]):
+                        headers = (
+                            b"\r\n".join(
+                                line
+                                for line in lines
+                                if not line.lower().startswith(b"connection:")
+                            )
+                            + b"\r\nConnection: close\r\n\r\n"
+                        )
                 upstream_reader, upstream_writer = await asyncio.open_unix_connection(
                     self._socket_path(managed)
                 )
+                upstream_writer.write(headers)
                 await asyncio.gather(copy(reader, upstream_writer), copy(upstream_reader, writer))
-            except (OSError, asyncio.TimeoutError):
+            except (
+                OSError,
+                asyncio.TimeoutError,
+                asyncio.IncompleteReadError,
+                asyncio.LimitOverrunError,
+            ):
                 pass
             finally:
                 writer.close()
@@ -519,7 +571,7 @@ class Runtime:
 
         managed.proxy = await asyncio.start_server(connection, "127.0.0.1", 0)
         port = managed.proxy.sockets[0].getsockname()[1]
-        managed.url = f"http://127.0.0.1:{port}{preview}"
+        managed.url = f"http://127.0.0.1:{port}{page_path or preview}"
         return managed.url
 
     async def close(self) -> None:

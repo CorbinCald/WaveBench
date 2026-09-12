@@ -24,13 +24,14 @@ from wavebench.tui.menus.config_menu import interactive_config_menu
 
 PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wavebench {name}</title>
+<title>Generated app</title>
 <style>body{{font:20px system-ui;max-width:620px;margin:10vh auto;padding:24px;background:#f5f7fb;color:#172033}}button,input{{font:inherit;padding:12px;border:1px solid #adb6c5;border-radius:8px}}button{{background:#2346b8;color:white;cursor:pointer}}output{{display:block;font-size:48px;margin:20px 0}}</style>
-<h1>Wavebench · {name}</h1><p>This generated Harness fixture reached your browser.</p>
+<h1>Generated app</h1><p>This generated Harness fixture reached your browser.</p>
 <p>Click Increment, then type a short note below.</p>
 <output id="count">0</output><button id="increment">Increment</button>
 <p><label>Review note <input id="note" placeholder="Type here"></label></p>
 <p id="echo" aria-live="polite"></p>
+<p><a href="next.html">Next page</a></p>
 <script>let value=0;document.querySelector('#increment').onclick=()=>document.querySelector('#count').textContent=++value;document.querySelector('#note').oninput=e=>document.querySelector('#echo').textContent=e.target.value;</script>
 </html>'''
 
@@ -48,9 +49,13 @@ async def review(root, config):
             )
             sessions.append(session)
             session.workspace.write("index.html", PAGE.format(name=name))
+            session.workspace.write("next.html", '<title>Another app title</title><h1>Next page</h1><a href="index.html">Back to app</a>')
             session.descriptor = launch_descriptor({"runtime": "static", "entry": "index.html"}, session.workspace)
             session.generation = "submitted"
             session.submitted_at = time.monotonic()
+        # Identical apps deliberately finish in reverse selection order: only
+        # WaveBench's identity should be needed to tell the results apart.
+        for session in reversed(sessions):
             await session.execute()
             if session.status != "success":
                 raise RuntimeError(session.error)
