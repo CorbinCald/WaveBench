@@ -259,6 +259,7 @@ class ProgressTracker:
             "api_s": api_seconds,
             "tool_usage": previous.get("tool_usage", {}),
             "web_search": previous.get("web_search", {}),
+            "web_fetch": previous.get("web_fetch", {}),
             "budget": budget if budget is not None else previous.get("budget", {}),
         }
 
@@ -267,13 +268,20 @@ class ProgressTracker:
         metrics["budget"] = budget.copy()
 
     def update_harness_tools(
-        self, model_name: str, usage: dict, *, web_search: dict | None = None
+        self,
+        model_name: str,
+        usage: dict,
+        *,
+        web_search: dict | None = None,
+        web_fetch: dict | None = None,
     ) -> None:
         """Publish completed tool calls immediately, including partial parallel batches."""
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         metrics["tool_usage"] = usage.copy()
         if web_search is not None:
             metrics["web_search"] = web_search.copy()
+        if web_fetch is not None:
+            metrics["web_fetch"] = web_fetch.copy()
 
     def start_harness_turn(
         self, model_name: str, input_tokens: int, *, model_id: str | None = None
@@ -353,6 +361,7 @@ class ProgressTracker:
             turns = usage.get("api_turns", len(harness.get("turns", [])))
             tools = harness.get("tool_usage") or {}
             searches = harness.get("web_search") or {}
+            fetches = harness.get("web_fetch") or {}
             metrics = {}
             budget = budget_record(harness).copy()
         else:
@@ -362,6 +371,7 @@ class ProgressTracker:
             turns = usage.get("api_turns", 0)
             tools = metrics.get("tool_usage") or {}
             searches = metrics.get("web_search") or {}
+            fetches = metrics.get("web_fetch") or {}
             budget = (metrics.get("budget") or {}).copy()
         cache_usages = [usage] if turns else []
         tokens = settled(usage, "completion_tokens", turns)
@@ -430,6 +440,7 @@ class ProgressTracker:
             "cache_rate": cache_read_ratio(*cache_usages),
             "tool_calls": tools.get("calls"),
             "web_searches": searches.get("calls") if searches.get("enabled") else None,
+            "web_fetches": fetches.get("calls") if fetches.get("enabled") else None,
             "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
@@ -473,6 +484,8 @@ class ProgressTracker:
         ]
         if values["web_searches"] is not None:
             cells.append(f"{S.DIM}web searches {values['web_searches']:,}{S.RST}")
+        if values["web_fetches"] is not None:
+            cells.append(f"{S.DIM}page reads {values['web_fetches']:,}{S.RST}")
         return cells
 
     def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
@@ -511,6 +524,20 @@ class ProgressTracker:
             if 52 <= inner_w < 72:
                 widths[keys.index("phase")] = 4
                 widths[keys.index("time")] = 3
+        show_fetches = any(
+            ((result.get("harness") or {}).get("web_fetch") or {}).get("enabled")
+            for result in self._results.values()
+        ) or any(
+            (metrics.get("web_fetch") or {}).get("enabled") for metrics in self._harness.values()
+        )
+        if show_fetches:
+            index = keys.index("searches") + 1 if "searches" in keys else len(keys) - 1
+            keys.insert(index, "fetches")
+            widths.insert(index, 5 if inner_w >= 100 else 3)
+            if 52 <= inner_w < 72:
+                # Keep the model name, failure rate, and elapsed time at 60 columns.
+                widths.pop(keys.index("cache"))
+                keys.remove("cache")
         gap = self._harness_column_gap(inner_w)
         while widths and sum(widths) + gap * len(widths) + 3 > inner_w:
             keys.pop()
@@ -529,6 +556,7 @@ class ProgressTracker:
             "cache": "CACHE",
             "tools": "TOOLS",
             "searches": "WEB SEARCHES",
+            "fetches": "READS",
             "fail": "FAIL",
             "time": "TIME",
         }
@@ -539,6 +567,7 @@ class ProgressTracker:
             "cache": "HIT%",
             "tools": "USE",
             "searches": "WEB",
+            "fetches": "GET",
         }
         cells = []
         for key, width in self._harness_columns(inner_w):
@@ -660,13 +689,14 @@ class ProgressTracker:
                             prefix=measurement.prefix + ("$" if key == "cost" else ""),
                             suffix=measurement.suffix,
                         )
-            elif key in {"rate", "turns", "tools", "searches"}:
+            elif key in {"rate", "turns", "tools", "searches", "fetches"}:
                 value = values[
                     {
                         "rate": "rate",
                         "turns": "turns",
                         "tools": "tool_calls",
                         "searches": "web_searches",
+                        "fetches": "web_fetches",
                     }[key]
                 ]
                 prefix = "~" if key == "rate" and values["rate_estimated"] else ""

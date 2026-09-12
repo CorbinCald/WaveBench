@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from wavebench.web_fetch import WEB_FETCH_SCHEMA, WebFetch, fit_fetch_result
 from wavebench.web_search import WEB_SEARCH_SCHEMA, BraveSearch
 
 from .config import Limits
@@ -148,7 +149,11 @@ class Dispatcher:
         self.tool_usage = {"calls": 0, "failures": 0}
         self.web_search = web_search
         self.web_search_usage = {"calls": 0, "failures": 0}
-        self.tools = [*TOOL_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
+        self.web_fetch = WebFetch() if web_search is not None else None
+        self.web_fetch_usage = {"calls": 0, "failures": 0}
+        self.tools = (
+            [*TOOL_SCHEMA, WEB_FETCH_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
+        )
         self.submission: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
@@ -179,6 +184,24 @@ class Dispatcher:
             return await self.web_search.search(arguments.get("query"), arguments.get("count", 5))
         except BaseException:
             self.web_search_usage["failures"] += 1
+            raise
+
+    async def _fetch(self, arguments: dict) -> dict:
+        if self.web_fetch is None:
+            raise ValueError("web_fetch is disabled for this benchmark; enable web search")
+        if self.submission is not None:
+            raise ValueError("phase already submitted; skipped")
+        if self.web_fetch_usage["calls"] >= self.limits.web_fetch_calls:
+            raise ValueError("web fetch call budget exhausted")
+        self.web_fetch_usage["calls"] += 1
+        try:
+            if not isinstance(arguments, dict) or set(arguments) - {"url", "start", "max_chars"}:
+                raise ValueError("web_fetch accepts only url, start, and max_chars")
+            return await self.web_fetch.fetch(
+                arguments.get("url"), arguments.get("start", 0), arguments.get("max_chars", 8000)
+            )
+        except BaseException:
+            self.web_fetch_usage["failures"] += 1
             raise
 
     async def _execute(self, command: dict) -> dict:
@@ -282,22 +305,27 @@ class Dispatcher:
                                 raise ValueError(
                                     "done must be submitted alone; entire batch skipped"
                                 )
-                            if call.get("name", "wb") not in {"wb", "web_search"}:
+                            if call.get("name", "wb") not in {"wb", "web_search", "web_fetch"}:
                                 raise ValueError(
                                     'unknown tool; call the function named wb with {"command":"write", "path":"...", "content":"..."}, or another documented command'
                                 )
                             if call.get("error"):
                                 raise ValueError(call["error"])
-                            payload = (
-                                await self._search(command)
-                                if call.get("name") == "web_search"
-                                else await self._execute(command)
-                            )
+                            if call.get("name") == "web_search":
+                                payload = await self._search(command)
+                            elif call.get("name") == "web_fetch":
+                                payload = await self._fetch(command)
+                            else:
+                                payload = await self._execute(command)
                             result = {
                                 "id": call_id,
                                 "ok": payload.get("exit_code", 0) == 0,
                                 **payload,
                             }
+                            if call.get("name") == "web_fetch":
+                                result = fit_fetch_result(result, self.limits.output_chars)
+                                if not result["ok"]:
+                                    self.web_fetch_usage["failures"] += 1
                         except asyncio.CancelledError:
                             result = {
                                 "id": call_id,

@@ -177,7 +177,7 @@ def main() -> None:
         "--web-search",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Enable or disable Brave web search for Harness agents for this run",
+        help="Enable or disable Brave search and source-page reading for Harness agents for this run",
     )
     parser.add_argument(
         "--setup-web-search",

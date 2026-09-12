@@ -374,6 +374,38 @@ def test_web_search_zero_and_counts_survive_streaming_and_compaction(tracker):
         assert "web searches 1" in tracker._format_harness_tool_metrics("model")
 
 
+@pytest.mark.parametrize("width", [32, 52, 56, 72, 76, 102, 112])
+@pytest.mark.parametrize("status", [None, "success", "failed", "cancelled"])
+def test_page_reads_and_searches_fit_live_and_final_rows(tracker, width, status):
+    search = {"enabled": True, "calls": 7, "failures": 0}
+    fetch = {"enabled": True, "calls": 13, "failures": 1}
+    tracker.update_harness_tools(
+        "model", {"calls": 24, "failures": 1}, web_search=search, web_fetch=fetch
+    )
+    tracker.update_harness("model", {"api_turns": 4}, 5)
+    result = None
+    if status:
+        result = {
+            "status": status,
+            "time_s": 10,
+            "usage": {},
+            "harness": {
+                "web_search": search,
+                "web_fetch": fetch,
+                "tool_usage": {"calls": 24, "failures": 1},
+            },
+        }
+        tracker._results["model"] = result
+        tracker._harness.clear()
+    header = plain(tracker._format_harness_header(width))
+    row = plain(tracker._format_harness_row("model", width, result))
+    assert "WEB" in header
+    assert ("READS" if width >= 100 else "GET") in header
+    assert "13" in row.split() and "7" in row.split()
+    assert len(header) == len(row) == width
+    assert "page reads 13" in tracker._format_harness_tool_metrics("model", result)
+
+
 def test_disabled_search_and_older_results_do_not_add_a_column(tracker):
     tracker.update_harness_tools(
         "model",
