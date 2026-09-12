@@ -539,6 +539,15 @@ class ProgressTracker:
                 widths.pop(keys.index("cache"))
                 keys.remove("cache")
         gap = self._harness_column_gap(inner_w)
+        if show_searches and inner_w >= 100:
+            name_w = inner_w - sum(widths) - gap * len(widths) - 2
+            longest_name = max(
+                (_vlen(name) for name in [*self._model_names, *self._harness, *self._results]),
+                default=5,
+            )
+            if name_w < longest_name:
+                # Give model identities priority over the full search heading.
+                widths[keys.index("searches")] = 3
         while widths and sum(widths) + gap * len(widths) + 3 > inner_w:
             keys.pop()
             widths.pop()
