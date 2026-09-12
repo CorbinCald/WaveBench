@@ -276,7 +276,7 @@ def test_single_row_columns_stay_aligned_as_counters_grow(tracker):
     after = plain(tracker._format_harness_row("model", 72))
     assert "\n" not in after
     for old, new in (("200", "123.5M"), ("$0.015", "$999.99")):
-        assert before.index(old) + len(old) == after.index(new) + len(new)
+        assert before.index(old) == after.index(new)
     assert len(before) == len(after) == 72
 
 

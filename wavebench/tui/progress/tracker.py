@@ -691,7 +691,7 @@ class ProgressTracker:
                 if len(text) > width:
                     text = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.0f}m"
             text = _truncate(text, width)
-            text = f"{text:<{width}}" if key in {"name", "phase"} else f"{text:>{width}}"
+            text = f"{text:<{width}}"
             cells.append(f"{color}{text}{S.RST}")
         separator = " " * self._harness_column_gap(inner_w)
         return f"{symbol} {separator.join(cells)}"
