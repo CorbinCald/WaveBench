@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestServer
 from wavebench import api
 from wavebench.harness import session as module
 from wavebench.harness.config import Limits
+from wavebench.harness.failure import failure_summary
 from wavebench.harness.session import HarnessSession
 from wavebench.harness.workspace import allocate_run
 
@@ -83,6 +84,55 @@ async def test_stream_failure_diagnostics_and_usage_reach_saved_results(sessions
     assert result["usage"]["cost"] is None
     assert session.dispatcher.tool_usage["calls"] == 0
     assert requests == 1
+
+
+@pytest.mark.parametrize("phase_expires_first", [False, True])
+async def test_header_wait_failure_is_saved_without_inventing_usage_or_retrying(
+    sessions, monkeypatch, phase_expires_first
+):
+    release = asyncio.Event()
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        await release.wait()
+        return web.Response()
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(
+            client,
+            response_headers_seconds=3 if phase_expires_first else 1,
+            build_seconds=1 if phase_expires_first else 3,
+        )
+        try:
+            await asyncio.wait_for(session.build(), 3)
+        finally:
+            release.set()
+    result = json.loads((session.metadata / "result.json").read_text())
+    failure = result["failure"]
+    assert failure["code"] == (
+        "time_or_turn_limit" if phase_expires_first else "response_headers_timeout"
+    )
+    if not phase_expires_first:
+        assert failure["category"] == "request_timeout"
+        assert failure_summary(result) == "No response headers received"
+        assert failure["diagnostics"]["policy"] == {"response_headers_seconds": 1}
+    turn = result["harness"]["turns"][0]
+    assert turn["stream"]["stage"] == "response_headers"
+    assert turn["stream"]["failure_code"] == (
+        "request_cancelled" if phase_expires_first else "response_headers_timeout"
+    )
+    assert turn["usage"] == {}
+    assert result["usage"]["api_turns"] == 1
+    assert result["usage"]["total_tokens"] is None and result["usage"]["cost"] is None
+    assert result["harness"]["budget"]["estimated"]
+    assert result["harness"]["budget"]["used_tokens"] > 0
+    assert result["harness"]["recoveries"] == [] and result["retries"] == []
+    assert session.dispatcher.tool_usage["calls"] == 0 and requests == 1
 
 
 async def test_unaffordable_next_request_has_remaining_and_input_estimate(sessions):

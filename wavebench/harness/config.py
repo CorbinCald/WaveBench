@@ -31,6 +31,7 @@ class Limits:
     stream_output_max_bytes: int = 32 * 1024 * 1024
     stream_frame_bytes: int = 2 * 1024 * 1024
     stream_assembly_bytes: int = 32 * 1024 * 1024
+    response_headers_seconds: int = 60
     stream_seconds: int = 1800
     stream_idle_seconds: int = 60
 

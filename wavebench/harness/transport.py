@@ -733,6 +733,7 @@ async def call_conversation(
     ``on_usage`` receives raw provider usage and a separate local output-token
     estimate. The estimate tracks visible streaming progress, not billable usage.
     """
+    limits = stream_limits or Limits()
     provider_routing = {"require_parameters": True}
     if gemini_provider is not None:
         if gemini_provider not in GEMINI_PROVIDER_ROUTES:
@@ -802,9 +803,38 @@ async def call_conversation(
             "Content-Type": "application/json",
             "X-Title": "WaveBench Harness",
         }
-        async with session.post(
-            f"{api.API_URL}/chat/completions", headers=headers, json=data
-        ) as response:
+        request_started = time.monotonic()
+        try:
+            # Bound DNS, connection/TLS setup, sending, and receipt of complete
+            # response headers. Stop this timer before reading the stream body.
+            response = await asyncio.wait_for(
+                session.post(f"{api.API_URL}/chat/completions", headers=headers, json=data),
+                limits.response_headers_seconds,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            cancelled = isinstance(exc, asyncio.CancelledError)
+            diagnostics = {
+                "failure_code": "request_cancelled" if cancelled else "response_headers_timeout",
+                "stage": "response_headers",
+                "limit": "response_headers_seconds",
+                "policy": {"response_headers_seconds": limits.response_headers_seconds},
+                "elapsed_seconds": round(time.monotonic() - request_started, 3),
+            }
+            if on_diagnostics:
+                on_diagnostics(diagnostics)
+            if cancelled:
+                raise
+            # Acceptance is unknown: retain the input estimate and never replay.
+            raise TurnError(
+                f"no response headers received within {limits.response_headers_seconds}s",
+                failure_code="response_headers_timeout",
+                diagnostics=diagnostics,
+            ) from exc
+        async with response:
+            adjustments["response_headers"] = {
+                "limit_seconds": limits.response_headers_seconds,
+                "elapsed_seconds": round(time.monotonic() - request_started, 3),
+            }
             if response.status != 200:
                 # Rejected responses are untrusted too. Read a bounded prefix
                 # for retry negotiation, and never copy provider bodies into
@@ -812,7 +842,7 @@ async def call_conversation(
                 error = (
                     await asyncio.wait_for(
                         response.content.read(4096),
-                        (stream_limits or Limits()).stream_idle_seconds,
+                        limits.stream_idle_seconds,
                     )
                 ).decode("utf-8", errors="replace")
                 try:
@@ -864,7 +894,7 @@ async def call_conversation(
                 if on_retry:
                     on_retry(response.status, request_index + 1, api._MAX_RETRIES, wait)
             else:
-                policy = StreamPolicy.resolve(stream_limits or Limits(), resolved)
+                policy = StreamPolicy.resolve(limits, resolved)
                 reader = StreamReader(policy, model_id, api_key, pinned_provider=gemini_provider)
                 assembly = reader.assembly
                 output_tokens = 0

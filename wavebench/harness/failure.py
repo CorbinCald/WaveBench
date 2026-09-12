@@ -38,6 +38,8 @@ def failure_record(
     diagnostics = getattr(exc, "diagnostics", None) or stream or {}
     if isinstance(exc, asyncio.CancelledError) or code == "stream_cancelled":
         category, code, summary = "cancelled", "cancelled", "Cancelled"
+    elif code == "response_headers_timeout":
+        category, summary = "request_timeout", "No response headers received"
     elif (
         code
         in {

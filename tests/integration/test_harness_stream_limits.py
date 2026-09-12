@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -53,6 +54,140 @@ async def conversation(client, **kwargs):
         reasoning_effort=None,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("reject_first", [False, True])
+async def test_missing_headers_times_out_without_replay_and_releases_connection(
+    monkeypatch, reject_first
+):
+    release = asyncio.Event()
+    diagnostics = []
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        if reject_first and requests == 1:
+            return web.Response(status=503, headers={"Retry-After": "0"})
+        await release.wait()
+        return web.Response(
+            body=event({"content": "complete"}, finish_reason="stop") + b"data: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    limits = replace(Limits(), response_headers_seconds=1)
+    async with server(monkeypatch, handler):
+        # A leaked connection after timeout would block the next request.
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=1)) as client:
+            try:
+                with pytest.raises(TurnError) as error:
+                    await asyncio.wait_for(
+                        conversation(
+                            client, stream_limits=limits, on_diagnostics=diagnostics.append
+                        ),
+                        3,
+                    )
+                assert requests == 1 + int(reject_first)
+            finally:
+                release.set()
+            turn = await asyncio.wait_for(conversation(client, stream_limits=limits), 2)
+    assert turn.message["content"] == "complete"
+    assert error.value.failure_code == "response_headers_timeout"
+    assert error.value.request_sent and error.value.usage == {}
+    assert diagnostics == [error.value.diagnostics]
+    assert diagnostics[0]["stage"] == "response_headers"
+    assert diagnostics[0]["policy"] == {"response_headers_seconds": 1}
+    assert 1 <= diagnostics[0]["elapsed_seconds"] < 2
+    assert "private prompt" not in str(error.value) + json.dumps(diagnostics)
+    assert "sk-secret-local" not in str(error.value) + json.dumps(diagnostics)
+
+
+async def test_tls_connection_stall_obeys_response_header_deadline(monkeypatch):
+    closed = asyncio.Event()
+
+    async def handler(reader, writer):
+        try:
+            # Accept TCP but never answer the client's TLS handshake.
+            await reader.read()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            closed.set()
+
+    async with await asyncio.start_server(handler, "127.0.0.1", 0) as listener:
+        monkeypatch.setattr(
+            api, "API_URL", f"https://127.0.0.1:{listener.sockets[0].getsockname()[1]}"
+        )
+        monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
+        async with aiohttp.ClientSession() as client:
+            with pytest.raises(TurnError) as error:
+                await asyncio.wait_for(
+                    conversation(
+                        client, stream_limits=replace(Limits(), response_headers_seconds=1)
+                    ),
+                    2,
+                )
+        await asyncio.wait_for(closed.wait(), 2)
+    assert error.value.failure_code == "response_headers_timeout"
+
+
+async def test_stream_can_outlive_response_header_deadline(monkeypatch):
+    async def handler(request):
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        for _ in range(6):
+            await response.write(event({"content": "working "}))
+            await asyncio.sleep(0.25)
+        await response.write(
+            event(
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "one",
+                            "type": "function",
+                            "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                        }
+                    ]
+                },
+                finish_reason="tool_calls",
+            )
+        )
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    limits = replace(Limits(), response_headers_seconds=1, stream_seconds=3, stream_idle_seconds=1)
+    async with server(monkeypatch, handler) as client:
+        started = time.monotonic()
+        turn = await asyncio.wait_for(conversation(client, stream_limits=limits), 4)
+    assert time.monotonic() - started > limits.response_headers_seconds
+    assert turn.message["tool_calls"][0]["function"]["arguments"] == '{"command":"ls"}'
+    assert turn.adjustments["response_headers"]["limit_seconds"] == 1
+    assert turn.adjustments["response_headers"]["elapsed_seconds"] < 1
+    assert turn.adjustments["stream"]["parsing"]["done"]
+
+
+async def test_cancellation_before_headers_stays_cancellation(monkeypatch):
+    received = asyncio.Event()
+    release = asyncio.Event()
+    diagnostics = []
+
+    async def handler(request):
+        received.set()
+        await release.wait()
+        return web.Response()
+
+    async with server(monkeypatch, handler) as client:
+        task = asyncio.create_task(conversation(client, on_diagnostics=diagnostics.append))
+        try:
+            await asyncio.wait_for(received.wait(), 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+    assert diagnostics[0]["failure_code"] == "request_cancelled"
+    assert diagnostics[0]["stage"] == "response_headers"
 
 
 async def test_rejected_response_body_is_bounded_and_not_exposed(monkeypatch):
