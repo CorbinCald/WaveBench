@@ -60,7 +60,7 @@ Reproduce the current three bounded positive probes with a configured API key
 and the documented Linux sandbox setup:
 
 ```bash
-PYTHONPATH=. timeout 900s python scripts/verify_harness_limits_live.py \
+PYTHONPATH=. python scripts/verify_harness_limits_live.py \
   --live --output /tmp/wavebench-limits-live
 ```
 
