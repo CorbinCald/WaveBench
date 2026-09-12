@@ -699,15 +699,8 @@ class ProgressTracker:
     def _format_harness_details(
         self, name: str, inner_w: int, result: dict | None = None
     ) -> list[str]:
-        """Give cumulative accounting its own line so narrow rows retain OUT and WEB."""
-        budget = self._harness_metrics(name, result)["budget"]
+        """Wrap failure details below the model's metrics."""
         details = []
-        if budget:
-            prefix = "~" if budget.get("estimated") else ""
-            details.append(
-                f"Budget {prefix}{budget['used_tokens']:,} / {budget['limit_tokens']:,} tk; "
-                f"{prefix}{budget['remaining_tokens']:,} left"
-            )
         if result is not None:
             summary = failure_summary(result)
             if summary:

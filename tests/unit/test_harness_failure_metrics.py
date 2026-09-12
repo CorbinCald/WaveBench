@@ -55,7 +55,7 @@ def test_gemini_example_distinguishes_output_and_cumulative_budget(width):
     assert values["budget"]["remaining_tokens"] == 65_312
     rendered = tracker._format_result_row("Gemini", result, 1, width)
     plain = re.sub(r"\033\[[0-9;?]*[a-zA-Z]", "", rendered)
-    assert "934,688 / 1,000,000" in plain and "65,312 left" in plain
+    assert "Budget " not in plain
     assert "Token budget exhausted" in plain
     assert "next input ~80,687" in plain
     assert "17" in plain.split()
@@ -71,6 +71,7 @@ def test_live_budget_counts_cached_input_and_marks_unknown_estimates():
     values = tracker._harness_metrics("Gemini")
     assert values["budget"]["used_tokens"] == 936_788
     assert values["budget"]["estimated"] is True
+    assert tracker._format_harness_details("Gemini", 112) == []
     tracker.update_harness_stream(
         "Gemini",
         {
