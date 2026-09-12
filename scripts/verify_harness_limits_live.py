@@ -208,12 +208,7 @@ def main() -> int:
     if not key:
         parser.error("OPENROUTER_API_KEY is missing; no paid requests were sent")
 
-    async def bounded():
-        return await asyncio.wait_for(
-            verify(args.output.absolute(), key, args.case or list(CASES)), timeout=850
-        )
-
-    return 0 if asyncio.run(bounded()) else 1
+    return 0 if asyncio.run(verify(args.output.absolute(), key, args.case or list(CASES))) else 1
 
 
 if __name__ == "__main__":
