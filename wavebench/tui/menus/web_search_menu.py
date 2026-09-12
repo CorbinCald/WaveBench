@@ -34,6 +34,7 @@ def interactive_web_search(config: dict, *, alternate_screen: bool = True) -> di
         width = max(20, min(100, shutil.get_terminal_size((80, 24)).columns) - 4)
         rows = [
             f"Web search: {search_status(config)} · Harness agents",
+            "Enables web search and reading public source pages.",
             "1. Create a Brave account and choose a Search API plan.",
             "2. Create an API key at the dashboard below.",
             BRAVE_DASHBOARD,

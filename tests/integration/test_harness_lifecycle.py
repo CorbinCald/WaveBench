@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -26,9 +28,12 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
-    from wavebench import web_search
+    from wavebench import web_fetch, web_search
 
     requests = []
+    page_requests = []
+    source_token = uuid.uuid4().hex
+    source_url = ""
 
     async def search(request):
         requests.append(dict(request.query))
@@ -39,16 +44,39 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
                     "results": [
                         {
                             "title": "Reference",
-                            "url": "https://example.com/reference",
-                            "description": "Use 42.",
+                            "url": source_url,
+                            "description": "Open the reference to read the current value.",
                         }
                     ]
                 }
             }
         )
 
+    async def page(request):
+        page_requests.append(request)
+        assert "X-Subscription-Token" not in request.headers
+        assert "Authorization" not in request.headers
+        return web.Response(
+            text=f"<html><h1>Reference</h1><p>{source_token}</p></html>", content_type="text/html"
+        )
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        assert host == "source.test"
+        return [
+            {
+                "hostname": host,
+                "host": "127.0.0.1",
+                "port": port,
+                "family": socket.AF_INET,
+                "proto": 0,
+                "flags": 0,
+            }
+        ]
+
+    monkeypatch.setattr(web_fetch.PublicResolver, "resolve", resolve)
     app = web.Application()
     app.router.add_get("/search", search)
+    app.router.add_get("/reference", page)
     turns = 0
     tracker = ProgressTracker(1, {})
     tracker._running = True
@@ -56,21 +84,31 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
     async def model(client, key, model_id, messages, tools, **kwargs):
         nonlocal turns
         assert ("web_search" in [tool["function"]["name"] for tool in tools]) == enabled
+        assert ("web_fetch" in [tool["function"]["name"] for tool in tools]) == enabled
         assert "test-private-brave-key" not in json.dumps({"messages": messages, "tools": tools})
         name = "wb"
         if enabled and turns == 0:
             assert tracker._harness_metrics(session.name)["web_searches"] == 0
             name, args = "web_search", {"query": "example reference"}
-        elif turns == int(enabled):
+        elif enabled and turns == 1:
+            assert tracker._harness_metrics(session.name)["web_searches"] == 1
+            result = json.loads(messages[-1]["content"])
+            assert result["results"][0]["url"] == source_url
+            assert source_token not in json.dumps(messages)
+            name, args = "web_fetch", {"url": result["results"][0]["url"]}
+        elif turns == 2 * int(enabled):
+            value = "42"
             if enabled:
-                assert tracker._harness_metrics(session.name)["web_searches"] == 1
+                assert tracker._harness_metrics(session.name)["web_fetches"] == 1
                 result = json.loads(messages[-1]["content"])
-                assert result["results"][0]["url"] == "https://example.com/reference"
+                assert source_token in result["content"]
+                value = result["content"].splitlines()[-1]
             args = {
                 "command": "write",
                 "path": "main.py",
                 "content": (
-                    "import os\nassert 'BRAVE_SEARCH_API_KEY' not in os.environ\nprint(42)\n"
+                    "import os\nassert 'BRAVE_SEARCH_API_KEY' not in os.environ\n"
+                    f"print({value!r})\n"
                 ),
             }
         else:
@@ -97,6 +135,7 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
     monkeypatch.setattr(module, "call_conversation", model)
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-private-brave-key")
     async with TestServer(app) as server:
+        source_url = f"http://source.test:{server.port}/reference"
         monkeypatch.setattr(web_search, "BRAVE_URL", str(server.make_url("/search")))
         session = factory(
             auto_open="off",
@@ -107,6 +146,7 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
         await session.execute()
     assert session.status == "success", session.error
     assert len(requests) == int(enabled)
+    assert len(page_requests) == int(enabled)
     assert tracker._harness_metrics(session.name)["web_searches"] == (1 if enabled else None)
     assert session.result()["harness"]["web_search"] == {
         "enabled": enabled,
@@ -114,6 +154,15 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
         "calls": int(enabled),
         "failures": 0,
     }
+    assert session.result()["harness"]["web_fetch"] == {
+        "enabled": enabled,
+        "calls": int(enabled),
+        "failures": 0,
+    }
+    assert any(
+        (source_token if enabled else "42") in path.read_text()
+        for path in session.metadata.glob("run-*.log")
+    )
     assert "test-private-brave-key" not in "".join(
         path.read_text() for path in session.metadata.glob("*.json")
     )

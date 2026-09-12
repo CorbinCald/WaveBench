@@ -65,7 +65,8 @@ wavebench
 
 Interactive startup shows a **Harness / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific history. Harness replaces one-shot code generation with isolated, multi-file projects. Type `c` at the mode prompt to open the configuration menu.
 
-Harness agents can optionally search the web with Brave. Press **`w`** at the
+Harness agents can optionally search the web with Brave and open public source
+pages with `web_fetch` to read text, tables, links, and available dates. Press **`w`** at the
 mode prompt, or run **`wavebench --setup-web-search`**, to open the guided setup:
 create a [Brave Search API key](https://api-dashboard.search.brave.com/app/keys),
 paste it into the masked field, and press Enter to test and enable it. Setup

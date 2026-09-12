@@ -196,19 +196,45 @@ Brave Search. **Settings → Web search (Harness)** opens the same screen with S
 Enter or Tab saves the Settings changes. The validated credential is saved
 immediately, even if you later cancel the surrounding Settings menu. Search is
 disabled by default. Once enabled, every model in a benchmark receives the same
-additional native tool:
+additional native tools:
 
 ```json
 {"name": "web_search", "arguments": {"query": "Python documentation", "count": 5}}
+{"name": "web_fetch", "arguments": {"url": "https://docs.python.org/3/library/asyncio.html"}}
 ```
 
 `query` accepts up to 600 characters and 75 words. `count` defaults to 5 and can
 be 1–10. The tool returns titles, URLs, and snippets from Brave's
 [Web Search endpoint](https://api-dashboard.search.brave.com/api-reference/web/search/get).
-It does not fetch result pages. Search responses enter the agent conversation
-as tool results, with instructions to treat them as untrusted source material
-and cite relevant URLs. Search tools, prompts, and token estimates remain stable
-through build, repair, and context compaction.
+Use `web_fetch` to open a result URL or a public URL supplied in the prompt. It
+returns readable HTML text (including table rows and resolved links), plain text,
+Markdown, or JSON. The result includes the requested and final URL, title,
+retrieval time in UTC, and available source-reported publication/modification
+metadata. Missing dates are null; a retrieval time is not a publication date.
+The session prompt includes the current UTC date and tells models to read sources,
+verify claims and metric definitions, cite URLs, and identify estimates or missing
+evidence. Source content remains untrusted evidence, never instructions. The
+date and instructions are fixed at session creation and retained through repair
+and context compaction.
+
+Page reads return up to 8,000 characters by default. `max_chars` accepts 1–12,000;
+`start` is a zero-based character offset. When `truncated` is true, call again
+with `next_start` as `start` and the same URL. The dispatcher may shorten a
+section further to fit the configured tool-output limit, preserving its
+continuation offset. Four recent pages are cached per model for consistent
+sections; `cached` and `fetched_at` identify reused snapshots. An evicted page
+is downloaded again. For a response whose `next_start` is 8000, continue with:
+
+```json
+{"name": "web_fetch", "arguments": {"url": "https://docs.python.org/3/library/asyncio.html", "start": 8000, "max_chars": 4000}}
+```
+
+This is an HTTP source reader: it does not run JavaScript, log in, or extract PDF
+or binary documents. HTML results explicitly flag that dynamically loaded
+content may be absent. An empty page shell returns an error suggesting a public
+text page or JSON data endpoint. HTTP errors, blocked access, unsupported formats,
+oversized pages, and timeouts produce readable tool errors; there is no automatic
+retry or browser fallback.
 
 Each model gets 20 search attempts across build and repair; set
 `harness.web_search_calls` in `.benchmark_config.json` to change that limit for
@@ -219,6 +245,16 @@ keys, quotas, timeouts, and provider failures return readable tool errors. Reque
 are not automatically retried. Replaying the same tool-call ID returns its saved
 result without another request.
 
+Each model also gets 20 page-read attempts across build and repair, independently
+of searches; configure `harness.web_fetch_calls` to change this. Continuation and
+cached reads count as attempts; replaying the same tool-call ID does not. Reads
+have a 20-second download deadline including redirects, at most five redirects,
+and 2 MB limits on the decompressed response and extracted text. Only public
+HTTP(S) destinations are allowed. Every redirect and the DNS answers used for
+the connection are checked; loopback, private, link-local, and other nonpublic
+addresses are rejected. Reads use no API credentials, ambient proxies, netrc
+authentication, or cookies.
+
 The controller owns requests and credentials; generated code keeps its isolated
 network and receives no Brave key. `harness.web_search` in each result records
 whether search was enabled, its provider, attempts, and failures. Search calls
@@ -227,7 +263,12 @@ the live and final metrics show each model's **WEB SEARCHES** count (**WEB** in
 narrower terminals). It starts at zero, updates after each search attempt,
 includes failed attempts, and persists across repair and compaction. Replayed
 calls do not increase the count. Brave billing is
-separate from the reported OpenRouter cost. `--no-web-search` disables the tool
+separate from the reported OpenRouter cost. `harness.web_fetch` records enabled
+state, attempts, and failures separately; the **READS** column (**GET** in narrow
+terminals) shows page-read attempts. Page reads also contribute to ordinary tool
+counts, logs, time budgets, and model input-token costs, but make no Brave API
+request. Older results without page-read metadata remain supported.
+`--no-web-search` disables both tools
 for one run; an enabled configuration with no key stops before model generation
 and explains how to complete setup.
 
