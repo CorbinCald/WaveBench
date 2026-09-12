@@ -7,12 +7,14 @@ import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urljoin
 
 import aiohttp
 import pytest
 
 from wavebench.harness.commands import launch_descriptor
 from wavebench.harness.config import Limits
+from wavebench.harness.preview import PreviewIdentity
 from wavebench.harness.runtime import Runtime, SetupError
 from wavebench.harness.workspace import allocate_project, allocate_run
 
@@ -111,12 +113,31 @@ async def test_server_ready_preview_reuses_process_and_releases_port(runtime, ki
     managed = await runtime.execute(descriptor, attempt)
     assert attempt["outcome"] == "success", attempt
     pid = managed.process.pid
-    url = await runtime.present(managed, descriptor["preview"])
+    identity = PreviewIdentity("Model A", "vendor/model", 2, "12345678abcdef", "Build a game")
+    url = await runtime.present(managed, descriptor["preview"], identity, 2)
     assert url == await runtime.present(managed, descriptor["preview"])
     async with aiohttp.ClientSession() as client:
         async with client.get(url) as response:
             assert response.status == 200
-            await response.text()
+            page = await response.text()
+            assert identity.label in page
+            assert "Attempt 2" in page
+            assert f'src="{descriptor["preview"]}"' in page
+            assert response.headers["Cache-Control"] == "no-store"
+        async with client.head(url) as response:
+            assert response.status == 200
+            assert await response.read() == b""
+        async with client.post(url) as response:
+            assert response.status == 405
+        async with client.get(urljoin(url, descriptor["preview"])) as response:
+            assert response.status == 200
+            app = await response.text()
+            assert "Benchmark identity" not in app
+            if kind == "static":
+                assert app == source
+        if kind == "static":
+            async with client.get(urljoin(url, "/style.css")) as response:
+                assert await response.text() == "h1 { color: green }"
     assert managed.process.pid == pid
     await managed.stop()
     async with aiohttp.ClientSession() as client:
@@ -210,6 +231,63 @@ async def test_cancelled_lint_settles_cleanup_for_concurrent_stoppers(runtime):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert all(p.process.returncode is not None for p in runtime.processes)
+
+
+async def test_labeled_preview_preserves_post_redirect_cookies_and_websocket(runtime):
+    runtime.workspace.write(
+        "main.js",
+        """const http = require('http');
+const crypto = require('crypto');
+const server = http.createServer((req, res) => {
+  if (req.url === '/redirect') {
+    res.writeHead(302, {Location: '/app?mode=1', 'Set-Cookie': 'review=active; Path=/'});
+    return res.end();
+  }
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => res.end(JSON.stringify({
+    url: req.url, method: req.method, body, cookie: req.headers.cookie
+  })));
+});
+server.on('upgrade', (req, socket) => {
+  const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] +
+    '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\n' +
+    'Connection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n');
+  socket.once('data', chunk => {
+    const length = chunk[1] & 127;
+    const body = Buffer.from(chunk.subarray(6, 6 + length));
+    for (let i = 0; i < length; i++) body[i] ^= chunk[2 + i % 4];
+    socket.end(Buffer.concat([Buffer.from([129, length]), body]));
+  });
+});
+server.listen(process.env.PORT);
+""",
+    )
+    descriptor = launch_descriptor(
+        {"runtime": "node-server", "entry": "main.js"}, runtime.workspace
+    )
+    attempt = {"number": 1}
+    managed = await runtime.execute(descriptor, attempt)
+    assert attempt["outcome"] == "success", attempt
+    identity = PreviewIdentity("Model", "vendor/model", 1, "12345678", "Interactive app")
+    url = await runtime.present(managed, "/app?mode=1", identity)
+    async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as client:
+        async with client.get(urljoin(url, "/redirect")) as response:
+            assert (await response.json(content_type=None))["cookie"] == "review=active"
+        async with client.post(urljoin(url, "/save?mode=1"), data="note=hello&count=2") as response:
+            assert await response.json(content_type=None) == {
+                "url": "/save?mode=1",
+                "method": "POST",
+                "body": "note=hello&count=2",
+                "cookie": "review=active",
+            }
+        async with client.ws_connect(urljoin(url, "/socket")) as socket:
+            await socket.send_str("still interactive")
+            assert await socket.receive_str(timeout=2) == "still interactive"
+        # A wrapper reload after app requests must not reach the generated server.
+        async with client.get(url) as response:
+            assert identity.label in await response.text()
 
 
 async def test_runtime_storage_budget_is_enforced(runtime):

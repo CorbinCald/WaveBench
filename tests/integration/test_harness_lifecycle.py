@@ -8,6 +8,7 @@ import socket
 import sys
 import time
 import uuid
+from urllib.parse import urljoin
 
 import pytest
 
@@ -982,6 +983,10 @@ async def test_remote_previews_use_existing_processes_and_cleanup(
     async with aiohttp.ClientSession() as client:
         for session in (first, second):
             async with client.get(session.preview.url) as response:
+                page = await response.text()
+                assert session.preview_identity.label in page
+                assert 'src="/index.html"' in page
+            async with client.get(urljoin(session.preview.url, "/index.html")) as response:
                 assert "Ready on laptop" in await response.text()
     await first.close()
     assert not paths[0].exists() and paths[1].exists()

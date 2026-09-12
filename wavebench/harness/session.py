@@ -40,6 +40,7 @@ from .context import (
 )
 from .failure import failure_record
 from .handoff import RemotePreview, client_status, destination
+from .preview import PreviewIdentity
 from .runtime import Runtime, SetupError
 from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability
 from .workspace import allocate_project
@@ -99,6 +100,7 @@ class HarnessSession:
         web_search: BraveSearch | None = None,
     ):
         self.name, self.model_id = name, model_id
+        self.preview_identity = PreviewIdentity(name, model_id, slot, run.name, prompt)
         self.preview_destination = preview_destination
         self.remote_preview = None
         self.preview_watch = None
@@ -1114,9 +1116,13 @@ class HarnessSession:
                                 await self.preview.stop()
                             else:
                                 url = await self.runtime.present(
-                                    self.preview, self.descriptor["preview"]
+                                    self.preview,
+                                    self.descriptor["preview"],
+                                    self.preview_identity,
+                                    attempt["number"],
                                 )
                                 attempt["preview_url"] = url
+                                attempt["preview_label"] = self.preview_identity.label
                                 browser_log = self.metadata / "browser.log"
                                 attempt["browser_log"] = str(browser_log)
                                 await self.present_preview(url, browser_log, attempt)
@@ -1127,7 +1133,10 @@ class HarnessSession:
                             display = re.sub(
                                 r"[\x00-\x08\x0b-\x1f\x7f]", "", attempt["diagnostics"][-2000:]
                             )
-                            print(f"  {self.name} runtime output:\n{display}", flush=True)
+                            print(
+                                f"  {self.preview_identity.label} runtime output:\n{display}",
+                                flush=True,
+                            )
                         break
                     self.error = (
                         attempt.get("error")
@@ -1298,7 +1307,7 @@ class HarnessBatch:
                 return
             seconds = self.sessions[0].limits.review_seconds
             for session in previews:
-                print(f"  {session.name} preview: {session.preview.url}")
+                print(f"  {session.preview_identity.label} preview: {session.preview.url}")
             print(
                 f"  Managed previews remain open for up to {seconds}s. Press Enter or Ctrl-C to stop.",
                 flush=True,

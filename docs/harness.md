@@ -24,6 +24,19 @@ off continues to validate and stop the generated app without presenting it.
 Non-web program output remains in the terminal, and generated projects remain
 in their existing output directories.
 
+Every managed web preview opens with a WaveBench header showing the model,
+result number, prompt, short run ID, and execution attempt. The browser tab or
+app window title carries the same identity. Result numbers follow the selected
+model order, so they stay consistent even when generations finish out of order;
+the run ID distinguishes repeated benchmarks. Hover over the model or run ID
+for its full value, or over the prompt to read the full text.
+
+The header stays outside the generated app as you navigate or the app changes
+its own title, on both the host and connected laptop. Generated source files
+are unchanged. **Open app only** opens the original page without the header,
+including for apps that disallow embedding. The terminal review URLs and saved
+attempts also identify the labeled preview.
+
 Laptop previews require the server's `herdr-review` helper with the `offer`
 interface and the existing laptop `herdr-server` companion. Connect using
 `herdr-server` or `herdr-server --public`. Wavebench uses `HERDR_SESSION` (default
