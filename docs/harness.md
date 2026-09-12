@@ -220,10 +220,15 @@ additional native tools:
 be 1–10. The tool returns titles, URLs, and snippets from Brave's
 [Web Search endpoint](https://api-dashboard.search.brave.com/api-reference/web/search/get).
 Use `web_fetch` to open a result URL or a public URL supplied in the prompt. It
-returns readable HTML text (including table rows and resolved links), plain text,
+prefers HTML over negotiated Markdown mirrors, and returns readable HTML text
+(including table rows and resolved links), plain text,
 Markdown, or JSON. The result includes the requested and final URL, title,
 retrieval time in UTC, and available source-reported publication/modification
 metadata. Missing dates are null; a retrieval time is not a publication date.
+HTML extraction prefers the main/article region and removes navigation. A URL
+fragment selects its matching section; missing sections produce a tool error.
+Known Three.js manual hash routes, including the old documentation installation
+URL, resolve to their current article URL. The result preserves both URLs.
 The session prompt includes the current UTC date and tells models to read sources,
 verify claims and metric definitions, cite URLs, and identify estimates or missing
 evidence. Source content remains untrusted evidence, never instructions. The
@@ -244,8 +249,11 @@ is downloaded again. For a response whose `next_start` is 8000, continue with:
 
 This is an HTTP source reader: it does not run JavaScript, log in, or extract PDF
 or binary documents. HTML results explicitly flag that dynamically loaded
-content may be absent. An empty page shell returns an error suggesting a public
-text page or JSON data endpoint. HTTP errors, blocked access, unsupported formats,
+content may be absent. Empty shells, navigation-only pages, and tables containing
+headings without data return errors suggesting a direct article or public data
+endpoint. These are extraction checks, not a guarantee of factual accuracy or
+completeness. Readable results include `evidence_status: "readable"`.
+HTTP errors, blocked access, unsupported formats,
 oversized pages, and timeouts produce readable tool errors; there is no automatic
 retry or browser fallback.
 
@@ -262,11 +270,44 @@ Each model also gets 20 page-read attempts across build and repair, independentl
 of searches; configure `harness.web_fetch_calls` to change this. Continuation and
 cached reads count as attempts; replaying the same tool-call ID does not. Reads
 have a 20-second download deadline including redirects, at most five redirects,
-and 2 MB limits on the decompressed response and extracted text. Only public
+16 MiB limits on both downloaded and decompressed responses, and a separate
+2-million-character extracted-text limit. HTML is parsed incrementally, so
+large script payloads do not consume the text allowance or enter cached pages.
+Gzip/deflate decompression is bounded before allocating expanded output; HTML
+also has limits of 100,000 elements and 512 nesting levels. Only public
 HTTP(S) destinations are allowed. Every redirect and the DNS answers used for
 the connection are checked; loopback, private, link-local, and other nonpublic
 addresses are rejected. Reads use no API credentials, ambient proxies, netrc
 authentication, or cookies.
+
+Search and read results include a `research_budget` with remaining calls and,
+inside a model session, remaining research turns, time, and tokens. Exhausted
+tools are removed from the next model request. Rejected calls still receive
+the budget information. Research closes permanently for that session when an
+allowance or implementation reserve is reached, including across repair and
+compaction; attempts to call a withdrawn tool cannot start network work.
+
+The defaults are eight model requests containing research, 300 active seconds,
+and 200,000 charged tokens. Configure `harness.research_turns`,
+`harness.research_seconds`, and `harness.research_tokens` to lower or raise these
+caps. The controller additionally reserves at least half the phase's model turns
+(at least two), two thirds of its active time, and two thirds of the overall
+token budget for implementation, validation, and submission. Smaller task budgets
+therefore reduce the research allowance. A batch of searches/reads uses one
+research turn; failed and mixed research/workspace turns also count. Research
+time includes model generation and tools, excluding API queue waits. Research
+token charges include repeated input and all output on those turns. A model
+response can cross a research threshold before its requested tools are known;
+the controller then rejects its research calls while allowing workspace work.
+All research tools in a batch share the remaining research deadline.
+
+Models receive the allowance up front, a warning as research runs low, and
+instructions to build and submit when it closes. This cutoff retains normal
+output capacity for implementation; the separate finishing warning still bounds
+output when the final task budget runs low. Only the model's `wb done` submits
+the project; reserving capacity cannot guarantee that a model uses it successfully.
+Results record research usage, remaining allowance, and the closure reason under
+`harness.research`, with guidance events in the budget decision records.
 
 The controller owns requests and credentials; generated code keeps its isolated
 network and receives no Brave key. `harness.web_search` in each result records
