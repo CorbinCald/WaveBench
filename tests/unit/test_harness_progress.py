@@ -406,6 +406,37 @@ def test_page_reads_and_searches_fit_live_and_final_rows(tracker, width, status)
     assert "page reads 13" in tracker._format_harness_tool_metrics("model", result)
 
 
+@pytest.mark.parametrize("finished", [False, True])
+def test_model_names_fit_beside_searches_and_page_reads(finished):
+    names = ["gpt6Astra", "claudeFable5.1", "grok4.3", "kimiK3", "gpt5.6Luna"]
+    results = {}
+    tracker = ProgressTracker(len(names), results, model_names=None if finished else names)
+    usage = {"api_turns": 5, "completion_tokens": 5961, "cost": 0.25}
+    tools = {"calls": 21, "failures": 2}
+    search = {"enabled": True, "calls": 7}
+    fetch = {"enabled": True, "calls": 14}
+    for index, name in enumerate(names):
+        if finished or index == 0:
+            results[name] = {
+                "status": "failed" if index == 0 else "success",
+                "time_s": 50,
+                "usage": usage,
+                "harness": {"tool_usage": tools, "web_search": search, "web_fetch": fetch},
+            }
+        else:
+            tracker.update_harness(name, usage, 50)
+            tracker.update_harness_tools(name, tools, web_search=search, web_fetch=fetch)
+            tracker.set_phase(name, "building")
+
+    header = plain(tracker._format_harness_header(112))
+    assert "WEB" in header and "READS" in header and "TIME" in header
+    for name in names:
+        row = plain(tracker._format_harness_row(name, 112, results.get(name)))
+        assert row[2:].startswith(name + " ")
+        assert "7" in row.split() and "14" in row.split()
+        assert len(header) == len(row) == 112
+
+
 def test_disabled_search_and_older_results_do_not_add_a_column(tracker):
     tracker.update_harness_tools(
         "model",
