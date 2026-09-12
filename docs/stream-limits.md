@@ -18,6 +18,7 @@ Configure these positive integers inside the existing `harness` settings object:
 | `stream_output_max_bytes` | 32 MiB | Absolute generated-text ceiling |
 | `stream_frame_bytes` | 2 MiB | Maximum incomplete SSE event or line |
 | `stream_assembly_bytes` | 32 MiB | Conservative allowance for retained parsed fields |
+| `response_headers_seconds` | 60 | Maximum time from starting an HTTP request to receiving its response headers |
 | `stream_seconds` | 1,800 | Maximum elapsed time after response headers |
 | `stream_idle_seconds` | 60 | Maximum wait for the next response-body bytes |
 
@@ -33,6 +34,22 @@ The default stream and active build limits are both 1,800 seconds (30 minutes).
 Each response is still bounded by the remaining active phase time; the repair
 phase defaults to 300 seconds. Receiving output resets only the idle wait, not
 the stream duration or phase deadline. Saved settings override these defaults.
+
+The separate response-header deadline covers DNS, connection/TLS setup, sending
+the request, and waiting for complete response headers. It applies to each HTTP
+attempt, including attempts after an explicit rejection. Once headers arrive,
+the stream duration and idle guards take over. This allows a healthy stream to
+outlive the header deadline while ending a stalled initial request promptly.
+The active phase deadline can interrupt either stage sooner.
+
+A header timeout is reported as `request_timeout` / `response_headers_timeout`
+with the summary `No response headers received`, its effective limit, stage,
+and elapsed seconds. Cancellation during this stage retains `request_cancelled`
+diagnostics and remains cancellation rather than a header timeout. No response
+content or credentials are recorded. Successful requests record header timing in
+`adjustments.response_headers`. Requests without headers are never automatically
+replayed: provider acceptance and usage are unknown, so the saved failed turn
+retains the input budget estimate and missing provider accounting.
 
 Raw bytes include SSE comments, JSON framing, and provider metadata. Generated
 bytes count content, reasoning text, tool names, and tool arguments separately.
@@ -92,15 +109,28 @@ session can retain evidence even when a phase deadline interrupts the request.
 Deterministic verification:
 
 ```bash
-python -m pytest tests/integration/test_harness_protocol.py tests/integration/test_harness_stream_limits.py
+python -m pytest tests/integration/test_harness_protocol.py tests/integration/test_harness_stream_limits.py tests/integration/test_harness_failure_results.py
 ```
 
 The local HTTP tests exercise a valid tool response with more than 8 MiB of
 framing, output/frame/raw/assembly overflows, malformed JSON and metadata, prompt
 echoes in model/provider fields, recognized public identities, split UTF-8,
-multiline SSE events, usage preservation, cancellation, and both timeouts.
+multiline SSE events, usage preservation, cancellation, and stream timeouts.
+Header deadline coverage includes withheld headers, stalled TLS handshakes,
+HTTP rejection followed by a stalled retry, connection cleanup, cancellation,
+an earlier phase deadline, saved failure accounting, and a healthy tool stream
+that outlives the header deadline.
 They use no paid provider calls. Live DeepSeek generation and tool-use evidence
 must be recorded separately with the actual observed result.
+
+The real interactive Harness CLI was also exercised in a 110 × 32 terminal
+with local HTTP fixtures, isolated temporary settings and outputs, and one
+process slot. With a one-second header deadline, the stalled-header fixture
+made one request, executed no tools, and displayed `No response headers received`;
+provider usage and cost remained unknown. A second fixture streamed for more
+than one second before completing a valid tool call, then wrote, linted, and
+successfully executed a Python project in three model requests. Temporary
+settings and outputs were removed after verification.
 
 Protocol behavior was checked against the [OpenRouter streaming reference](https://openrouter.ai/docs/api/reference/streaming)
 on 2026-09-11, including heartbeat comments, final usage chunks, and mid-stream

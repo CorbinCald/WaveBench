@@ -343,6 +343,7 @@ explicit records. The model must still submit its work itself.
 | Tool response / saved subprocess diagnostics | 16,000 characters / 8 MiB per subprocess |
 | Stream body / generated text | Output-scaled, capped at 128 MiB / 32 MiB |
 | Incomplete stream event / retained parsed fields | 2 MiB / 32 MiB |
+| Connection, request send, and response headers | 60 seconds per HTTP attempt |
 | Stream duration / idle wait | 1,800 / 60 seconds, within the active-phase deadline |
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
