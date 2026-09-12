@@ -63,8 +63,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", choices=list(DESTINATIONS), default="automatic")
     parser.add_argument("--menu", action="store_true", help="Choose the destination in the real configuration menu first")
-    parser.add_argument("--review-seconds", type=int, default=600, choices=range(1, 901), metavar="1..900")
+    parser.add_argument("--review-seconds", type=int, default=600)
     args = parser.parse_args()
+    if args.review_seconds <= 0:
+        parser.error("--review-seconds must be positive")
 
     def stop(signum, frame):
         raise KeyboardInterrupt

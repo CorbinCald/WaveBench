@@ -28,7 +28,7 @@ Laptop previews require the server's `herdr-review` helper with the `offer`
 interface and the existing laptop `herdr-server` companion. Connect using
 `herdr-server` or `herdr-server --public`. Wavebench uses `HERDR_SESSION` (default
 `work`); run it in the same server session as the laptop connection. The laptop
-client needs no update for this feature. Plain SSH without the companion can run
+client and server helper must both be current. Plain SSH without the companion can run
 Wavebench but does not establish automatic preview forwarding.
 
 The controller publishes each existing sandbox preview's loopback proxy; it
@@ -40,11 +40,10 @@ helpers produce an actionable presentation error while preserving the actual
 runtime result.
 
 Enter, Ctrl-C, review timeout, or controller exit closes the registrations and
-managed apps. Each presented preview also has a hard 15-minute lifetime from
-presentation, including time spent waiting for other generations or a laptop.
-The existing default review window remains 10 minutes after the batch completes,
-subject to that per-preview cap. Expiry closes the preview; it does not delete
-the generated project or restart it unattended.
+managed apps. Previews stay active while waiting for other generations or a
+laptop. The configured review window defaults to 10 minutes after the batch
+completes. Closing a preview preserves the generated project. Clean the task up
+when done.
 
 ## File tools
 
