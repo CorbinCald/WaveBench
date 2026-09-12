@@ -18,7 +18,7 @@ Configure these positive integers inside the existing `harness` settings object:
 | `stream_output_max_bytes` | 32 MiB | Absolute generated-text ceiling |
 | `stream_frame_bytes` | 2 MiB | Maximum incomplete SSE event or line |
 | `stream_assembly_bytes` | 32 MiB | Conservative allowance for retained parsed fields |
-| `stream_seconds` | 300 | Maximum elapsed time after response headers |
+| `stream_seconds` | 1,800 | Maximum elapsed time after response headers |
 | `stream_idle_seconds` | 60 | Maximum wait for the next response-body bytes |
 
 Settings use byte counts, so 1 MiB is `1048576`. Each minimum must be no greater
@@ -28,6 +28,11 @@ output allowance includes model/context limits and any affordable-token adjustme
 from a rejected HTTP request. With 64,000 resolved output tokens, defaults allow
 65,536,000 raw bytes and 4,096,000 generated UTF-8 bytes. Raising one limit never
 disables the other limits. Existing session/phase deadlines can expire sooner.
+
+The default stream and active build limits are both 1,800 seconds (30 minutes).
+Each response is still bounded by the remaining active phase time; the repair
+phase defaults to 300 seconds. Receiving output resets only the idle wait, not
+the stream duration or phase deadline. Saved settings override these defaults.
 
 Raw bytes include SSE comments, JSON framing, and provider metadata. Generated
 bytes count content, reasoning text, tool names, and tool arguments separately.
