@@ -53,7 +53,7 @@ proving the real LLM issued the native call and consumed its tool response.
 
 Each used `web_search`, followed by `wb` write, lint, and done. Returned model
 IDs matched the requested IDs. The runs used one process at a time, an
-eight-turn / 24,000-token build budget per model, and a 15-minute task timeout.
+eight-turn / 24,000-token build budget per model.
 Temporary servers, workspaces, and raw evidence were cleaned up afterward.
 
 ## Live search counts
