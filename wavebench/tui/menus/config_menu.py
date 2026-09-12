@@ -21,6 +21,7 @@ from typing import Any
 
 from wavebench.api import fetch_top_models
 from wavebench.harness.config import Limits
+from wavebench.harness.handoff import DESTINATIONS
 from wavebench.models import (
     IMAGE_MODEL_MAPPING,
     MODEL_MAPPING,
@@ -279,6 +280,13 @@ def interactive_config_menu(
             "value": current_config.get("auto_open", "incremental"),
             "type": "cycle",
             "choices": AUTO_OPEN_CHOICES,
+        },
+        {
+            "key": "preview_destination",
+            "label": "Preview destination",
+            "value": current_config.get("preview_destination", "automatic"),
+            "type": "cycle",
+            "choices": list(DESTINATIONS),
         },
         {
             "key": "web_search",
@@ -582,6 +590,8 @@ def interactive_config_menu(
                             else:
                                 val_s = f"{S.HYEL}{val}{S.RST}"
                                 chk = f"{S.HYEL}~{S.RST}"
+                        elif item.get("key") == "preview_destination":
+                            val_s = DESTINATIONS.get(item["value"], "Automatic")
                         elif item.get("key") == "auto_open":
                             if val == "off":
                                 val_s = f"{S.DIM}{val}{S.RST}"
