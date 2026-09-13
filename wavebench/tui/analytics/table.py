@@ -3,11 +3,13 @@
 Aggregates per-model stats across every recorded run, sorts by the
 selected criterion, prints a ranked table with pass rate, average time,
 token usage, and cost, followed by a totals row and (in full mode) a
-"recent prompts" tail.
+Harness breakdown and "recent prompts" tail. Compact mode limits the
+leaderboard to ten models; the full report includes every model.
 
 Read-only with respect to ``history``; writes only to stdout via
 ``print()``. The sort criterion is a string from the set
-``{"runs", "avg_time", "rate", "avg_tokens", "cost"}``.
+``{"runs", "avg_time", "rate", "avg_tokens", "cost", "speed", "cache",
+"tool_fail", "cost_per_pass", "p95"}``.
 """
 
 from __future__ import annotations
@@ -24,12 +26,14 @@ from wavebench.tui.styles import (
     _box_row,
     _box_sep,
     _box_top,
-    _dot,
     _truncate,
     _tw,
     format_cost,
     format_duration,
 )
+
+from .harness import aggregate_harness, usage_measurement
+from .harness_table import display_harness_analytics
 
 
 def display_analytics(
@@ -59,19 +63,21 @@ def display_analytics(
                     "times": [],
                     "tokens": [],
                     "costs": [],
+                    "partial_cost": False,
                 }
             s = stats[name]
             s["runs"] += 1
-            c = res.get("cost")
-            if c is not None:
-                s["costs"].append(c)
+            cost = usage_measurement(res, "cost")
+            if cost.value is not None:
+                s["costs"].append(cost.value)
+            s["partial_cost"] |= cost.incomplete
             status = res.get("status", "failed")
             if status == "success":
                 s["ok"] += 1
                 t = res.get("time_s")
                 if t is not None:
                     s["times"].append(t)
-                usage = res.get("usage", {})
+                usage = res.get("usage") or {}
                 tkns = usage.get("total_tokens")
                 if tkns is not None:
                     s["tokens"].append(tkns)
@@ -80,8 +86,10 @@ def display_analytics(
             else:
                 s["fail"] += 1
 
+    harness_models, harness_total = aggregate_harness(history)
+
     def _sort_key(item: Any) -> Any:
-        _, s = item
+        name, s = item
         rate = s["ok"] / s["runs"] if s["runs"] else 0
         avg_t = sum(s["times"]) / len(s["times"]) if s["times"] else float("inf")
         avg_tk = sum(s["tokens"]) / len(s["tokens"]) if s["tokens"] else 0
@@ -95,7 +103,33 @@ def display_analytics(
         elif sort_by == "avg_tokens":
             return (-avg_tk, -rate)
         elif sort_by == "cost":
-            return (total_cost, -rate)
+            return (s["partial_cost"], total_cost, -rate)
+        elif sort_by in {"speed", "cache", "tool_fail", "cost_per_pass", "p95"}:
+            harness = (
+                harness_models.get(name.removesuffix(" [harness]"))
+                if name.endswith(" [harness]")
+                else None
+            )
+            value = None
+            partial = False
+            if harness:
+                if sort_by == "speed":
+                    value = harness.speed.value
+                elif sort_by == "cache":
+                    value = harness.cache.value
+                elif sort_by == "tool_fail":
+                    value = harness.tool_failures.value
+                elif sort_by == "cost_per_pass":
+                    value = harness.cost_per_pass.value
+                    partial = harness.cost_per_pass.incomplete
+                else:
+                    value = harness.latency()[1]
+            direction = -1 if sort_by in {"speed", "cache"} else 1
+            return (
+                2 if value is None else int(partial),
+                direction * value if value is not None else 0,
+                -s["runs"],
+            )
         return (-s["runs"], -rate, avg_t)
 
     ranked = sorted(stats.items(), key=_sort_key)
@@ -120,25 +154,25 @@ def display_analytics(
     print(_box_row(hdr, w))
     print(_box_sep("", w))
 
-    # ── Table rows (top 10 by usage, totals from all) ───────────────────────
+    # ── Table rows (compact top 10, full report shows every model) ─────────
     total_calls = total_ok = 0
     all_times: list[float] = []
     all_costs: list[float] = []
 
-    MAX_DISPLAY = 10
+    max_display = 10 if compact else len(ranked)
     for idx, (name, s) in enumerate(ranked):
         total_calls += s["runs"]
         total_ok += s["ok"]
         all_times.extend(s["times"])
         all_costs.extend(s["costs"])
 
-        if idx >= MAX_DISPLAY:
+        if idx >= max_display:
             continue
 
         rate = (s["ok"] / s["runs"] * 100) if s["runs"] else 0
         avg_v = sum(s["times"]) / len(s["times"]) if s["times"] else None
         avg_tk = sum(s["tokens"]) / len(s["tokens"]) if s["tokens"] else None
-        avg_cost = sum(s["costs"]) / len(s["costs"]) if s["costs"] else None
+        avg_cost = sum(s["costs"]) / s["runs"] if s["costs"] else None
         total_cost = sum(s["costs"]) if s["costs"] else None
 
         rate_s = f"{rate:>4.0f}%"
@@ -150,13 +184,16 @@ def display_analytics(
             rate_c = f"{S.HRED}{rate_s}{S.RST}"
 
         avg_tk_s = f"{int(avg_tk):,}" if avg_tk is not None else "—"
-        avg_cost_s = format_cost(avg_cost) if avg_cost is not None else "—"
-        total_cost_s = format_cost(total_cost) if total_cost is not None else "—"
+        marker = "≥" if s["partial_cost"] else ""
+        avg_cost_s = marker + (format_cost(avg_cost) or "$0.000") if avg_cost is not None else "—"
+        total_cost_s = (
+            marker + (format_cost(total_cost) or "$0.000") if total_cost is not None else "—"
+        )
 
         if narrow:
             rows = [
                 name,
-                f"{s['runs']} runs · {rate:.0f}% passed · avg {format_duration(avg_v)} · avg tokens {avg_tk_s}",
+                f"{s['runs']} run{'s' if s['runs'] != 1 else ''} · {rate:.0f}% passed · avg {format_duration(avg_v)} · avg tokens {avg_tk_s}",
                 f"avg cost {avg_cost_s} · total {total_cost_s}",
             ]
             for row in rows:
@@ -175,8 +212,8 @@ def display_analytics(
             )
         )
 
-    if len(ranked) > MAX_DISPLAY:
-        hidden = len(ranked) - MAX_DISPLAY
+    if len(ranked) > max_display:
+        hidden = len(ranked) - max_display
         print(_box_row(f"{S.DIM}+{hidden} more model{'s' if hidden != 1 else ''}{S.RST}", w))
 
     overall = (total_ok / total_calls * 100) if total_calls else 0
@@ -184,26 +221,30 @@ def display_analytics(
     all_tokens = [t for s in stats.values() for t in s["tokens"]]
     avg_tk_all = f"{int(sum(all_tokens) / len(all_tokens)):,}" if all_tokens else "—"
     total_spend = sum(all_costs) if all_costs else None
-    avg_cost_all = (sum(all_costs) / len(all_costs)) if all_costs else None
-    total_spend_s = format_cost(total_spend) if total_spend is not None else "—"
-    avg_cost_all_s = format_cost(avg_cost_all) if avg_cost_all is not None else "—"
+    avg_cost_all = (sum(all_costs) / total_calls) if all_costs else None
+    marker = "≥" if any(s["partial_cost"] for s in stats.values()) else ""
+    total_spend_s = (
+        marker + (format_cost(total_spend) or "$0.000") if total_spend is not None else "—"
+    )
+    avg_cost_all_s = (
+        marker + (format_cost(avg_cost_all) or "$0.000") if avg_cost_all is not None else "—"
+    )
 
     print(_box_sep("Totals", w))
-    print(
-        _box_row(
-            f"{total_calls} calls {_dot} {total_ok} passed {_dot} "
-            f"{S.BOLD}{overall:.0f}%{S.RST} {_dot} avg {_styles.ACCENT}{avg_all}{S.RST} "
-            f"{_dot} avg tkns {S.DIM}{avg_tk_all}{S.RST}",
-            w,
-        )
-    )
-    print(
-        _box_row(
-            f"avg cost {S.YEL}{avg_cost_all_s}{S.RST} {_dot} "
-            f"total spend {S.BOLD}{S.YEL}{total_spend_s}{S.RST}",
-            w,
-        )
-    )
+    for row in (
+        f"{total_calls} calls · {total_ok} passed · {overall:.0f}% · avg {avg_all} · avg tkns {avg_tk_all}",
+        f"avg cost {avg_cost_all_s} · total spend {total_spend_s}",
+        "Time/token averages: passed runs. Costs: all outcomes; ≥ partial, — unknown.",
+    ):
+        for line in textwrap.wrap(row, max(1, inner)):
+            print(_box_row(line, w))
+
+    harness_order = [
+        name.removesuffix(" [harness]")
+        for name, _ in ranked
+        if name.removesuffix(" [harness]") in harness_models and name.endswith(" [harness]")
+    ]
+    display_harness_analytics(harness_models, harness_total, harness_order, w, compact=compact)
 
     # ── Recent prompts (full view only) ────────────────────────────────────
     if not compact and runs:

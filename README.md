@@ -101,7 +101,7 @@ Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**.
 | `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
 | `--open off\|incremental\|after_all` / `--auto-open …` | Schedule harness validation and present managed previews. `off` still validates, headlessly; `after_all` waits for initial generation. New configurations default to `incremental` |
 | `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
-| `--stats` | Display lifetime analytics and exit |
+| `--stats` | Display all lifetime models plus Harness efficiency, reliability, budget, and failure breakdowns |
 | `--clear-history` | Reset all analytics history |
 
 Examples:
@@ -142,7 +142,7 @@ The menu has four tabs:
 - **Image** — Select image-output models separately from text and speech models. If none are selected, image mode uses its bundled defaults.
 - **Settings** — Configure:
   - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Unsupported values are mapped per model where possible.
-  - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`.
+  - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`; Harness comparisons also support `speed`, `cache`, `tool_fail`, `cost_per_pass`, and `p95`. Missing measurements sort last.
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
   - **Auto-open files** — `off`, `incremental`, or `after_all`.

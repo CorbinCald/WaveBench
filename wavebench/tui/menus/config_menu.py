@@ -199,7 +199,18 @@ def interactive_config_menu(
     from wavebench.tui.styles import THEME_NAMES
 
     REASONING_CHOICES = ["max", "xhigh", "high", "medium", "low", "off"]
-    SORT_CHOICES = ["runs", "avg_time", "rate", "avg_tokens", "cost"]
+    SORT_CHOICES = [
+        "runs",
+        "avg_time",
+        "rate",
+        "avg_tokens",
+        "cost",
+        "speed",
+        "cache",
+        "tool_fail",
+        "cost_per_pass",
+        "p95",
+    ]
     AUTO_OPEN_CHOICES = ["off", "incremental", "after_all"]
     TTS_VOICE_CHOICES = [
         "alloy",

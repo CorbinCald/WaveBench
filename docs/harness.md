@@ -476,6 +476,39 @@ repair time; an `after_all` wait does not inflate model performance time.
 Lifetime analytics label harness records and do not mix them into historical
 one-shot model rows. Failed runs' known costs are also included.
 
+`wavebench --stats` shows every recorded model and a Harness total plus a
+breakdown for each Harness model:
+
+- Input/output/total tokens, API turns and average turns, generation speed,
+  cache hits, tool calls and failure rate, web searches, and source-page reads.
+- Pass/fail/cancel counts, spend including unsuccessful work, and cost per
+  successful run. Cost per pass divides all incurred model spend by the number
+  of successes; it remains unknown when no run passed. Search service charges
+  are separate. Compaction turns and spend are shown as a subset, not added again.
+- Median and nearest-rank p95 active time for successful runs, with sample counts;
+  first-pass rate, repair frequency and recovery rate; average budget utilization
+  and the number of runs that used at least 90% of their configured token budget.
+- Average build, repair, API, tool, queue, setup, runtime and compaction durations,
+  API retry counts, and the distribution of failure categories. Phase durations
+  overlap and should not be added together. A pass checks runtime/startup only;
+  it does not score project quality.
+
+Speed divides measured output tokens by the matching API seconds. Cache hits
+are weighted by matching prompt tokens, and tool failure rates by matching tool
+calls. These rates include unsuccessful runs and never average per-run
+percentages. Metrics with incomplete coverage show the measured run count;
+missing measurements display `—`, partial totals display `≥`, and estimated
+budget figures retain `~`. Older history remains readable without migration.
+Budget utilization averages each run's used/limit ratio, so different configured
+budgets remain comparable. Small samples make p95 unstable; the displayed sample
+count helps judge it.
+
+The post-benchmark analytics keep the top-ten leaderboard and a compact Harness
+summary, with all models included in totals. In Settings, analytics can also sort
+by `speed` or `cache` (highest first), or `tool_fail`, `cost_per_pass`, or `p95`
+(lowest first). Unmeasured results follow measured results, and partial costs
+follow complete costs.
+
 The live dashboard and final results table show each model's status, generated
 output tokens (`OUT TK`, or `OUT` on narrow terminals), output tokens per second
 (`tk/s`), cost, turns, elapsed time, cache hit percentage, tools used, and tool
