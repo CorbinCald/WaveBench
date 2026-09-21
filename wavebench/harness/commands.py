@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import copy
 import json
 import shlex
 import time
@@ -65,6 +67,61 @@ TOOL_SCHEMA = [
         },
     }
 ]
+
+SPAWN_TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "spawn_agent",
+        "description": (
+            "Delegate one self-contained task to a subagent of your own model. It works in this "
+            "same workspace with wb file tools and lint, but cannot submit or spawn, and it starts "
+            "with an empty context: task must be a complete brief with the objective, the exact "
+            "files it owns, interfaces or contracts to follow, constraints, and what to report. "
+            "Call spawn_agent several times in one turn to run agents in parallel, giving them "
+            "disjoint files. Each call returns when its agent finishes, with the report, the "
+            "files it changed, and its usage. You remain responsible for integration, lint, "
+            "and done."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Short label for the agent, for example api-routes.",
+                },
+                "task": {"type": "string", "description": "Complete brief for the agent."},
+                "read_only": {
+                    "type": "boolean",
+                    "description": "True for research or review agents that must not change files.",
+                },
+            },
+            "required": ["name", "task"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _subagent_schema() -> list[dict]:
+    """The lead's wb schema without submission; subagents report instead of calling done."""
+    schema = copy.deepcopy(TOOL_SCHEMA[0])
+    function = schema["function"]
+    function["description"] = (
+        "Workspace commands; relative paths. write replaces UTF-8 content; edit replaces "
+        "one exact old match with new. read start/end are inclusive line numbers. "
+        "delete needs recursive for a subtree. lint performs trusted static checks on the "
+        "entire project. Batch independent native calls. There is no done: the lead agent "
+        "submits the project after reading your report. No shell, package scripts, or GUI."
+    )
+    properties = function["parameters"]["properties"]
+    properties["command"]["enum"] = [c for c in properties["command"]["enum"] if c != "done"]
+    for key in ("runtime", "entry", "args", "preview"):
+        properties.pop(key)
+    return [schema]
+
+
+SUBAGENT_TOOL_SCHEMA = _subagent_schema()
+RESEARCH_TOOLS = frozenset({"web_search", "web_fetch"})
 
 
 def parse_command(text: str, data: dict | None = None) -> dict:
@@ -139,6 +196,10 @@ class Dispatcher:
         on_phase=None,
         on_tool_result=None,
         web_search: BraveSearch | None = None,
+        *,
+        subagents=None,
+        parent: Dispatcher | None = None,
+        read_only: bool = False,
     ):
         self.workspace = workspace
         self.runtime = runtime
@@ -147,16 +208,33 @@ class Dispatcher:
         self.on_phase = on_phase or (lambda _: None)
         self.on_tool_result = on_tool_result or (lambda _: None)
         self.tool_usage = {"calls": 0, "failures": 0}
+        # A subagent's dispatcher routes research through its lead's quotas and
+        # adds its tool counts to the lead's totals; it can neither submit nor spawn.
+        self.subagents = subagents
+        self.parent = parent
+        self.read_only = read_only
+        if parent is not None:
+            web_search = parent.web_search
         self.web_search = web_search
         self.web_search_usage = {"calls": 0, "failures": 0}
-        self.web_fetch = WebFetch() if web_search is not None else None
+        self.web_fetch = (
+            parent.web_fetch if parent is not None else WebFetch() if web_search else None
+        )
         self.web_fetch_usage = {"calls": 0, "failures": 0}
         self.research_closed: str | None = None
         self.research_deadline: float | None = None
         self.research_progress: dict = {}
-        self.tools = (
-            [*TOOL_SCHEMA, WEB_FETCH_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
-        )
+        if parent is not None:
+            self.tools = [
+                *SUBAGENT_TOOL_SCHEMA,
+                *(t for t in parent.tools if t["function"]["name"] in RESEARCH_TOOLS),
+            ]
+        else:
+            self.tools = (
+                [*TOOL_SCHEMA, WEB_FETCH_SCHEMA, WEB_SEARCH_SCHEMA] if web_search else TOOL_SCHEMA
+            )
+            if subagents is not None:
+                self.tools = [*self.tools, SPAWN_TOOL_SCHEMA]
         self.submission: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
@@ -167,28 +245,38 @@ class Dispatcher:
         """Count settled tool outcomes; replaying an identical call adds no work."""
         self.tool_usage["calls"] += 1
         self.tool_usage["failures"] += int(not result["ok"])
-        self.on_tool_result(self.tool_usage.copy())
+        totals = self.tool_usage
+        if self.parent is not None:
+            self.parent.tool_usage["calls"] += 1
+            self.parent.tool_usage["failures"] += int(not result["ok"])
+            totals = self.parent.tool_usage
+        self.on_tool_result(totals.copy())
         return result
 
     def reopen(self) -> None:
         self.submission = None
 
     def available_tools(self) -> list[dict]:
-        return [
-            tool
-            for tool in self.tools
-            if tool["function"]["name"] == "wb"
-            or (
-                not self.research_closed
-                and (
-                    self.web_search_usage["calls"] < self.limits.web_search_calls
-                    if tool["function"]["name"] == "web_search"
-                    else self.web_fetch_usage["calls"] < self.limits.web_fetch_calls
-                )
-            )
-        ]
+        research = self.parent if self.parent is not None else self
+        tools = []
+        for tool in self.tools:
+            name = tool["function"]["name"]
+            if name == "wb":
+                tools.append(tool)
+            elif name == "spawn_agent":
+                if self.subagents is not None and self.subagents.available():
+                    tools.append(tool)
+            elif not research.research_closed and (
+                research.web_search_usage["calls"] < self.limits.web_search_calls
+                if name == "web_search"
+                else research.web_fetch_usage["calls"] < self.limits.web_fetch_calls
+            ):
+                tools.append(tool)
+        return tools
 
     def research_budget(self) -> dict:
+        if self.parent is not None:
+            return self.parent.research_budget()
         return {
             **self.research_progress,
             "search_calls_left": max(
@@ -199,6 +287,9 @@ class Dispatcher:
         }
 
     async def _research(self, name: str, command: dict) -> dict:
+        if self.parent is not None:
+            # Shared allowances, deadline, and closure: the lead's research budget is per model.
+            return await self.parent._research(name, command)
         if self.research_closed:
             raise ValueError(
                 f"Research is closed: {self.research_closed}. Build, validate, and submit with wb done"
@@ -266,6 +357,10 @@ class Dispatcher:
         known = set(TOOL_SCHEMA[0]["function"]["parameters"]["properties"])
         if verb not in allowed or set(command) - known:
             raise ValueError("unknown verb or unexpected arguments")
+        if self.parent is not None and verb == "done":
+            raise ValueError("subagents cannot submit; finish with a report for the lead agent")
+        if self.read_only and verb in {"write", "edit", "delete"}:
+            raise ValueError("this agent is read-only; report findings instead of changing files")
         if self.submission is not None:
             raise ValueError("phase already submitted; skipped")
         # Some providers normalize optional schema fields to required fields.
@@ -290,10 +385,20 @@ class Dispatcher:
             raise
         return {"content": value} if verb in {"read", "ls"} else value
 
+    async def _spawn(self, call_id: str, command: dict) -> dict:
+        if self.parent is not None:
+            raise ValueError("subagents cannot spawn agents; do the work yourself and report")
+        if self.subagents is None:
+            raise ValueError("spawn_agent is not enabled for this benchmark")
+        return await self.subagents.spawn(call_id, command)
+
     @staticmethod
-    def _conflicts(left: dict, right: dict) -> bool:
+    def _conflicts(left: dict, right: dict, left_tool: str = "wb", right_tool: str = "wb") -> bool:
         if left.get("command") in {"lint", "done"} or right.get("command") in {"lint", "done"}:
             return True
+        if "spawn_agent" in (left_tool, right_tool):
+            # Subagent runs overlap with each other and with the lead's own file work.
+            return False
         if left.get("command") in {"ls", "read"} and right.get("command") in {"ls", "read"}:
             return False
         a = str(left.get("path", ".")).strip("/")
@@ -308,7 +413,9 @@ class Dispatcher:
             semaphore = asyncio.Semaphore(self.limits.parallel_calls)
             tasks = []
             commands = []
-            has_done = any(
+            names = []
+            # A subagent's done is rejected individually; only the lead can submit.
+            has_done = self.parent is None and any(
                 (c.get("arguments") or {}).get("command") == "done" and c.get("name", "wb") == "wb"
                 for c in calls
                 if isinstance(c.get("arguments"), dict)
@@ -316,10 +423,11 @@ class Dispatcher:
             for index, call in enumerate(calls):
                 command = call.get("arguments", {})
                 commands.append(command if isinstance(command, dict) else {})
+                names.append(call.get("name", "wb"))
                 dependencies = [
                     task
                     for prev, task in enumerate(tasks)
-                    if self._conflicts(commands[prev], commands[index])
+                    if self._conflicts(commands[prev], commands[index], names[prev], names[index])
                     or calls[prev].get("id") == call.get("id")
                 ]
 
@@ -340,7 +448,12 @@ class Dispatcher:
                                 "error": "call ID reused with different arguments; skipped",
                             }
                         )
-                    async with semaphore:
+                    # Subagent runs are governed by their own parallel window, not
+                    # the file-operation slots, so file work continues beside them.
+                    slot = (
+                        contextlib.nullcontext() if call.get("name") == "spawn_agent" else semaphore
+                    )
+                    async with slot:
                         started = time.monotonic()
                         try:
                             if not isinstance(call_id, str) or not call_id:
@@ -351,7 +464,12 @@ class Dispatcher:
                                 raise ValueError(
                                     "done must be submitted alone; entire batch skipped"
                                 )
-                            if call.get("name", "wb") not in {"wb", "web_search", "web_fetch"}:
+                            if call.get("name", "wb") not in {
+                                "wb",
+                                "web_search",
+                                "web_fetch",
+                                "spawn_agent",
+                            }:
                                 raise ValueError(
                                     'unknown tool; call the function named wb with {"command":"write", "path":"...", "content":"..."}, or another documented command'
                                 )
@@ -359,6 +477,8 @@ class Dispatcher:
                                 raise ValueError(call["error"])
                             if call.get("name") in {"web_search", "web_fetch"}:
                                 payload = await self._research(call["name"], command)
+                            elif call.get("name") == "spawn_agent":
+                                payload = await self._spawn(call_id, command)
                             else:
                                 payload = await self._execute(command)
                             result = {
@@ -371,7 +491,8 @@ class Dispatcher:
                             if call.get("name") == "web_fetch":
                                 result = fit_fetch_result(result, self.limits.output_chars)
                                 if not result["ok"]:
-                                    self.web_fetch_usage["failures"] += 1
+                                    research = self.parent if self.parent is not None else self
+                                    research.web_fetch_usage["failures"] += 1
                         except asyncio.CancelledError:
                             result = {
                                 "id": call_id,

@@ -74,6 +74,15 @@ works without an OpenRouter key. The benchmark menu shows **Off**, **On (Brave)*
 or **Needs setup**. Web search starts disabled and applies to Harness agents;
 Text, TTS, and Image modes retain their existing behavior.
 
+Harness agents can also delegate work to parallel **subagents** of the same
+model. Press **`s`** at the mode prompt to enable Subagents, choose how many run
+at once (2–5), and set the total agent cap per model; the same screen is under
+**Settings → Subagents (Harness)**. Subagents share the lead agent's workspace,
+tools, token budget, and phase time, and only their bounded reports return to
+the lead, which alone submits the project. `--subagents`, `--no-subagents`, and
+`--agent-cap N` override the saved setting for one run. See
+[Subagents](docs/harness.md#subagents).
+
 Setup saves the key in the gitignored, owner-only `.benchmark_secrets.json` in
 the current directory. Alternatively, export `BRAVE_SEARCH_API_KEY`; the environment
 value takes precedence and is never copied to disk. `--web-search` and
@@ -101,6 +110,8 @@ Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**.
 | `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
 | `--open off\|incremental\|after_all` / `--auto-open …` | Schedule harness validation and present managed previews. `off` still validates, headlessly; `after_all` waits for initial generation. New configurations default to `incremental` |
 | `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
+| `--subagents` / `--no-subagents` | Enable or disable parallel subagents for Harness agents for one run |
+| `--agent-cap N` | Total subagents each Harness model may spawn this run; implies `--subagents` unless `--no-subagents` is given |
 | `--stats` | Display all lifetime models plus Harness efficiency, reliability, budget, and failure breakdowns |
 | `--clear-history` | Reset all analytics history |
 
@@ -109,6 +120,7 @@ Examples:
 ```bash
 wavebench --prompt "Create a multi-file Python CSV summary program"
 wavebench --mode harness --auto-open off --prompt "Build a static counter website with HTML, CSS and JavaScript"
+wavebench --agent-cap 4 --prompt "Build a three-page static site; delegate each page to a subagent"
 wavebench --prompt "Explain quantum computing" --mode text
 wavebench --prompt "Explain quantum computing" --text
 wavebench --prompt "Read this aloud in a calm tone" --mode tts
@@ -120,7 +132,7 @@ wavebench --stats
 ## How It Works
 
 1. **Prompt** — You enter a description of what you want built or answered.
-2. **Build** — Harness allocates a fresh project per model. Models use the same `wb` file and lint tools over an OpenRouter conversation, then submit a runtime and entry point with `done`.
+2. **Build** — Harness allocates a fresh project per model. Models use the same `wb` file and lint tools over an OpenRouter conversation, then submit a runtime and entry point with `done`. With Subagents enabled, a model can also call `spawn_agent` to run bounded parallel subagents of itself in the same workspace; their usage counts toward the model's budget.
 3. **Schedule** — `incremental` validates submitted projects immediately. `after_all` waits until every model has submitted or reached a terminal generation outcome. `off` validates immediately without opening previews. Waiting projects release API slots.
 4. **Validate** — WaveBench admits one sandboxed project run. Exit code 0 passes console programs; an HTTP readiness check passes web/server startup. These checks measure runtime/startup, not subjective project quality.
 5. **Repair** — Only a failed first run gives the same model/conversation one bounded repair phase, then one final run. Lint never consumes a run. Cancellation never unlocks a retry.
@@ -148,6 +160,7 @@ The menu has four tabs:
   - **Auto-open files** — `off`, `incremental`, or `after_all`.
   - **Preview destination** — Automatic, Connected laptop, or Wavebench host. Controls where Harness web previews open; [SSH setup and behavior](docs/harness.md#preview-destination).
   - **Web search (Harness)** — Press Space for Brave setup, key replacement, or disabling.
+  - **Subagents (Harness)** — Press Space to enable parallel subagents, choose 2–5 agents at once, and set the total agent cap per model. See [Subagents](docs/harness.md#subagents).
   - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
   - **Harness limits** — Preview review timeout and separate build/repair time and token budgets. See [Harness limits](docs/harness.md#budgets-and-records).
   - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
@@ -181,7 +194,11 @@ benchmarkResults/
         ├── browser.log          # Browser output when opening a preview
         ├── conversation.json
         ├── tool-0001.json
-        └── run-1-<id>.log
+        ├── run-1-<id>.log
+        └── subagents/01-<name>/ # One folder per spawned subagent
+            ├── result.json
+            ├── conversation.json
+            └── tool-0001.json
 ```
 
 In text mode, outputs are saved as `.md` files. In TTS mode, outputs are saved as provider-compatible audio files (`.mp3` by default for OpenAI/Voxtral/Zonos and most speech models, `.pcm` for Gemini TTS), then an interactive arrow-key browser lets you move between outputs with ↑/↓ or ←/→ and press Enter/Space to play one through WaveBench's native audio backend.
@@ -207,6 +224,7 @@ wavebench/
 │   ├── commands.py             # Shared wb CLI/model dispatcher
 │   ├── transport.py            # OpenRouter streamed conversations/tool arguments
 │   ├── session.py              # Budgets, scheduling, attempts, repair, results
+│   ├── subagents.py            # Parallel subagents sharing the lead's workspace and budget
 │   ├── runtime.py              # Sandbox, dependencies, supervision, preview proxy
 │   └── trusted.py              # Read-only sandbox checks and launch helper
 ├── core/                       # Benchmark orchestration and artifact handling
@@ -234,7 +252,7 @@ These are created in the current working directory and are gitignored:
 | File | Contents |
 |---|---|
 | `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
-| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, and TTS voice/format/speed |
+| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, web search, subagents, and TTS voice/format/speed |
 | `.benchmark_secrets.json` | Private Brave API key from interactive setup; gitignored and never sent to models |
 | `.benchmark_history.json` | Lifetime run history for analytics |
 | `.benchmark_query_history.<mode>.json` | Portable prompt history (last 500 entries per mode); Harness uses `code`, alongside `text`, `tts`, and `image` |

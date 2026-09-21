@@ -70,6 +70,7 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
         "image_size": "1K",
         "image_model_ids": [],
         "web_search": "off",
+        "subagents": "off",
     }
 
 

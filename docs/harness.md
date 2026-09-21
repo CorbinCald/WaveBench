@@ -326,6 +326,74 @@ request. Older results without page-read metadata remain supported.
 for one run; an enabled configuration with no key stops before model generation
 and explains how to complete setup.
 
+## Subagents
+
+Press **s** at the benchmark menu, or open **Settings → Subagents (Harness)** and
+press Space, to enable subagents, choose how many run at once (2–5), and set the
+total agent cap per model. Subagents are off by default. `--subagents` and
+`--no-subagents` override the saved setting for one run; `--agent-cap N` sets
+the total cap for one run and implies `--subagents` unless `--no-subagents` is
+given. The benchmark header shows the effective **AGENTS** setting.
+
+When enabled, every lead model receives one additional native tool:
+
+```json
+{"name": "spawn_agent", "arguments": {"name": "about-page", "task": "Write about.html …", "read_only": false}}
+```
+
+The design follows the pattern shared by current agent harnesses (Claude Code
+and the Claude Agent SDK, OpenAI's Agents SDK agents-as-tools and Codex
+subagents, LangChain Deep Agents, OpenHands, Goose, and others): one minimal
+spawn tool, a brief-only context, bounded reports, fan-out through several
+calls in one turn, hard caps with readable errors, and no nesting.
+
+- **Same model, fresh context.** A subagent is a new conversation of the model
+  being benchmarked, with the same reasoning effort. It sees its own system
+  prompt, the original user request as context, and the lead's `task` brief;
+  it never sees the lead's history. The lead is told to brief each agent
+  completely: objective, owned files, interfaces, constraints, and the report
+  it needs.
+- **Same workspace and tools.** Subagents use the same `wb` file tools, lint,
+  and, when enabled, `web_search`/`web_fetch` on the lead's project. They cannot
+  call `done` or `spawn_agent` (depth is one); `read_only: true` also rejects
+  `write`, `edit`, and `delete`. Parallel agents should own disjoint files; the
+  workspace's atomic replacement prevents torn files but not lost updates.
+- **Parallel fan-out.** Each `spawn_agent` call returns when its agent finishes.
+  Several calls in one turn run concurrently, up to `harness.subagent_parallel`
+  (2–5, default 4) at once; further calls wait. Each model may spawn at most
+  `harness.subagent_cap` agents (default 8) across build and repair. The tool
+  is withdrawn from the next request once the cap is reached or the finishing
+  reserve is active, and rejected calls explain why without spawning.
+- **Bounded agents.** Each agent has at most `harness.subagent_turns` model
+  requests (default 16) and `harness.subagent_seconds` active seconds (default
+  600), within the lead's phase time. A reminder precedes the final request;
+  pending tool calls on that request are not run. Subagent requests are charged
+  to the lead's total token budget and stop before consuming the lead's
+  [finishing reserve](finishing-reserve.md), so the lead can still validate and
+  submit. The lead's phase deadline cancels running agents.
+- **Bounded reports.** The tool result is JSON with `ok`, `agent`, `status`
+  (`completed`, `turn_limit`, `time_limit`, `budget_exhausted`, `failed`, or
+  `cancelled`), the plain-text `report` truncated to
+  `harness.subagent_report_chars` (default 6,000), `files` written/edited/deleted
+  by that agent, `turns`, `tool_calls`, `tool_failures`, `usage`, `time_s`, and
+  `agents_left`. Errors are returned as results; a failed agent never ends the
+  lead's phase. Only the lead's own `wb done` submits the project.
+
+Accounting rolls up to the benchmarked model: subagent requests appear in the
+model's turns with phase `subagent`, and in its total tokens, cost, TURNS, and
+tool counts. `timing.api_s` includes subagent requests, so it can exceed the
+active time when agents run in parallel; `timing.subagent_s` sums the agents'
+wall time, which overlaps the lead's tool time. Their streamed output moves the
+live TK/S rate, and OUT TK settles
+as each subagent request completes. The live and final tables add an
+**AGENTS** column (**AGT** in narrow terminals) with the number of spawned
+agents, and the phase shows `delegating` while agents run. Lifetime analytics
+add an `agents` total. `harness.subagents` in each result records the setting,
+counts, aggregate subagent usage, and one record per run; each agent's
+conversation, tool records, and `result.json` are saved under
+`metadata/<model-slot>/subagents/<NN>-<name>/`. Research calls made by
+subagents draw from the lead's search and page-read allowances.
+
 ## Prompt caching and context compaction
 
 Harness keeps instructions, tool schemas, and earlier messages stable, appends
@@ -415,6 +483,9 @@ Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
 The same Settings page exposes **Build time limit (s)**, **Repair time limit (s)**,
 **Total token budget**, and **Output tokens per turn**. These save to
 `harness.build_seconds`, `repair_seconds`, `total_tokens`, and `turn_tokens`.
+**Subagents (Harness)** saves `subagents` plus `harness.subagent_parallel` and
+`harness.subagent_cap`; `harness.subagent_turns`, `subagent_seconds`, and
+`subagent_report_chars` are editable in the file. See [Subagents](#subagents).
 Time limits count active model requests and tools; scheduler waiting and preview
 review are separate. The total token budget is per model across every build and
 repair request, including repeated conversation input and generated output.
@@ -441,6 +512,8 @@ explicit records. The model must still submit its work itself.
 | Stream duration / idle wait | 1,800 / 60 seconds, within the active-phase deadline |
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
+| Subagents at once / total per model | 4 (2–5) / 8 |
+| Subagent model requests / active time / report | 16 / 600 seconds / 6,000 characters |
 | File data / project source data | 8 MiB per file / 128 MiB |
 | Total source, runtime and dependency storage | 512 MiB, monitored during subprocesses |
 | Project execution attempts | **One initial run, plus one retry only after failure** |

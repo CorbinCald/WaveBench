@@ -262,6 +262,7 @@ class ProgressTracker:
             "tool_usage": previous.get("tool_usage", {}),
             "web_search": previous.get("web_search", {}),
             "web_fetch": previous.get("web_fetch", {}),
+            "subagents": previous.get("subagents", {}),
             "budget": budget if budget is not None else previous.get("budget", {}),
         }
 
@@ -276,6 +277,7 @@ class ProgressTracker:
         *,
         web_search: dict | None = None,
         web_fetch: dict | None = None,
+        subagents: dict | None = None,
     ) -> None:
         """Publish completed tool calls immediately, including partial parallel batches."""
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
@@ -284,6 +286,24 @@ class ProgressTracker:
             metrics["web_search"] = web_search.copy()
         if web_fetch is not None:
             metrics["web_fetch"] = web_fetch.copy()
+        if subagents is not None:
+            metrics["subagents"] = subagents.copy()
+
+    def note_harness_output(self, name: str, tokens: int) -> None:
+        """Count streamed subagent output toward the live rate between lead turns."""
+        if name not in self._harness or tokens <= 0:
+            return
+        sample = self._harness_samples.get(name)
+        if sample is None:
+            values = self._harness_metrics(name)
+            sample = self._harness_samples[name] = {
+                "updated": time.monotonic(),
+                "output_tokens": 0,
+                "published_output_tokens": 0,
+                "tokens": values["tokens"],
+                "rate": values["rate"],
+            }
+        sample["output_tokens"] += tokens
 
     def start_harness_turn(
         self, model_name: str, input_tokens: int, *, model_id: str | None = None
@@ -364,6 +384,7 @@ class ProgressTracker:
             tools = harness.get("tool_usage") or {}
             searches = harness.get("web_search") or {}
             fetches = harness.get("web_fetch") or {}
+            agents = harness.get("subagents") or {}
             metrics = {}
             budget = budget_record(harness).copy()
         else:
@@ -374,6 +395,7 @@ class ProgressTracker:
             tools = metrics.get("tool_usage") or {}
             searches = metrics.get("web_search") or {}
             fetches = metrics.get("web_fetch") or {}
+            agents = metrics.get("subagents") or {}
             budget = (metrics.get("budget") or {}).copy()
         cache_usages = [usage] if turns else []
         tokens = settled(usage, "completion_tokens", turns)
@@ -443,6 +465,7 @@ class ProgressTracker:
             "tool_calls": tools.get("calls"),
             "web_searches": searches.get("calls") if searches.get("enabled") else None,
             "web_fetches": fetches.get("calls") if fetches.get("enabled") else None,
+            "subagents": agents.get("spawned") if agents.get("enabled") else None,
             "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
@@ -488,6 +511,8 @@ class ProgressTracker:
             cells.append(f"{S.DIM}web searches {values['web_searches']:,}{S.RST}")
         if values["web_fetches"] is not None:
             cells.append(f"{S.DIM}page reads {values['web_fetches']:,}{S.RST}")
+        if values["subagents"] is not None:
+            cells.append(f"{S.DIM}agents {values['subagents']:,}{S.RST}")
         return cells
 
     def _format_harness_metrics(self, name: str, result: dict | None = None) -> str:
@@ -540,16 +565,32 @@ class ProgressTracker:
                 # Keep the model name, failure rate, and elapsed time at 60 columns.
                 widths.pop(keys.index("cache"))
                 keys.remove("cache")
+        show_agents = any(
+            ((result.get("harness") or {}).get("subagents") or {}).get("enabled")
+            for result in self._results.values()
+        ) or any(
+            (metrics.get("subagents") or {}).get("enabled") for metrics in self._harness.values()
+        )
+        if show_agents:
+            anchor = next((key for key in ("fetches", "searches", "tools") if key in keys), None)
+            index = keys.index(anchor) + 1 if anchor else max(0, len(keys) - 1)
+            keys.insert(index, "agents")
+            widths.insert(index, 6 if inner_w >= 100 else 3)
+            if 52 <= inner_w < 72 and "cache" in keys:
+                widths.pop(keys.index("cache"))
+                keys.remove("cache")
         gap = self._harness_column_gap(inner_w)
-        if show_searches and inner_w >= 100:
+        if (show_searches or show_agents) and inner_w >= 100:
             name_w = inner_w - sum(widths) - gap * len(widths) - 2
             longest_name = max(
                 (_vlen(name) for name in [*self._model_names, *self._harness, *self._results]),
                 default=5,
             )
             if name_w < longest_name:
-                # Give model identities priority over the full search heading.
-                widths[keys.index("searches")] = 3
+                # Give model identities priority over the full search/agent headings.
+                for key in ("searches", "agents"):
+                    if key in keys:
+                        widths[keys.index(key)] = 3
         while widths and sum(widths) + gap * len(widths) + 3 > inner_w:
             keys.pop()
             widths.pop()
@@ -568,6 +609,7 @@ class ProgressTracker:
             "tools": "TOOLS",
             "searches": "WEB SEARCHES",
             "fetches": "READS",
+            "agents": "AGENTS",
             "fail": "FAIL",
             "time": "TIME",
         }
@@ -579,6 +621,7 @@ class ProgressTracker:
             "tools": "USE",
             "searches": "WEB",
             "fetches": "GET",
+            "agents": "AGT",
         }
         cells = []
         for key, width in self._harness_columns(inner_w):
@@ -700,7 +743,7 @@ class ProgressTracker:
                             prefix=measurement.prefix + ("$" if key == "cost" else ""),
                             suffix=measurement.suffix,
                         )
-            elif key in {"rate", "turns", "tools", "searches", "fetches"}:
+            elif key in {"rate", "turns", "tools", "searches", "fetches", "agents"}:
                 value = values[
                     {
                         "rate": "rate",
@@ -708,6 +751,7 @@ class ProgressTracker:
                         "tools": "tool_calls",
                         "searches": "web_searches",
                         "fetches": "web_fetches",
+                        "agents": "subagents",
                     }[key]
                 ]
                 prefix = "~" if key == "rate" and values["rate_estimated"] else ""

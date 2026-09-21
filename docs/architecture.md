@@ -43,7 +43,15 @@ events are saved per turn.
 
 `Dispatcher` is shared with the `wb` CLI and has no shell evaluator. Its bounded
 scheduler overlaps independent calls, serializes conflicting paths, and puts
-lint behind writes. The root is fixed in `Workspace`, whose operations use
+lint behind writes. With Subagents enabled, the lead's dispatcher also exposes
+`spawn_agent`, routed to a session-owned `SubagentPool` in `subagents.py`. Each
+spawned `SubagentRun` is a fresh conversation of the same model with a child
+dispatcher on the same workspace and runtime: no `done`, no `spawn_agent`, an
+optional read-only mode, research calls routed through the lead's quotas, and
+tool counts added to the lead's totals. Subagent turns are appended to the
+session's turn list and charged to its total token budget, stopping before the
+lead's finishing reserve; only a bounded report and changed-file list return as
+the tool result. The root is fixed in `Workspace`, whose operations use
 `dir_fd`, `O_NOFOLLOW`, regular-file checks, and atomic replacement. Invocation
 and model directory creation is exclusive, including sanitized-name collisions.
 
@@ -104,6 +112,8 @@ The package intentionally re-exports common entry points from package
 | Bounded file tools and developer CLI | `wavebench/harness/commands.py`, `workspace.py`, `__main__.py` |
 | Sandbox, manifests, lint, managed previews | `wavebench/harness/runtime.py`, `trusted.py` |
 | Build/repair budgets, scheduling, attempt admission | `wavebench/harness/session.py` |
+| Subagent tool, admission, caps, and reports | `wavebench/harness/subagents.py`, `commands.py` |
+| Subagents setup screen | `wavebench/tui/menus/subagents_menu.py` |
 | Reasoning-effort payload formats and per-model effort mapping | `wavebench/api.py` (`_reasoning_attempts`, `_supported_efforts`) |
 | Model catalog ranking, default text/TTS mappings, and TTS model/voice/format helpers | `wavebench/models.py` |
 | Code extraction from model responses | `wavebench/parsers.py` and `wavebench/modes/code.py` |
@@ -156,7 +166,7 @@ WaveBench stores local state in the current working directory:
 | File | Contents |
 |---|---|
 | `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping; TTS mode filters this to TTS-capable IDs and falls back to bundled TTS defaults if none are selected |
-| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `tts_voice`, `tts_format`, `tts_speed` |
+| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `web_search`, `subagents`, `harness` limits, `tts_voice`, `tts_format`, `tts_speed` |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
 | `.benchmark_query_history.<mode>.json` | portable prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`), up to 500 entries per mode |
 
