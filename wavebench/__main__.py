@@ -18,6 +18,7 @@ import wavebench.tui.styles as _styles
 from wavebench import query_history
 from wavebench.api import fetch_top_models, load_api_key
 from wavebench.core import main_async
+from wavebench.harness.subagents import subagents_status
 from wavebench.models import (
     IMAGE_MODEL_MAPPING,
     MODEL_MAPPING,
@@ -37,6 +38,7 @@ from wavebench.tui.analytics import display_analytics
 from wavebench.tui.input import _read_key_timeout, hold_raw
 from wavebench.tui.line_editor import _read_line, _TabEscape
 from wavebench.tui.menus import run_config_menu
+from wavebench.tui.menus.subagents_menu import interactive_subagents
 from wavebench.tui.menus.web_search_menu import interactive_web_search
 from wavebench.tui.progress import render_idle_wave
 from wavebench.tui.styles import (
@@ -184,9 +186,24 @@ def main() -> None:
         action="store_true",
         help="Interactively configure and test Brave web search, then exit",
     )
+    parser.add_argument(
+        "--subagents",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable parallel subagents for Harness agents for this run",
+    )
+    parser.add_argument(
+        "--agent-cap",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Total subagents each Harness model may spawn this run (implies --subagents)",
+    )
     args = parser.parse_args()
     if args.mode == "code":
         args.mode = "harness"
+    if args.agent_cap is not None and args.agent_cap < 1:
+        parser.error("--agent-cap must be at least 1")
 
     # ── Stats-only mode ────────────────────────────────────────────────────
     if args.stats:
@@ -246,6 +263,16 @@ def main() -> None:
             effective["web_search"] = "on" if args.web_search else "off"
         return search_status(effective)
 
+    def _subagents_status() -> str:
+        effective = dict(config)
+        if args.subagents is not None:
+            effective["subagents"] = "on" if args.subagents else "off"
+        if args.agent_cap is not None:
+            effective["harness"] = {**(config.get("harness") or {}), "subagent_cap": args.agent_cap}
+            if args.subagents is None:
+                effective["subagents"] = "on"
+        return subagents_status(effective)
+
     def _resolve_models_future() -> tuple:
         """Block on the background fetch and return (available, pricing)."""
         if not models_future.done():
@@ -295,8 +322,9 @@ def main() -> None:
                 f"{S.DIM}{len(active)} models{S.RST}  "
                 f"{_styles.ACCENT}[c]{S.RST} config"
             )
-            title = f"Select Mode · Web search: {_search_status()} [w]"
-            return [_box_top(title, w), _box_row(row, w), _box_bot(w)]
+            agents = "On" if _subagents_status() != "Off" else "Off"
+            title = f"Select Mode · Web search: {_search_status()} [w] · Subagents: {agents} [s]"
+            return [_box_top(_styles._truncate(title, w - 6), w), _box_row(row, w), _box_bot(w)]
 
         def _print_mode_menu() -> None:
             print("\n".join(_mode_menu_rows()))
@@ -305,8 +333,15 @@ def main() -> None:
             w = _tw() - 4
             return [
                 _box_top(
-                    f"{len(active)} Models"
-                    + (f" · Web search: {_search_status()}" if mode_name == "harness" else ""),
+                    _styles._truncate(
+                        f"{len(active)} Models"
+                        + (
+                            f" · Web search: {_search_status()} · Subagents: {_subagents_status()}"
+                            if mode_name == "harness"
+                            else ""
+                        ),
+                        w - 6,
+                    ),
                     w,
                 ),
                 _box_row(_styles._truncate(summary, max(1, w - 4)), w),
@@ -401,7 +436,18 @@ def main() -> None:
                             key = _read_key_timeout(0.07)
                             if key is None:
                                 _wave_idle()
-                            elif key in ("tab", "escape", "ctrl-c", "c", "w", "1", "2", "3", "4"):
+                            elif key in (
+                                "tab",
+                                "escape",
+                                "ctrl-c",
+                                "c",
+                                "w",
+                                "s",
+                                "1",
+                                "2",
+                                "3",
+                                "4",
+                            ):
                                 break
                             # Any other key is not a menu choice: keep the
                             # wave rolling instead of flashing it clear.
@@ -416,11 +462,14 @@ def main() -> None:
                     if key == "ctrl-c":
                         print(f"\n  {S.DIM}Interrupted.{S.RST}\n")
                         return
-                    if key in ("c", "w"):
+                    if key in ("c", "w", "s"):
                         sys.stdout.write(key + "\n")
                         if key == "w":
                             new_m = selected_models
                             new_c = interactive_web_search(config)
+                        elif key == "s":
+                            new_m = selected_models
+                            new_c = interactive_subagents(config)
                         else:
                             new_m, new_c = run_config_menu(
                                 api_key,
@@ -433,6 +482,9 @@ def main() -> None:
                             config = new_c
                             if key == "w":
                                 args.web_search = None
+                            if key == "s":
+                                args.subagents = None
+                                args.agent_cap = None
                             if selected_models is not None:
                                 save_models(selected_models)
                             save_config(config)

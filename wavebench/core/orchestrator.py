@@ -169,6 +169,17 @@ async def main_async(
     except SearchError as exc:
         print(f"\n  {_fail} {exc}\n")
         return
+    from wavebench.harness.subagents import subagents_status
+
+    subagents_config = dict(config)
+    if getattr(args, "subagents", None) is not None:
+        subagents_config["subagents"] = "on" if args.subagents else "off"
+    agent_cap = getattr(args, "agent_cap", None)
+    if agent_cap is not None:
+        subagents_config["harness"] = {**(config.get("harness") or {}), "subagent_cap": agent_cap}
+        if getattr(args, "subagents", None) is None:
+            subagents_config["subagents"] = "on"
+    subagents_enabled = harness_mode and subagents_config.get("subagents", "off") == "on"
     if tts_mode:
         reasoning_effort = None
         # Avoid launching every generated audio file when a user has auto-open
@@ -292,6 +303,13 @@ async def main_async(
         print(
             _box_row(
                 f"{S.DIM}{'SEARCH':>8}{S.RST}  {search_status(search_config)}",
+                w,
+                heavy=True,
+            )
+        )
+        print(
+            _box_row(
+                f"{S.DIM}{'AGENTS':>8}{S.RST}  {subagents_status(subagents_config)}",
                 w,
                 heavy=True,
             )
@@ -443,7 +461,7 @@ async def main_async(
                 from wavebench.harness.config import Limits
                 from wavebench.harness.session import HarnessBatch, HarnessSession
 
-                limits = Limits.from_config(config)
+                limits = Limits.from_config(subagents_config)
                 out = Path(await output_dir_task)
                 process_slots = asyncio.Semaphore(limits.process_concurrency)
                 sessions = []
@@ -467,6 +485,7 @@ async def main_async(
                             reasoning_effort=reasoning_effort,
                             tracker=tracker,
                             web_search=web_search,
+                            subagents=subagents_enabled,
                         )
                     )
                 await harness_batch.run()

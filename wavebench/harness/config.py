@@ -38,12 +38,19 @@ class Limits:
     response_headers_seconds: int = 60
     stream_seconds: int = 1800
     stream_idle_seconds: int = 60
+    subagent_parallel: int = 4
+    subagent_cap: int = 8
+    subagent_turns: int = 16
+    subagent_seconds: int = 600
+    subagent_report_chars: int = 6_000
 
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"harness.{field.name} must be a positive integer")
+        if not 2 <= self.subagent_parallel <= 5:
+            raise ValueError("harness.subagent_parallel must be between 2 and 5")
         for category in ("raw", "output"):
             if getattr(self, f"stream_{category}_min_bytes") > getattr(
                 self, f"stream_{category}_max_bytes"

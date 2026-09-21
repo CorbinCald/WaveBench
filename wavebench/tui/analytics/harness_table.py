@@ -51,7 +51,8 @@ def _summary(stats: HarnessStats, width: int, *, compact: bool = False) -> None:
     )
     _rows(
         f"Tools {total('tools')} · tool fail {_ratio(stats.tool_failures, stats.runs)}"
-        f" · searches {total('web_search')} · page reads {total('web_fetch')}",
+        f" · searches {total('web_search')} · page reads {total('web_fetch')}"
+        f" · agents {total('subagents')}",
         width,
     )
     _rows(

@@ -119,6 +119,7 @@ def load_config() -> dict[str, Any]:
         "image_size": "1K",
         "image_model_ids": [],
         "web_search": "off",
+        "subagents": "off",
     }
     if os.path.exists(path):
         try:

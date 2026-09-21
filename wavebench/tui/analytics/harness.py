@@ -144,6 +144,8 @@ class HarnessStats:
         for key in ("web_search", "web_fetch"):
             web = harness.get(key) or {}
             self.totals[key].add(0 if web.get("enabled") is False else web.get("calls"))
+        agents = harness.get("subagents") or {}
+        self.totals["subagents"].add(0 if agents.get("enabled") is False else agents.get("spawned"))
 
         repair = harness.get("repair")
         if repair in {

@@ -22,6 +22,7 @@ from typing import Any
 from wavebench.api import fetch_top_models
 from wavebench.harness.config import Limits
 from wavebench.harness.handoff import DESTINATIONS
+from wavebench.harness.subagents import subagents_status
 from wavebench.models import (
     IMAGE_MODEL_MAPPING,
     MODEL_MAPPING,
@@ -39,6 +40,7 @@ from wavebench.tui.menus._shared import (
     _is_printable_search_char,
     _unique_short_name,
 )
+from wavebench.tui.menus.subagents_menu import interactive_subagents
 from wavebench.tui.menus.web_search_menu import interactive_web_search
 from wavebench.tui.styles import (
     THEMES,
@@ -304,6 +306,18 @@ def interactive_config_menu(
             "label": "Web search (Harness)",
             "value": current_config.get("web_search", "off"),
             "type": "web_search",
+        },
+        {
+            "key": "subagents",
+            "label": "Subagents (Harness)",
+            "value": {
+                "subagents": current_config.get("subagents", "off"),
+                "harness": {
+                    key: harness_config.get(key, getattr(harness_defaults, key))
+                    for key in ("subagent_parallel", "subagent_cap")
+                },
+            },
+            "type": "subagents",
         },
         *[
             {
@@ -589,6 +603,11 @@ def interactive_config_menu(
                         color = S.HGRN if status == "On (Brave)" else S.DIM
                         val_s = f"{color}{status}{S.RST}"
                         chk = f"{S.HGRN}✓{S.RST}" if status == "On (Brave)" else " "
+                    elif item.get("type") == "subagents":
+                        status = subagents_status(item["value"])
+                        enabled = status != "Off"
+                        val_s = f"{S.HGRN if enabled else S.DIM}{status}{S.RST}"
+                        chk = f"{S.HGRN}✓{S.RST}" if enabled else " "
                     elif item.get("type") in ("cycle", "number"):
                         val = item["value"]
                         if item.get("key") == "reasoning_effort":
@@ -817,6 +836,17 @@ def interactive_config_menu(
                             if updated is not None:
                                 item["value"] = updated["web_search"]
                             sys.stdout.write("\033[2J\033[H\033[?25l")
+                        elif item.get("type") == "subagents":
+                            updated = interactive_subagents(item["value"], alternate_screen=False)
+                            if updated is not None:
+                                item["value"] = {
+                                    "subagents": updated["subagents"],
+                                    "harness": {
+                                        key: updated["harness"][key]
+                                        for key in ("subagent_parallel", "subagent_cap")
+                                    },
+                                }
+                            sys.stdout.write("\033[2J\033[H\033[?25l")
                         elif item.get("type") == "number":
                             editing_setting = item
                             setting_buffer = str(item["value"])
@@ -881,7 +911,13 @@ def interactive_config_menu(
 
     new_config = dict(current_config)
     for item in settings_items:
-        if section := item.get("section"):
+        if item.get("type") == "subagents":
+            new_config["subagents"] = item["value"]["subagents"]
+            new_config["harness"] = {
+                **(new_config.get("harness") or {}),
+                **item["value"]["harness"],
+            }
+        elif section := item.get("section"):
             new_config[section] = {
                 **(new_config.get(section) or {}),
                 item["key"]: item["value"],
