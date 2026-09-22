@@ -8,8 +8,8 @@ the runtime and entry file. It also warns with two model requests left in a phas
 The controller never submits on the model's behalf.
 
 The policy is the same for every benchmark model. Let `I` be the calibrated input
-bound and `O` the smaller of the model's output limit, the configured turn limit,
-and 4,096 tokens. The finishing estimate is:
+bound and `O` the smaller of the model's output limit and the configured turn limit
+(64,000 by default). The finishing estimate is:
 
 ```text
 2 × (I + 512 warning tokens) + 2 × O
@@ -22,13 +22,19 @@ tool-result allowance is the smaller of 4,096 and
 the configured diagnostic character limit, plus 1,024 tokens for result wrappers.
 It is a practical estimate for final edits and validation, not a worst-case bound
 for arbitrary batches or large file reads. The warning's actual added input is
-measured before admission, and all subsequent model responses are capped at `O`.
+measured before admission. Finishing retains the normal output allowance, bounded
+by the remaining total tokens. Reasoning and tool arguments share this allowance;
+the former hidden 4,096-token cap could cut off thinking or a file write while
+hundreds of thousands of task tokens remained. The model's reasoning setting stays
+unchanged. See OpenRouter's [reasoning and output limits](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 Tool evidence retains the existing full local artifacts and diagnostic limits.
 
 Compaction gets the first opportunity at the shared budget boundary. A compaction
 request must leave the same finishing reserve for its projected replacement
-context. Once the warning is injected, budget-triggered compaction yields to
-finishing. Mandatory context-window compaction still checks the reserve. Failed
+context. Budget-triggered compaction remains available after the warning when
+it pays for itself and preserves that reserve; otherwise repeated large inputs
+can exhaust the task while the model is still fixing files. Mandatory context-window
+compaction also checks the reserve. Failed
 estimates, unaffordable compaction, and reduced capacity have explicit records.
 
 The warning persists through repair without being repeated. Repair has its

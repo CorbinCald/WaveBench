@@ -303,8 +303,8 @@ All research tools in a batch share the remaining research deadline.
 
 Models receive the allowance up front, a warning as research runs low, and
 instructions to build and submit when it closes. This cutoff retains normal
-output capacity for implementation; the separate finishing warning still bounds
-output when the final task budget runs low. Only the model's `wb done` submits
+output capacity for implementation; the finishing warning also keeps the configured
+output allowance while reserving capacity to validate and submit. Only the model's `wb done` submits
 the project; reserving capacity cannot guarantee that a model uses it successfully.
 Results record research usage, remaining allowance, and the closure reason under
 `harness.research`, with guidance events in the budget decision records.
@@ -479,6 +479,10 @@ Luna summarizes only the intervening history, retaining requirements,
 corrections, file state, failures, and outstanding work. It receives no tools and
 cannot edit the project. Previous summaries are included in subsequent
 compactions. The summary is factual memory; project files remain readable.
+Only the separate summary request omits opaque provider signatures/encrypted
+reasoning and deduplicates readable reasoning. Archives and the benchmark model's
+preserved prefix and tail remain exact. Affordable, useful compaction is still
+allowed after the finishing warning.
 
 The TUI shows `compacting` during the request. Before replacement, the original
 conversation is archived as `conversation-before-compaction-NNN.json` in model
@@ -528,8 +532,8 @@ repair request, including repeated conversation input and generated output.
 Before that capacity becomes scarce, the model receives one actionable warning
 to finish essential edits, lint, inspect results, and call `done`. The shared
 [finishing reserve](finishing-reserve.md) accounts for both requests' inputs and
-outputs plus the tool-result round trip. Warning text is counted, output is
-capped while finishing, and inaccurate estimates or insufficient reserve have
+outputs plus the tool-result round trip. Warning text is counted, finishing keeps
+the configured/model output allowance (including reasoning), and inaccurate estimates or insufficient reserve have
 explicit records. The model must still submit its work itself.
 
 | Limit | Default |
@@ -686,6 +690,16 @@ reply without `wb done`, the controller gives it one submission reminder per
 phase. Only an actual, valid `done` tool call submits the project. These recovery
 requests consume the remaining turn, time and token budgets and are recorded in
 `harness.recoveries`; missing provider usage remains unknown.
+
+Each build/repair phase and each subagent also allows one corrective request after
+truncated output, invalid JSON tool arguments, or an oversized tool batch. The
+entire rejected response's calls remain unexecuted. A fresh instruction asks for
+complete arguments and smaller batches; it does not append broken tool calls to
+history. The streaming limit counts distinct calls against `harness.batch_calls`
+(64 by default), as advertised in the tools. Sparse numeric call indices are
+valid identifiers. Persistent failures stop with a specific reason, and all
+recovery requests consume the existing limits. See the
+[September 21 failure investigation](benchmark-failures-verification.md).
 
 Gemini conversations bind to the provider reported by their first successful
 turn: `Google` maps to `google-vertex`, and `Google AI Studio` maps to

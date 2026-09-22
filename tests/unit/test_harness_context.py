@@ -1,8 +1,10 @@
 import copy
+import json
 
 import pytest
 
 from wavebench.harness.context import compaction_reason, plan_compaction
+from wavebench.tokens import prompt_tokens
 
 
 @pytest.mark.parametrize(
@@ -77,3 +79,32 @@ def test_invalid_summary_rejected_without_changing_original(summary):
 def test_no_removable_history_fails_without_truncating_protected_messages():
     with pytest.raises(ValueError, match="preserving"):
         plan_compaction(transcript()[:3])
+
+
+def test_summary_request_deduplicates_readable_reasoning_and_omits_opaque_state():
+    messages = transcript()
+    messages[2].update(
+        reasoning="Keep the correction and validate the existing files.",
+        reasoning_details=[
+            {
+                "type": "reasoning.text",
+                "text": "Keep the correction and validate the existing files.",
+            },
+            {"type": "reasoning.summary", "summary": "Unresolved: fix the launch path."},
+            {"type": "reasoning.encrypted", "data": "opaque " * 40_000},
+        ],
+        extra_content={"google": {"thought_signature": "private provider state"}},
+    )
+    before = copy.deepcopy(messages)
+    plan = plan_compaction(messages)
+    request = plan.request()
+    evidence = json.loads(request[1]["content"])
+    middle = evidence["history_to_summarize"][0]
+    assert middle["reasoning"] == (
+        "Keep the correction and validate the existing files.\nUnresolved: fix the launch path."
+    )
+    assert "opaque" not in request[1]["content"]
+    assert "thought_signature" not in request[1]["content"]
+    assert prompt_tokens(request, []) < 1000
+    assert messages == before and plan.middle == before[2:4]
+    assert plan.apply("Correction remembered")[-4:] == before[-4:]

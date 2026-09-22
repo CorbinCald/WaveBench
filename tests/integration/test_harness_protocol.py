@@ -70,6 +70,30 @@ def test_usage_snapshots_merge_without_double_counting_or_losing_error_usage():
     assert error.value.usage["cost"] == 0.03
 
 
+def test_sparse_tool_indices_identify_calls_without_consuming_extra_batch_slots():
+    assembly = StreamAssembly()
+    feed(
+        assembly,
+        {
+            "tool_calls": [
+                {
+                    "index": 500,
+                    "id": "one-call",
+                    "type": "function",
+                    "function": {"name": "wb", "arguments": '{"command":'},
+                }
+            ]
+        },
+    )
+    feed(
+        assembly,
+        {"tool_calls": [{"index": 500, "function": {"arguments": '"ls"}'}}]},
+        finish_reason="tool_calls",
+    )
+    assembly.feed("[DONE]")
+    assert len(assembly.complete().message["tool_calls"]) == 1
+
+
 @pytest.mark.parametrize(
     "model,field",
     [
