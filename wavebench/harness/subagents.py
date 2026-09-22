@@ -17,11 +17,11 @@ from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
 from .accounting import reported_total
-from .budget import finish_output_tokens, finish_reserve
+from .budget import finish_reserve
 from .commands import Dispatcher
 from .config import Limits
 from .failure import failure_record
-from .transport import GEMINI_PROVIDER_ROUTES, TurnError
+from .transport import GEMINI_PROVIDER_ROUTES, TurnError, response_recovery_notice
 from .workspace import safe_name
 
 MAX_NAME_CHARS = 40
@@ -155,11 +155,9 @@ class SubagentPool:
         session, limits = self.session, self.limits
         pending = sum(run.status in {"pending", "running"} for run in self.runs)
         growth = pending * PromptEstimate().bound(limits.subagent_report_chars // 3 + 512)
-        output = finish_output_tokens(
-            min(
-                limits.turn_tokens,
-                api._MODEL_MAX_COMPLETION_CACHE.get(session.model_id, limits.turn_tokens),
-            )
+        output = min(
+            limits.turn_tokens,
+            api._MODEL_MAX_COMPLETION_CACHE.get(session.model_id, limits.turn_tokens),
         )
         reserve = finish_reserve(
             (session._next_input_tokens or 0) + growth, output, limits.output_chars
@@ -400,6 +398,7 @@ class SubagentRun:
         self.started, self.started_at = time.monotonic(), time.time()
         deadline = self.started + limits.subagent_seconds
         max_turns = limits.subagent_turns
+        response_retried = False
         try:
             for turn_index in range(max_turns):
                 final = turn_index + 1 == max_turns
@@ -412,8 +411,6 @@ class SubagentRun:
                     limits.turn_tokens,
                     api._MODEL_MAX_COMPLETION_CACHE.get(session.model_id, limits.turn_tokens),
                 )
-                if final:
-                    output_tokens = finish_output_tokens(output_tokens)
                 remaining = self.pool.affordable() - input_bound
                 if remaining < MIN_REQUEST_OUTPUT:
                     self.status = "budget_exhausted"
@@ -465,6 +462,24 @@ class SubagentRun:
                             stream=getattr(exc, "diagnostics", None) or self._stream_diagnostics,
                         )
                         self.account(record, input_bound, None)
+                    notice = (
+                        response_recovery_notice(exc.failure_code, limits.batch_calls)
+                        if isinstance(exc, TurnError) and getattr(exc, "request_sent", True)
+                        else None
+                    )
+                    if notice and not response_retried and not final:
+                        response_retried = True
+                        self.messages.append({"role": "user", "content": notice})
+                        session.recoveries.append(
+                            {
+                                "kind": "response_retry",
+                                "phase": "subagent",
+                                "agent": self.number,
+                                "turn": len(self.turns),
+                                "failure_code": exc.failure_code,
+                            }
+                        )
+                        continue
                     raise
                 finally:
                     self.pool.reserved_tokens -= reservation

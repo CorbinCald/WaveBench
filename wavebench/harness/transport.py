@@ -187,6 +187,25 @@ class TurnError(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
+def response_recovery_notice(failure_code: str | None, batch_calls: int) -> str | None:
+    reason = {
+        "output_truncated": "Your response exhausted its output allowance before completing.",
+        "invalid_tool_arguments": "Your response contained invalid JSON tool arguments.",
+        "tool_batch_limit": f"Your response exceeded the limit of {batch_calls} tool calls per turn.",
+    }.get(failure_code)
+    if reason is None:
+        return None
+    return (
+        "[WaveBench response recovery] "
+        + reason
+        + " No tool calls from that response were executed or added to the conversation. "
+        "Retry the unfinished work with complete JSON arguments and a smaller batch: "
+        f"at most {min(8, batch_calls)} calls, then wait for their results. "
+        "Split large file changes across turns and keep reasoning concise. "
+        "Earlier successful work is still present. The same token, turn, and time limits apply."
+    )
+
+
 @dataclass(frozen=True)
 class StreamPolicy:
     """Effective byte guards for one resolved output allowance, not token usage."""
@@ -198,6 +217,7 @@ class StreamPolicy:
     assembly_bytes: int
     seconds: int
     idle_seconds: int
+    tool_calls: int
 
     @classmethod
     def resolve(cls, limits: Limits, max_tokens: int) -> StreamPolicy:
@@ -218,6 +238,7 @@ class StreamPolicy:
             assembly_bytes=limits.stream_assembly_bytes,
             seconds=limits.stream_seconds,
             idle_seconds=limits.stream_idle_seconds,
+            tool_calls=limits.batch_calls,
         )
 
     def record(self) -> dict:
@@ -424,8 +445,14 @@ class StreamAssembly:
             self.retain(delta)
             for call in delta.pop("tool_calls", None) or []:
                 index = call.get("index", 0)
-                if type(index) is not int or index < 0 or index >= 256:
+                if type(index) is not int or index < 0:
                     raise TurnError("invalid streamed tool index", self.usage)
+                if index not in self.calls and len(self.calls) >= self.policy.tool_calls:
+                    raise TurnError(
+                        "tool call batch limit exceeded; no tools executed",
+                        self.usage,
+                        failure_code="tool_batch_limit",
+                    )
                 self.merge(
                     self.calls.setdefault(index, {}),
                     {k: v for k, v in call.items() if k != "index"},
@@ -556,12 +583,19 @@ class StreamAssembly:
                         call["function"]["arguments"], parse_constant=self.invalid_constant
                     )
                 except (KeyError, TypeError, ValueError, RecursionError) as exc:
+                    completion = self.usage.get("completion_tokens")
                     raise TurnError(
-                        "malformed/truncated tool arguments; no tools executed", self.usage
+                        "malformed/truncated tool arguments; no tools executed",
+                        self.usage,
+                        failure_code="output_truncated"
+                        if type(completion) is int and completion >= self.policy.output_tokens
+                        else "invalid_tool_arguments",
                     ) from exc
                 if not isinstance(arguments, dict):
                     raise TurnError(
-                        "tool arguments must be an object; no tools executed", self.usage
+                        "tool arguments must be an object; no tools executed",
+                        self.usage,
+                        failure_code="invalid_tool_arguments",
                     )
             self.message["tool_calls"] = calls
         if self.details:
@@ -672,6 +706,7 @@ class StreamReader:
                 "stream_assembly_limit": "assembly_bytes",
                 "stream_timeout": "seconds",
                 "stream_idle_timeout": "idle_seconds",
+                "tool_batch_limit": "tool_calls",
             }.get(self.failure_code),
             "bytes": {
                 "raw": self.raw_bytes,

@@ -340,6 +340,48 @@ async def test_turn_limit_injects_final_notice_and_skips_pending_tools(factory, 
     assert run["status"] == "turn_limit" and run["turns"] == 2 and run["pending_calls"] == 1
 
 
+async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capacity(
+    factory, monkeypatch
+):
+    seen = {}
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        kind, agent = role(messages)
+        index = seen.get(kind + agent, 0)
+        seen[kind + agent] = index + 1
+        if kind == "lead":
+            if index == 0:
+                return calls(index, spawn("writer", "Write main.py to print 42 and report."))
+            report = results(messages, 1)[0]
+            assert report["status"] == "completed" and report["turns"] == 3
+            return calls(index, DONE)
+        assert kwargs["max_tokens"] == 64_000
+        if index == 0:
+            raise TurnError("truncated", dict(USAGE), failure_code="output_truncated")
+        assert "[WaveBench response recovery]" in json.dumps(messages)
+        if index == 1:
+            return calls(index, write("main.py", "print(42)\n"))
+        assert messages[-1]["content"] == FINAL_NOTICE
+        return text("main.py prints 42.")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(subagent_turns=3, review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    assert len(session.attempts) == 1
+    assert session.budget_tokens == 5 * USAGE["total_tokens"]
+    assert session.recoveries == [
+        {
+            "kind": "response_retry",
+            "phase": "subagent",
+            "agent": 1,
+            "turn": 1,
+            "failure_code": "output_truncated",
+        }
+    ]
+
+
 async def test_subagent_failure_and_budget_exhaustion_keep_the_lead_working(factory, monkeypatch):
     seen: dict[str, int] = {}
     warned = []

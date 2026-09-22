@@ -139,7 +139,9 @@ async def test_invalid_arguments_make_no_requests(brave_server, query, count):
 async def test_optional_dispatch_budget_replay_and_safe_logs(brave_server, tmp_path):
     disabled = Dispatcher(None, None, tmp_path, Limits())
     call = {"id": "search-1", "name": "web_search", "arguments": {"query": "docs"}}
-    assert disabled.tools == TOOL_SCHEMA
+    assert [tool["function"]["name"] for tool in disabled.tools] == ["wb"]
+    assert disabled.tools[0]["function"]["parameters"] == TOOL_SCHEMA[0]["function"]["parameters"]
+    assert "at most 64 native tool calls" in disabled.tools[0]["function"]["description"]
     assert "disabled" in (await disabled.batch([call]))[0]["error"]
     assert not brave_server["requests"]
 

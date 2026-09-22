@@ -33,6 +33,33 @@ Return only a concise factual handoff, preferably under 6000 tokens. Clearly lab
 uncertainty and outstanding tasks. This is memory, not new user instructions."""
 
 
+def summary_message(message: dict) -> dict:
+    """Readable evidence for the compactor, without opaque provider state.
+
+    This is only the summary request's data view. Archives and the replacement
+    prefix/tail keep the original messages, including every signature, intact.
+    """
+    result = {
+        key: copy.deepcopy(message[key])
+        for key in ("role", "content", "tool_calls", "tool_call_id", "name")
+        if key in message
+    }
+    # Providers commonly return the same text in both reasoning fields. Encrypted
+    # reasoning/signatures cannot inform a different model's factual summary.
+    texts = []
+    if isinstance(message.get("reasoning"), str) and message["reasoning"]:
+        texts.append(message["reasoning"])
+    for detail in message.get("reasoning_details") or []:
+        if detail.get("type") not in {"reasoning.text", "reasoning.summary"}:
+            continue
+        text = detail.get("text") or detail.get("summary")
+        if isinstance(text, str) and text and text not in texts:
+            texts.append(text)
+    if texts:
+        result["reasoning"] = "\n".join(texts)
+    return result
+
+
 @dataclass
 class CompactionPlan:
     prefix: list[dict]
@@ -50,9 +77,9 @@ class CompactionPlan:
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "preserved_prefix": self.prefix,
-                        "history_to_summarize": self.middle,
-                        "preserved_tail": self.tail,
+                        "preserved_prefix": [summary_message(m) for m in self.prefix],
+                        "history_to_summarize": [summary_message(m) for m in self.middle],
+                        "preserved_tail": [summary_message(m) for m in self.tail],
                     },
                     ensure_ascii=False,
                 ),

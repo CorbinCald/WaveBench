@@ -28,8 +28,8 @@ included in the savings forecast when affordable.
 
 Budget-driven compaction is skipped if its estimated input savings cannot repay
 its request cost within those two or three follow-ups. It is also skipped when
-the summary request and finishing reserve cannot both fit, or when the model has
-already received the finishing warning. An unsuccessful budget-driven attempt
+the summary request and finishing reserve cannot both fit. It remains available
+after a finishing warning when those same checks pass. An unsuccessful budget-driven attempt
 is reconsidered only after context grows by at least 8,192 tokens or 25 percent,
 whichever is larger. Mandatory context-window failures remain explicit errors.
 
@@ -39,6 +39,12 @@ or unmatched results in the latest interaction prevent compaction. Earlier
 history becomes a factual handoff; working files remain available through the
 normal tools. Invalid, interrupted, or ineffective summaries leave the original
 conversation intact.
+
+The separate compactor receives readable message content, tool calls/results,
+and deduplicated reasoning text. Its request omits encrypted reasoning and
+provider signatures, which another model cannot interpret. The original archive
+and the benchmark model's preserved messages retain those fields exactly. This
+avoids charging the summary request for duplicate text and opaque provider state.
 
 Compactor input and output count toward the same cumulative budget as benchmark
 requests. Cached prompt tokens are included: a price discount is not extra token

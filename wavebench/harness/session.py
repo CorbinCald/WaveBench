@@ -21,10 +21,8 @@ from . import HARNESS_VERSION
 from .accounting import cache_read_ratio, reported_total
 from .browser import open_preview
 from .budget import (
-    FINISH_OUTPUT_TOKENS,
     FINISH_TOOL_TOKENS,
     FINISH_WARNING_TOKENS,
-    finish_output_tokens,
     finish_reserve,
     finish_tool_tokens,
     finishing_trigger,
@@ -43,7 +41,7 @@ from .handoff import RemotePreview, client_status, destination
 from .preview import PreviewIdentity
 from .runtime import Runtime, SetupError
 from .subagents import SubagentPool, lead_instructions
-from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability
+from .transport import GEMINI_PROVIDER_ROUTES, TurnError, capability, response_recovery_notice
 from .workspace import allocate_project
 
 
@@ -393,7 +391,10 @@ class HarnessSession:
                 "budget_tokens": self.budget_tokens,
                 "budget": self.budget_record(),
                 "finishing_budget": {
-                    "output_tokens": FINISH_OUTPUT_TOKENS,
+                    "output_tokens": min(
+                        self.limits.turn_tokens,
+                        api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+                    ),
                     "warning_tokens": FINISH_WARNING_TOKENS,
                     "tool_result_tokens": FINISH_TOOL_TOKENS,
                     "warning_injected": self.finishing,
@@ -514,7 +515,7 @@ class HarnessSession:
     def prepare_finishing(
         self, local_input: int, input_bound: int, output_tokens: int, turns_left: int
     ) -> tuple[int, int, int]:
-        """Warn once and bound output while keeping a validation round trip affordable."""
+        """Warn once, reserving normal output capacity for validation and submission."""
         remaining = self.limits.total_tokens - self.budget_tokens
         reserve = finish_reserve(input_bound, output_tokens, self.limits.output_chars)
         first_warning = not self.finishing and (
@@ -535,7 +536,8 @@ class HarnessSession:
                     "then call wb done alone with runtime and entry. Avoid optional work and "
                     "large reads. "
                     + ("Do not spawn agents. " if self.subagents else "")
-                    + f"Further responses are capped at {finish_output_tokens(output_tokens):,} tokens. "
+                    + f"Responses allow up to {output_tokens:,} tokens including reasoning, "
+                    "subject to the remaining total budget. "
                     + (
                         "The full finishing sequence no longer fits the estimate; use the remaining "
                         "capacity carefully. "
@@ -576,7 +578,6 @@ class HarnessSession:
         if not self.finishing:
             return local_input, input_bound, output_tokens
 
-        output_tokens = finish_output_tokens(output_tokens)
         # On the first warning, protect the next input (including this response
         # and its tool results) plus a bounded done response. Later requests can
         # consume that reserve; the agent remains responsible for calling done.
@@ -603,7 +604,7 @@ class HarnessSession:
 
     async def compact(self, reason: str, before: int, timeout: float) -> bool:
         """Replace history only when a complete summary leaves useful request capacity."""
-        from .budget import finish_output_tokens, finish_reserve
+        from .budget import finish_reserve
         from .context import BUDGET_COMPACTION_REASON, SUMMARY_MAX_TOKENS, admit_compaction
 
         budget_driven = reason == BUDGET_COMPACTION_REASON
@@ -641,8 +642,6 @@ class HarnessSession:
                 raise BudgetError(message)
             return False
 
-        if budget_driven and getattr(self, "finishing", False):
-            return skip("finishing reserve is already active; continue validation and submission")
         try:
             plan = plan_compaction(self.messages)
         except ValueError as exc:
@@ -660,8 +659,6 @@ class HarnessSession:
             self.limits.turn_tokens,
             api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
         )
-        if self.finishing:
-            normal_output = finish_output_tokens(normal_output)
         reserve = finish_reserve(projected_bound, normal_output, self.limits.output_chars)
         admission = admit_compaction(
             remaining_tokens=remaining,
@@ -669,7 +666,7 @@ class HarnessSession:
             before_bound=self.prompt_estimate.bound(prompt_tokens(self.messages, self.tools)),
             after_bound=projected_bound,
             reserve_tokens=reserve,
-            followup_output_tokens=finish_output_tokens(normal_output),
+            followup_output_tokens=normal_output,
             require_savings=budget_driven,
         )
         record.update(
@@ -847,6 +844,7 @@ class HarnessSession:
         max_seconds = self.limits.repair_seconds if repair else self.limits.build_seconds
         active = 0.0
         provider_retried = False
+        response_retried = False
         submission_reminded = False
         phase = "repairing" if repair else "building"
         if repair and self.finishing:
@@ -874,8 +872,6 @@ class HarnessSession:
                     self.limits.turn_tokens,
                     api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
                 )
-                if self.finishing:
-                    output_tokens = finish_output_tokens(output_tokens)
                 if active >= max_seconds:
                     raise BudgetError(
                         f"{phase} active time budget exhausted ({active:.1f}s / {max_seconds}s)"
@@ -1013,6 +1009,8 @@ class HarnessSession:
                                 "failure": self.record_failure(exc),
                                 "stream": getattr(exc, "diagnostics", None)
                                 or self._stream_diagnostics,
+                                "input_tokens_bound": input_bound,
+                                "max_output_tokens": request_output,
                             }
                         )
                         charged = reported_total(usage)
@@ -1036,6 +1034,24 @@ class HarnessSession:
                                 "kind": "empty_provider_retry",
                                 "phase": phase,
                                 "turn": len(self.turns),
+                            }
+                        )
+                        self.save()
+                        continue
+                    notice = (
+                        response_recovery_notice(exc.failure_code, self.limits.batch_calls)
+                        if isinstance(exc, TurnError) and getattr(exc, "request_sent", True)
+                        else None
+                    )
+                    if notice and not response_retried and turn_index + 1 < max_turns:
+                        response_retried = True
+                        self.messages.append({"role": "user", "content": notice})
+                        self.recoveries.append(
+                            {
+                                "kind": "response_retry",
+                                "phase": phase,
+                                "turn": len(self.turns),
+                                "failure_code": exc.failure_code,
                             }
                         )
                         self.save()

@@ -67,11 +67,20 @@ Data fields separated across lines are joined for JSON parsing; UTF-8 characters
 split across network reads are decoded after the line is complete. An incomplete
 tool call never becomes executable: completion still requires the final marker,
 a successful finish reason, unique valid IDs, function names, and complete JSON
-object arguments. The transport never replays a failed stream. The build/repair
+object arguments. Distinct calls are bounded by `harness.batch_calls` (64 by
+default); a sparse index does not consume intervening slots. Oversized batches
+stop with `tool_batch_limit` before any call executes. Invalid JSON arguments
+report `invalid_tool_arguments`, or `output_truncated` when reported completion
+tokens reached the allowance even if the provider reported `tool_calls`.
+The transport never replays a failed stream. The build/repair
 controller allows one further request per phase when an explicit provider error
 arrives before any model output, with a transient or missing error code. Partial
 output, native failure reasons, malformed streams, disconnections and limits do
-not qualify. Both requests count toward the existing turn, time and token limits;
+not qualify for that provider retry. Separately, each phase and each subagent can
+issue one corrective request for truncated output, invalid JSON arguments, or an
+oversized batch. The notice asks for smaller complete operations; discarded calls
+are neither executed nor inserted into history. Other malformed streams,
+disconnections, and byte/time limits remain terminal. Both requests count toward the existing turn, time and token limits;
 the failed request and its usage or budget estimate remain in the saved turns.
 
 Failure diagnostics include a stable failure code, the specific limit, effective

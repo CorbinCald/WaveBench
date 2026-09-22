@@ -2,7 +2,6 @@
 
 from wavebench.tokens import PromptEstimate
 
-FINISH_OUTPUT_TOKENS = 4_096
 FINISH_WARNING_TOKENS = 512
 FINISH_TOOL_TOKENS = 4_096
 
@@ -11,10 +10,6 @@ def finish_tool_tokens(output_chars: int = 16_000) -> int:
     # A practical diagnostic allowance, plus tool IDs and result wrappers. Actual
     # tool results remain intact; an unexpectedly large result is recorded.
     return min(output_chars, FINISH_TOOL_TOKENS) + 1_024
-
-
-def finish_output_tokens(output_tokens: int) -> int:
-    return min(output_tokens, FINISH_OUTPUT_TOKENS)
 
 
 def input_growth(output_tokens: int, output_chars: int = 16_000) -> int:
@@ -29,7 +24,9 @@ def finish_reserve(input_bound: int, output_tokens: int, output_chars: int = 16_
     alone. Warning text is paid for in both inputs. Tool-result growth is an
     estimate, not a promise or permission to exceed the total token budget.
     """
-    output_tokens = finish_output_tokens(output_tokens)
+    # Reasoning and tool arguments share the output allowance. A hidden finishing
+    # cap can truncate either even when the task still has ample tokens left.
+    # Reserve the configured/model allowance for both requests instead.
     return (
         2 * (input_bound + FINISH_WARNING_TOKENS)
         + 2 * output_tokens

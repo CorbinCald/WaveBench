@@ -15,6 +15,7 @@ from wavebench.harness.config import Limits
 from wavebench.harness.failure import failure_summary
 from wavebench.harness.session import HarnessSession
 from wavebench.harness.workspace import allocate_run
+from wavebench.tokens import prompt_tokens
 
 
 @pytest.fixture
@@ -84,6 +85,186 @@ async def test_stream_failure_diagnostics_and_usage_reach_saved_results(sessions
     assert result["usage"]["cost"] is None
     assert session.dispatcher.tool_usage["calls"] == 0
     assert requests == 1
+
+
+@pytest.mark.parametrize("remaining,output_limit", [(302_021, 64_000), (304_249, 32_000)])
+async def test_finishing_warning_allows_reasoning_and_complete_file_tools(
+    sessions, monkeypatch, remaining, output_limit
+):
+    requests = []
+    monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, "fixture/model", output_limit)
+
+    async def handler(request):
+        data = await request.json()
+        requests.append(data)
+        assert data["max_tokens"] == output_limit
+        assert data["reasoning"] == {"effort": "high"}
+        assert "[WaveBench budget warning]" in json.dumps(data["messages"])
+        if len(requests) == 1:
+            command = {
+                "command": "write",
+                "path": "main.py",
+                "content": "# " + "code " * 6000 + "\nprint(42)\n",
+            }
+        else:
+            assert json.loads(data["messages"][-1]["content"])["ok"]
+            command = {"command": "done", "runtime": "python", "entry": "main.py"}
+        payload = tool_response(command, f"complete-{len(requests)}")
+        payload["choices"][0]["delta"]["reasoning"] = "Check the file and complete the tool call."
+        incoming = prompt_tokens(data["messages"], data["tools"])
+        outgoing = 22_000 if len(requests) == 1 else 100
+        payload["usage"] = {
+            "prompt_tokens": incoming,
+            "completion_tokens": outgoing,
+            "total_tokens": incoming + outgoing,
+            "completion_tokens_details": {"reasoning_tokens": 15_000 if len(requests) == 1 else 50},
+        }
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client)
+        session.reasoning_effort = "high"
+        session.finishing = output_limit < 64_000
+        # The lower provider cap can put this outside the warning frontier;
+        # exercise a warning already delivered by an earlier, larger context.
+        if session.finishing:
+            session.messages.append(
+                {"role": "user", "content": "[WaveBench budget warning] Finish and submit."}
+            )
+        session.budget_tokens = session.limits.total_tokens - remaining
+        session.turns.append(
+            {
+                "phase": "building",
+                "usage": {
+                    "prompt_tokens": session.budget_tokens,
+                    "completion_tokens": 0,
+                    "total_tokens": session.budget_tokens,
+                },
+            }
+        )
+        await session.build()
+    assert session.generation == "submitted", session.error
+    assert session.workspace.read("main.py").endswith("print(42)\n")
+    assert len(requests) == 2 and session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
+    assert session.budget_tokens == session.usage()["total_tokens"] < 1_000_000
+    assert session.recoveries == []
+
+
+@pytest.mark.parametrize(
+    "failure,reported",
+    [
+        ("length", True),
+        ("truncated_arguments", True),
+        ("invalid_arguments", True),
+        ("batch", True),
+        ("batch", False),
+    ],
+)
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_bad_response_retries_once_without_executing_any_failed_calls(
+    sessions, monkeypatch, failure, reported, persistent
+):
+    requests = []
+
+    async def handler(request):
+        data = await request.json()
+        requests.append(data)
+        if len(requests) == 1 or persistent:
+            payload = tool_response(
+                {"command": "write", "path": "rejected.py", "content": "print('must not run')"},
+                "rejected",
+            )
+            calls = payload["choices"][0]["delta"]["tool_calls"]
+            if failure == "length":
+                payload["choices"][0]["finish_reason"] = "length"
+            elif failure in {"truncated_arguments", "invalid_arguments"}:
+                calls.append(
+                    {
+                        "index": 1,
+                        "id": "broken",
+                        "type": "function",
+                        "function": {
+                            "name": "wb",
+                            "arguments": '{"command":"write","content":"unfinished',
+                        },
+                    }
+                )
+            else:
+                calls.extend(
+                    {
+                        "index": n,
+                        "id": f"extra-{n}",
+                        "type": "function",
+                        "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                    }
+                    for n in range(1, 65)
+                )
+            outgoing = data["max_tokens"] if failure in {"length", "truncated_arguments"} else 100
+        else:
+            assert "[WaveBench response recovery]" in json.dumps(data["messages"])
+            assert "rejected.py" not in json.dumps(data["messages"])
+            if len(requests) == 2:
+                assert not session.workspace.ls()
+            payload = (
+                tool_response(
+                    {"command": "write", "path": "main.py", "content": "print(42)\n"}, "write-ok"
+                )
+                if len(requests) == 2
+                else tool_response(
+                    {"command": "done", "runtime": "python", "entry": "main.py"}, "submit-ok"
+                )
+            )
+            outgoing = 100
+        if reported or (len(requests) > 1 and not persistent):
+            payload["usage"] = {
+                "prompt_tokens": 1000,
+                "completion_tokens": outgoing,
+                "total_tokens": 1000 + outgoing,
+            }
+        else:
+            payload.pop("usage", None)
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client)
+        await session.build()
+    assert len(requests) == (2 if persistent else 3)
+    assert len(session.recoveries) == 1
+    if reported:
+        assert session.budget_tokens == session.usage()["total_tokens"]
+    else:
+        assert session.usage()["total_tokens"] is None
+        assert session.budget_record()["estimated"] and session.budget_tokens > 0
+    assert session.budget_tokens <= session.limits.total_tokens
+    assert "rejected.py" not in str(session.workspace.ls())
+    first = session.turns[0]
+    assert first["failure"]["code"] == (
+        "tool_batch_limit"
+        if failure == "batch"
+        else "invalid_tool_arguments"
+        if failure == "invalid_arguments"
+        else "output_truncated"
+    )
+    if failure == "batch":
+        assert first["stream"]["policy"]["tool_calls"] == 64
+        assert first["stream"]["parsing"]["tool_calls"] == 64
+    if persistent:
+        assert session.generation == "failed" and session.dispatcher.tool_usage["calls"] == 0
+    else:
+        assert session.generation == "submitted", session.error
+        assert session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
 
 
 @pytest.mark.parametrize("phase_expires_first", [False, True])
@@ -312,7 +493,7 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
         assert session.budget_tokens > 0
 
 
-@pytest.mark.parametrize("recovery", ["text", "provider_error"])
+@pytest.mark.parametrize("recovery", ["text", "provider_error", "length"])
 async def test_recovery_cannot_bypass_total_token_budget(sessions, monkeypatch, recovery):
     requests = 0
 
@@ -322,8 +503,10 @@ async def test_recovery_cannot_bypass_total_token_budget(sessions, monkeypatch, 
         payload = {"usage": {"prompt_tokens": 49999, "completion_tokens": 0, "total_tokens": 49999}}
         if recovery == "text":
             payload["choices"] = [{"delta": {"content": "Done"}, "finish_reason": "stop"}]
-        else:
+        elif recovery == "provider_error":
             payload["error"] = {"code": 503}
+        else:
+            payload["choices"] = [{"delta": {"reasoning": "unfinished"}, "finish_reason": "length"}]
         return web.Response(
             text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
             content_type="text/event-stream",

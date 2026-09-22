@@ -39,7 +39,11 @@ async def session_factory(tmp_path, monkeypatch):
             "Build a Python program that prints 42 and validate it before submitting.",
             None,
             "offline",
-            Limits(total_tokens=limits.pop("total_tokens", 40_000), **limits),
+            Limits(
+                total_tokens=limits.pop("total_tokens", 40_000),
+                turn_tokens=limits.pop("turn_tokens", 4096),
+                **limits,
+            ),
             asyncio.Semaphore(1),
             asyncio.Semaphore(1),
             auto_open="off",
@@ -149,7 +153,7 @@ async def test_ample_budget_does_not_inject_warning(session_factory, monkeypatch
 async def test_full_ordinary_response_cannot_make_the_warning_arrive_too_late(
     session_factory, monkeypatch
 ):
-    session = session_factory(total_tokens=60_000)
+    session = session_factory(total_tokens=60_000, turn_tokens=16_384)
     requests = []
 
     async def lint():
@@ -168,7 +172,7 @@ async def test_full_ordinary_response_cannot_make_the_warning_arrive_too_late(
             # 16k output. Its repeated input makes the second request's warning
             # arrive with 43k left against a 55k finishing reserve. Neither the
             # input nor the output exceeds the admitted estimate.
-            turn.message["content"] = "work " * (3800 if session.finishing else 16_000)
+            turn.message["content"] = "work " * 16_000
             output = prompt_tokens([turn.message], [])
             turn.usage["completion_tokens"] = output
             turn.usage["total_tokens"] = turn.usage["prompt_tokens"] + output
@@ -188,7 +192,7 @@ async def test_full_ordinary_response_cannot_make_the_warning_arrive_too_late(
     await session.build()
     assert session.generation == "submitted", session.error
     assert len(requests) == 2
-    assert requests[0]["max_tokens"] == 4096
+    assert requests[0]["max_tokens"] == 16_384
     assert warnings(session)[0]["turn"] == 1
     assert warnings(session)[0]["reserve_affordable"]
     assert not any(r["kind"] == "estimate_exceeded" for r in session.budget_decisions)
@@ -206,8 +210,8 @@ async def test_active_finishing_uses_its_actual_output_cap_for_context_admission
             {"role": "tool", "tool_call_id": "0-0", "content": '{"ok":true}'},
         ]
     )
-    # There is no older removable history. The 4096-token finishing request fits
-    # a 128k context, while incorrectly reserving the normal 16384 tokens would
+    # There is no older removable history. The configured 4096-token request fits
+    # a 128k context, while incorrectly reserving the default 64000 tokens would
     # force an impossible compaction before the model can call done.
     local = prompt_tokens(session.messages, session.tools)
     session.prompt_estimate.observe(local, {"prompt_tokens": 115_000})
@@ -433,7 +437,7 @@ async def test_repair_cannot_replenish_budget_consumed_by_initial_submission(
 
 
 def test_reserve_includes_repeated_input_warning_response_and_tool_result():
-    assert finish_reserve(80_000, 16_384) == 2 * (80_000 + 512) + 2 * 4096 + input_growth(4096)
+    assert finish_reserve(80_000, 16_384) == 2 * (80_000 + 512) + 2 * 16_384 + input_growth(16_384)
     assert finish_reserve(80_000, 1024, 2000) == (
         2 * (80_000 + 512) + 2 * 1024 + input_growth(1024, 2000)
     )

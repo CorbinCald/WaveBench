@@ -61,7 +61,7 @@ async def session(tmp_path):
         "Keep main.py and print 42. Validate and submit the project.",
         None,
         "offline",
-        Limits(total_tokens=1_000_000, build_turns=6),
+        Limits(total_tokens=1_000_000, build_turns=6, turn_tokens=4096),
         asyncio.Semaphore(1),
         asyncio.Semaphore(1),
         auto_open="off",
@@ -123,7 +123,7 @@ async def test_budget_compaction_pays_cached_input_and_allows_real_tools(
     session, monkeypatch, model_id, words, initial, total
 ):
     session.model_id = model_id
-    session.limits = Limits(total_tokens=total, build_turns=6)
+    session.limits = Limits(total_tokens=total, build_turns=6, turn_tokens=4096)
     before = history(session, words)
     session.budget_tokens = initial
     session.turns.append(
@@ -221,6 +221,67 @@ async def test_unaffordable_compaction_records_one_skip_and_keeps_context(sessio
     assert session.compactions[0]["charged_tokens"] == 0
 
 
+@pytest.mark.parametrize("already_warned", [False, True])
+async def test_grok_sized_signed_history_compacts_with_default_output_and_finishes(
+    session, monkeypatch, already_warned
+):
+    session.limits = Limits()
+    session.model_id = "x-ai/grok-4.7"
+    monkeypatch.setitem(module.api._MODEL_CONTEXT_CACHE, session.model_id, 500_000)
+    history(session, words=50_000)
+    session.messages[2].update(
+        reasoning="plan " * 10_000,
+        reasoning_details=[
+            {"type": "reasoning.text", "text": "plan " * 10_000},
+            {"type": "reasoning.encrypted", "data": "opaque " * 180_000},
+        ],
+    )
+    before = copy.deepcopy(session.messages)
+    session.prompt_estimate.observe(
+        prompt_tokens(session.messages, session.tools), {"prompt_tokens": 97_165}
+    )
+    session.budget_tokens = 482_540
+    session.finishing = already_warned
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(model_id)
+        incoming = prompt_tokens(messages, tools)
+        if model_id == COMPACTION_MODEL:
+            assert kwargs["input_tokens_bound"] < 75_000
+            evidence = json.loads(messages[1]["content"])
+            assert "opaque" not in messages[1]["content"]
+            assert evidence["preserved_tail"] == before[-2:]
+            message = {
+                "role": "assistant",
+                "content": "main.py prints 42. Finish validation and submit.",
+            }
+        else:
+            assert kwargs["max_tokens"] == 64_000
+            message = (
+                tool_message("fix", "write", path="main.py", content="print(42)\n")
+                if len(requests) == 2
+                else tool_message("submit", "done", runtime="python", entry="main.py")
+            )
+        return Turn(
+            message,
+            {"prompt_tokens": incoming, "completion_tokens": 100, "total_tokens": incoming + 100},
+            model_id,
+            "offline",
+            "stop" if model_id == COMPACTION_MODEL else "tool_calls",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.conversation()
+    assert requests == [COMPACTION_MODEL, session.model_id, session.model_id]
+    assert session.compactions[0]["reserve_outcome"] == "preserved"
+    assert session.descriptor["entry"] == "main.py"
+    assert session.budget_tokens < 600_000
+    archived = json.loads((session.metadata / session.compactions[0]["archive"]).read_text())
+    assert archived == before
+
+
 async def test_preserved_large_task_makes_compaction_savings_insufficient(session, monkeypatch):
     session.messages[1]["content"] = "original " * 18_000
     before = history(session, words=2000)
@@ -235,17 +296,27 @@ async def test_preserved_large_task_makes_compaction_savings_insufficient(sessio
     assert session.messages == before
 
 
-async def test_compaction_cannot_spend_an_active_finishing_reserve(session, monkeypatch):
+async def test_affordable_compaction_keeps_finishing_work_possible_after_warning(
+    session, monkeypatch
+):
     before = history(session)
     session.finishing = True
 
-    async def forbidden(*args, **kwargs):
-        pytest.fail("optional compaction must not interrupt finishing")
+    async def model(*args, **kwargs):
+        return Turn(
+            {"role": "assistant", "content": "main.py prints 42. Validate and submit now."},
+            {"prompt_tokens": 80_000, "completion_tokens": 100, "total_tokens": 80_100},
+            COMPACTION_MODEL,
+            "offline",
+            "stop",
+            {},
+        )
 
-    monkeypatch.setattr(module, "call_conversation", forbidden)
-    assert not await session.compact(BUDGET_COMPACTION_REASON, 80_000, 10)
-    assert "finishing reserve is already active" in session.compactions[0]["skip_reason"]
-    assert session.messages == before
+    monkeypatch.setattr(module, "call_conversation", model)
+    assert await session.compact(BUDGET_COMPACTION_REASON, 80_000, 10)
+    assert session.finishing
+    assert session.compactions[0]["reserve_outcome"] == "preserved"
+    assert session.messages[:2] == before[:2] and session.messages[-2:] == before[-2:]
 
 
 async def test_provider_compaction_overrun_is_charged_without_increasing_budget(

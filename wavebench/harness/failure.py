@@ -94,6 +94,10 @@ def failure_record(
         )
         if code == "output_truncated":
             summary = "Output allowance exhausted"
+        elif code == "tool_batch_limit":
+            summary = "Too many tool calls in one response"
+        elif code == "invalid_tool_arguments":
+            summary = "Invalid tool arguments"
         elif code == "project_abandoned":
             summary = "Model ended without submission"
         elif code == "provider_stream_error":

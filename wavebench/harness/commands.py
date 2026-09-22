@@ -236,6 +236,11 @@ class Dispatcher:
             )
             if subagents is not None:
                 self.tools = [*self.tools, SPAWN_TOOL_SCHEMA]
+        self.tools = copy.deepcopy(self.tools)
+        self.tools[0]["function"]["description"] += (
+            f" Use at most {limits.batch_calls} native tool calls per response; "
+            "wait for their results before continuing."
+        )
         self.submission: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
