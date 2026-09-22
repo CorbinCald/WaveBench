@@ -554,3 +554,90 @@ async def test_disabled_subagents_expose_no_tool_and_reject_calls(factory, monke
     assert seen == [["wb"], ["wb"]]
     assert session.result()["harness"]["subagents"] == {"enabled": False}
     assert session.result()["harness"]["timing"]["subagent_s"] == 0.0
+
+
+async def test_lead_writing_files_alone_is_reminded_once_to_delegate(factory, monkeypatch):
+    seen: dict[str, int] = {}
+    reminders = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        kind, agent = role(messages)
+        index = seen.get(kind + agent, 0)
+        seen[kind + agent] = index + 1
+        if kind == "lead":
+            reminders.append(
+                [m["content"] for m in messages if "[WaveBench subagents]" in m.get("content", "")]
+            )
+            if index == 0:
+                return calls(index, write("index.html", "<h1>hi</h1>"))
+            if index == 1:
+                return calls(index, write("lib/a.py", "A = 1\n"))
+            if index == 2:
+                assert "written 2 files yourself" in messages[-1]["content"]
+                assert (
+                    "Up to 4 subagents can run in parallel (8 left in total)"
+                    in messages[-1]["content"]
+                )
+                return calls(index, spawn("b", "Write lib/b.py with B = 2"))
+            if index == 3:
+                return calls(index, write("main.py", "from lib.a import A\nprint(A)\n"), LINT)
+            return calls(index, DONE)
+        if index == 0:
+            return calls(index, write("lib/b.py", "B = 2\n"))
+        return text("done")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    # The reminder appears once, after the second file, and never again after spawning.
+    assert [len(found) for found in reminders] == [0, 0, 1, 1, 1]
+    assert session.recoveries == [{"kind": "subagent_reminder", "phase": "building", "turn": 2}]
+    assert session.result()["harness"]["subagents"]["reminded"] is True
+
+
+async def test_no_reminder_when_the_lead_delegates_first_or_subagents_are_off(factory, monkeypatch):
+    seen: dict[str, int] = {}
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        kind, agent = role(messages)
+        index = seen.get(kind + agent, 0)
+        seen[kind + agent] = index + 1
+        assert not any("[WaveBench subagents]" in m.get("content", "") for m in messages)
+        if kind == "lead":
+            if index == 0:
+                return calls(index, spawn("a", "Write lib/a.py with A = 1"))
+            if index == 1:
+                return calls(index, write("x.txt", "1"), write("y.txt", "2"), write("z.txt", "3"))
+            if index == 2:
+                return calls(index, write("main.py", "from lib.a import A\nprint(A)\n"), LINT)
+            return calls(index, DONE)
+        if index == 0:
+            return calls(index, write("lib/a.py", "A = 1\n"))
+        return text("done")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    assert session.recoveries == []
+    seen.clear()
+    quiet = factory("quiet", subagents=False)
+
+    async def solo(client, key, model_id, messages, tools, **kwargs):
+        assert not any("[WaveBench subagents]" in m.get("content", "") for m in messages)
+        index = seen.get("solo", 0)
+        seen["solo"] = index + 1
+        if index < 3:
+            return calls(index, write(f"f{index}.py", "x = 1\n"))
+        if index == 3:
+            return calls(index, write("main.py", "print(1)\n"))
+        return calls(index, DONE)
+
+    monkeypatch.setattr(module, "call_conversation", solo)
+    await quiet.build()
+    await quiet.execute()
+    assert quiet.status == "success", quiet.error
+    assert quiet.recoveries == []

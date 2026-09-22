@@ -350,14 +350,24 @@ calls in one turn, hard caps with readable errors, and no nesting.
 - **Same model, fresh context.** A subagent is a new conversation of the model
   being benchmarked, with the same reasoning effort. It sees its own system
   prompt, the original user request as context, and the lead's `task` brief;
-  it never sees the lead's history. The lead is told to brief each agent
-  completely: objective, owned files, interfaces, constraints, and the report
-  it needs.
+  it never sees the lead's history. The lead is instructed to delegate unless
+  the whole project fits in one or two small files: decide the file layout and
+  shared contracts, write that scaffolding itself, spawn one agent per
+  independent file or module in the same turn, then integrate. It is told to
+  brief each agent completely: objective, owned files, interfaces,
+  constraints, and the report it needs. A lead that has written two files
+  itself without spawning receives one reminder naming the parallel window and
+  remaining agents; it is recorded as a `subagent_reminder` recovery and in
+  `harness.subagents.reminded`. Leads that delegate first, finishing leads, and
+  disabled runs never receive it.
 - **Same workspace and tools.** Subagents use the same `wb` file tools, lint,
   and, when enabled, `web_search`/`web_fetch` on the lead's project. They cannot
   call `done` or `spawn_agent` (depth is one); `read_only: true` also rejects
   `write`, `edit`, and `delete`. Parallel agents should own disjoint files; the
   workspace's atomic replacement prevents torn files but not lost updates.
+  Within one lead turn, spawn calls start after the batch's earlier `write`,
+  `edit`, and `delete` calls, and later file changes wait for the agents, so
+  scaffolding written in the same turn is in place before agents read it.
 - **Parallel fan-out.** Each `spawn_agent` call returns when its agent finishes.
   Several calls in one turn run concurrently, up to `harness.subagent_parallel`
   (2–5, default 4) at once; further calls wait. Each model may spawn at most

@@ -1187,6 +1187,12 @@ class HarnessSession:
                     }
                     for result in results
                 )
+                reminder = self.subagents.reminder(native, results) if self.subagents else None
+                if reminder and not self.finishing and turn_index + 1 < max_turns:
+                    self.messages.append({"role": "user", "content": reminder})
+                    self.recoveries.append(
+                        {"kind": "subagent_reminder", "phase": phase, "turn": len(self.turns)}
+                    )
                 if self.finishing:
                     result_tokens = (
                         prompt_tokens(self.messages[-len(results) :], []) if results else 0
