@@ -73,12 +73,13 @@ SPAWN_TOOL_SCHEMA = {
     "function": {
         "name": "spawn_agent",
         "description": (
-            "Delegate one self-contained task to a subagent of your own model. It works in this "
-            "same workspace with wb file tools and lint, but cannot submit or spawn, and it starts "
-            "with an empty context: task must be a complete brief with the objective, the exact "
-            "files it owns, interfaces or contracts to follow, constraints, and what to report. "
-            "Call spawn_agent several times in one turn to run agents in parallel, giving them "
-            "disjoint files. Each call returns when its agent finishes, with the report, the "
+            "Delegate one self-contained task to a subagent of your own model. Use it for any "
+            "project with several files or subsystems: one agent per independent file or module, "
+            "all spawned in the same turn so they run in parallel with disjoint files. The agent "
+            "works in this same workspace with wb file tools and lint, but cannot submit or "
+            "spawn, and it starts with an empty context: task must be a complete brief with the "
+            "objective, the exact files it owns, interfaces or contracts to follow, constraints, "
+            "and what to report. Each call returns when its agent finishes, with the report, the "
             "files it changed, and its usage. You remain responsible for integration, lint, "
             "and done."
         ),
@@ -366,6 +367,15 @@ class Dispatcher:
         # Some providers normalize optional schema fields to required fields.
         # Ignore fields belonging to other verbs; they cannot change execution.
         kwargs = {k: v for k, v in command.items() if k in allowed[verb]}
+        required = {
+            "read": ("path",),
+            "write": ("path", "content"),
+            "edit": ("path", "old", "new"),
+            "delete": ("path",),
+        }
+        missing = [key for key in required.get(verb, ()) if kwargs.get(key) is None]
+        if missing:
+            raise ValueError(f"{verb} requires {', '.join(missing)}")
         if "recursive" in kwargs and type(kwargs["recursive"]) is not bool:
             raise ValueError("recursive must be a boolean")
         if verb == "done":
@@ -397,8 +407,10 @@ class Dispatcher:
         if left.get("command") in {"lint", "done"} or right.get("command") in {"lint", "done"}:
             return True
         if "spawn_agent" in (left_tool, right_tool):
-            # Subagent runs overlap with each other and with the lead's own file work.
-            return False
+            # Agents start after the batch's earlier file changes, and later file
+            # changes wait for them; reads, research, and other spawns overlap.
+            other = right if left_tool == "spawn_agent" else left
+            return other.get("command") in {"write", "edit", "delete"}
         if left.get("command") in {"ls", "read"} and right.get("command") in {"ls", "read"}:
             return False
         a = str(left.get("path", ".")).strip("/")

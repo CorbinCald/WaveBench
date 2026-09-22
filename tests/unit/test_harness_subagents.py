@@ -54,7 +54,7 @@ def test_tool_schemas_separate_lead_and_subagent_capabilities():
     assert function["parameters"]["required"] == ["name", "task"]
     assert set(function["parameters"]["properties"]) == {"name", "task", "read_only"}
     assert function["parameters"]["additionalProperties"] is False
-    assert "several times in one turn" in function["description"]
+    assert "all spawned in the same turn" in function["description"]
     (subagent_wb,) = SUBAGENT_TOOL_SCHEMA
     commands = subagent_wb["function"]["parameters"]["properties"]["command"]["enum"]
     assert "done" not in commands and {"write", "edit", "lint"} <= set(commands)
@@ -371,6 +371,57 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
         "completed": 1,
         "failed": 0,
         "rejected": 3,
+        "reminded": False,
     }
     assert isinstance(pool.semaphore, asyncio.Semaphore)
     assert module.MAX_TASK_CHARS == 24_000
+
+
+def test_spawn_treats_null_read_only_as_false():
+    assert SubagentPool.validate({"name": "a", "task": "b", "read_only": None}) == ("a", "b", False)
+    assert SubagentPool.validate({"name": "a", "task": "b", "read_only": True})[2] is True
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ({"command": "write", "path": "a.py", "content": ""}, True),
+        ({"command": "edit", "path": "a.py", "old": "x", "new": "y"}, True),
+        ({"command": "delete", "path": "a.py"}, True),
+        ({"command": "read", "path": "a.py"}, False),
+        ({"command": "ls"}, False),
+        ({"command": "lint"}, True),
+        ({"command": "done", "runtime": "python", "entry": "a.py"}, True),
+    ],
+)
+def test_spawn_calls_wait_for_file_changes_but_overlap_reads_and_spawns(command, expected):
+    from wavebench.harness.commands import Dispatcher
+
+    spawn = {"name": "a", "task": "b"}
+    assert Dispatcher._conflicts(command, spawn, "wb", "spawn_agent") is expected
+    assert Dispatcher._conflicts(spawn, command, "spawn_agent", "wb") is expected
+    assert Dispatcher._conflicts(spawn, spawn, "spawn_agent", "spawn_agent") is False
+    assert Dispatcher._conflicts({"query": "q"}, spawn, "web_search", "spawn_agent") is False
+
+
+@pytest.mark.parametrize(
+    "command,message",
+    [
+        ({"command": "edit", "old": "a", "new": "b"}, "edit requires path"),
+        ({"command": "edit", "path": "f.py"}, "edit requires old, new"),
+        ({"command": "write", "path": "f.py"}, "write requires content"),
+        ({"command": "read"}, "read requires path"),
+        ({"command": "delete", "path": None}, "delete requires path"),
+    ],
+)
+async def test_missing_required_fields_produce_readable_tool_errors(tmp_path, command, message):
+    from wavebench.harness.commands import Dispatcher
+    from wavebench.harness.workspace import Workspace
+
+    workspace = Workspace(tmp_path)
+    try:
+        dispatcher = Dispatcher(workspace, None, tmp_path, Limits())
+        (result,) = await dispatcher.batch([{"id": "c1", "arguments": command}])
+    finally:
+        workspace.close()
+    assert not result["ok"] and result["error"] == message

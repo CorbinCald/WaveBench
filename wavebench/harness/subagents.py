@@ -27,6 +27,7 @@ from .workspace import safe_name
 MAX_NAME_CHARS = 40
 MAX_TASK_CHARS = 24_000
 MIN_REQUEST_OUTPUT = 1_024
+REMINDER_WRITES = 2
 FINAL_NOTICE = (
     "[WaveBench] This is your final model request. Reply now with your report as plain "
     "text and no tool calls; further tool calls will not run."
@@ -45,14 +46,16 @@ def subagents_status(config: dict) -> str:
 
 def lead_instructions(parallel: int, cap: int) -> str:
     return (
-        " Subagents: spawn_agent delegates one self-contained task to a subagent of your own "
-        "model that shares this workspace, tools, and budget; up to "
-        f"{parallel} run at once and {cap} in total. Delegate independent, well-specified parts "
-        "(separate modules, pages, or research) by calling spawn_agent several times in one "
-        "turn; do small or tightly coupled work yourself. Each agent starts with an empty "
-        "context, so brief it completely: objective, the files it owns, interfaces to follow, "
-        "constraints, and the report you need. Give parallel agents disjoint files, review their "
-        "work before integrating, and submit only with your own wb done."
+        " Subagents are enabled: spawn_agent runs a subagent of your own model that shares this "
+        f"workspace, tools, and budget; up to {parallel} run at once and {cap} in total. Unless "
+        "the whole project fits in one or two small files, delegate: first decide the file "
+        "layout and the shared contracts (entry file, data formats, function and CSS class "
+        "names, module interfaces) and write that scaffolding yourself; then spawn one agent per "
+        "independent file or module, all in the same turn so they run in parallel; then read "
+        "their reports, integrate, lint, and submit. Each agent starts with an empty context, so "
+        "its task must be a complete brief: objective, the exact files it owns, interfaces to "
+        "follow, constraints, and the report you need. Give parallel agents disjoint files, "
+        "verify their work before integrating, and submit only with your own wb done."
     )
 
 
@@ -109,6 +112,8 @@ class SubagentPool:
         self.semaphore = asyncio.Semaphore(limits.subagent_parallel)
         self.runs: list[SubagentRun] = []
         self.rejected = 0
+        self.lead_writes = 0
+        self.reminded = False
         self.reserved_tokens = 0
         self.seconds = 0.0
         self._chars: dict[int, int] = {}
@@ -131,6 +136,7 @@ class SubagentPool:
             "completed": statuses.count("completed"),
             "failed": sum(status not in {"pending", "running", "completed"} for status in statuses),
             "rejected": self.rejected,
+            "reminded": self.reminded,
         }
 
     def record(self) -> dict:
@@ -160,6 +166,28 @@ class SubagentPool:
         )
         return limits.total_tokens - session.budget_tokens - self.reserved_tokens - reserve
 
+    def reminder(self, calls: list[dict], results: list[dict]) -> str | None:
+        """One nudge once a lead has written files itself without delegating anything."""
+        if self.reminded or self.runs or not self.available():
+            return None
+        self.lead_writes += sum(
+            1
+            for call, result in zip(calls, results, strict=True)
+            if call.get("name", "wb") == "wb"
+            and (call.get("arguments") or {}).get("command") == "write"
+            and result.get("ok")
+        )
+        if self.lead_writes < REMINDER_WRITES:
+            return None
+        self.reminded = True
+        return (
+            f"[WaveBench subagents] You have written {self.lead_writes} files yourself and "
+            f"spawned no agents. Up to {self.parallel} subagents can run in parallel "
+            f"({self.remaining} left in total). If independent files or modules remain, spawn "
+            "one agent per file now, each with a complete brief (objective, owned files, "
+            "interfaces, constraints, report); otherwise continue and submit."
+        )
+
     def note_progress(self, number: int, chars: int | None) -> None:
         if chars is None:
             self._chars.pop(number, None)
@@ -174,7 +202,10 @@ class SubagentPool:
         if not isinstance(arguments, dict) or set(arguments) - {"name", "task", "read_only"}:
             raise ValueError("spawn_agent accepts only name, task, and read_only")
         name, task = arguments.get("name"), arguments.get("task")
-        read_only = arguments.get("read_only", False)
+        # Some providers send every optional schema field; null means unset.
+        read_only = arguments.get("read_only")
+        if read_only is None:
+            read_only = False
         if not isinstance(name, str) or not name.strip() or len(name) > MAX_NAME_CHARS:
             raise ValueError(f"name must be a label of 1-{MAX_NAME_CHARS} characters")
         if not isinstance(task, str) or not task.strip():
