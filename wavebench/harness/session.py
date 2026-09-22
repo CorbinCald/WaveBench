@@ -856,6 +856,14 @@ class HarnessSession:
         try:
             for turn_index in range(max_turns):
                 self.phase(phase)
+                if self.tracker and self.tracker.is_running:
+                    self.tracker.update_harness_phase(
+                        self.name,
+                        turn=turn_index + 1,
+                        max_turns=max_turns,
+                        active_s=active,
+                        max_s=max_seconds,
+                    )
                 # Withdraw spawn_agent once the cap is reached or finishing has begun.
                 self.tools = self.dispatcher.available_tools()
                 self.prepare_research(max_turns, turn_index, max_seconds, active)

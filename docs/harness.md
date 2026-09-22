@@ -387,7 +387,32 @@ wall time, which overlaps the lead's tool time. Their streamed output moves the
 live TK/S rate, and OUT TK settles
 as each subagent request completes. The live and final tables add an
 **AGENTS** column (**AGT** in narrow terminals) with the number of spawned
-agents, and the phase shows `delegating` while agents run. Lifetime analytics
+agents; while agents run it shows `running/spawned`, such as `2/3`, and the
+phase shows `delegating`.
+
+While a model is delegating, a heads-up display appears beneath its row and
+disappears when the lead's next request begins:
+
+```text
+⠹ gemini3.8Flash   delegating   5,382   ~179   $0.048   18   0.0%   18   2/3   0.0%   37.7s
+    ↳ agents 2 running · 1 done · cap 3/3 · lead turn 3/32 · ~37.1s/15m · 358k tk left
+    01-home-page     done ✓     turn 6/10     803 tk             5 tools   15.7s
+    02-about-page    streaming  turn 5/10     132 tk   ~59 tk/s  4 tools   15.7s
+    03-contact-page  streaming  turn 6/10   1,141 tk    ~6 tk/s  5 tools   15.7s
+```
+
+The head line counts running, done, and failed agents in the current batch,
+shows spawned agents against the cap, the lead's turn within its phase limit,
+its estimated active time against the phase time limit, and the remaining
+total-token budget. Each agent row shows its label, phase (`waiting` for a
+slot, `thinking`, `streaming`, `tools`, `linting`, `done ✓`, `failed ✗`,
+`turn limit`, `time limit`, `no budget`, or `cancelled`), request number
+against its turn limit, output tokens with the current request's streaming
+estimate, an interval-average output rate while it generates, completed tool
+calls, and elapsed time. Narrow terminals drop the rate, tools, turn, and token
+cells in that order; short terminals show as many agent rows as fit and then a
+`+N more agents…` line, so a delegating model is never hidden by its agents.
+Lifetime analytics
 add an `agents` total. `harness.subagents` in each result records the setting,
 counts, aggregate subagent usage, and one record per run; each agent's
 conversation, tool records, and `result.json` are saved under

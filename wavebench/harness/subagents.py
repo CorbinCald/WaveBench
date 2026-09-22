@@ -206,12 +206,15 @@ class SubagentPool:
         self.runs.append(run)
         if session.phase_name != "delegating":
             session.phase("delegating")
+        run.publish(label=run.label, status="waiting", max_turns=self.limits.subagent_turns)
+        session.on_tool_result(session.dispatcher.tool_usage)
         started = time.monotonic()
         try:
             async with self.semaphore:
                 await run.run()
         finally:
             self.seconds += time.monotonic() - started
+            session.on_tool_result(session.dispatcher.tool_usage)
             session.save()
         return run.result_for_lead()
 
@@ -234,7 +237,8 @@ class SubagentRun:
             session.runtime,
             self.metadata,
             self.limits,
-            on_tool_result=session.on_tool_result,
+            lambda phase: self.publish(status=phase),
+            session.on_tool_result,
             parent=session.dispatcher,
             read_only=read_only,
         )
@@ -268,6 +272,7 @@ class SubagentRun:
         self.gemini_provider: str | None = None
         self.api_seconds = 0.0
         self.tool_seconds = 0.0
+        self.output_tokens = 0
         self.started: float | None = None
         self.finished: float | None = None
         self.started_at: float | None = None
@@ -289,6 +294,13 @@ class SubagentRun:
         tracker = self.session.tracker
         if delta > 0 and tracker and tracker.is_running:
             tracker.note_harness_output(self.session.name, delta)
+            self.publish(status="streaming", output_tokens=self._turn_output_tokens)
+
+    def publish(self, **fields) -> None:
+        """Feed this agent's live row in the lead's delegation HUD."""
+        tracker = self.session.tracker
+        if tracker and tracker.is_running:
+            tracker.update_subagent(self.session.name, self.number, **fields)
 
     def on_diagnostics(self, diagnostics: dict) -> None:
         self._stream_diagnostics = diagnostics
@@ -328,13 +340,18 @@ class SubagentRun:
         session.turns.append(record)
         self.turns.append(record)
         session.budget_tokens += charged
+        completion = record["usage"].get("completion_tokens")
+        self.output_tokens += (
+            completion if type(completion) is int and completion >= 0 else self._turn_output_tokens
+        )
 
-    def publish(self) -> None:
+    def publish_usage(self) -> None:
         session, tracker = self.session, self.session.tracker
         if tracker and tracker.is_running:
             tracker.update_harness(
                 session.name, session.usage(), session.api_seconds, budget=session.budget_record()
             )
+            self.publish(settled_tokens=self.output_tokens, output_tokens=0)
 
     def note_files(self, calls: list[dict], results: list[dict]) -> None:
         kinds = {"write": "written", "edit": "edited", "delete": "deleted"}
@@ -390,6 +407,7 @@ class SubagentRun:
                     async with session.api_slots:
                         self._turn_usage, self._turn_output_tokens = {}, 0
                         self._stream_diagnostics = {}
+                        self.publish(status="thinking", turn=turn_index + 1, output_tokens=0)
                         turn = await asyncio.wait_for(
                             self.request(tools, request_output, input_bound),
                             max(0.001, deadline - time.monotonic()),
@@ -422,7 +440,7 @@ class SubagentRun:
                     elapsed = time.monotonic() - started
                     self.api_seconds += elapsed
                     session.api_seconds += elapsed
-                    self.publish()
+                    self.publish_usage()
                 explicit_cache = (turn.adjustments.get("cache") or {}).get("breakpoints")
                 measured = context_usage(
                     turn.usage, self.cache_policy.family if explicit_cache else "automatic"
@@ -459,12 +477,14 @@ class SubagentRun:
                     for call in calls
                 ]
                 started = time.monotonic()
+                self.publish(status="tools")
                 try:
                     results = await asyncio.wait_for(
                         self.dispatcher.batch(native), max(0.001, deadline - time.monotonic())
                     )
                 finally:
                     self.tool_seconds += time.monotonic() - started
+                    self.publish(**self.tool_counts())
                 self.note_files(native, results)
                 self.messages.extend(
                     {
@@ -491,7 +511,19 @@ class SubagentRun:
         finally:
             self.finished, self.finished_at = time.monotonic(), time.time()
             self.pool.note_progress(self.number, None)
+            self.publish(
+                status=self.status,
+                finished=self.finished,
+                error=self.error,
+                settled_tokens=self.output_tokens,
+                output_tokens=0,
+                **self.tool_counts(),
+            )
             self.save()
+
+    def tool_counts(self) -> dict:
+        usage = self.dispatcher.tool_usage
+        return {"tool_calls": usage["calls"], "tool_failures": usage["failures"]}
 
     def result_for_lead(self) -> dict:
         """The only subagent output the lead sees: bounded report, files, status, usage."""
