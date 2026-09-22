@@ -46,15 +46,30 @@ for each model; lifetime analytics showed `agents 6`. Each agent's brief,
 conversation, tool records, and report were saved under
 `metadata/<model-slot>/subagents/`.
 
+## Live delegation HUD
+
+Verified on 2026-09-21 with a second paid run of `google/gemini-3.8-flash`
+through the real interactive CLI in a 120 × 40 PTY, same task and limits. The
+recorded frames showed the AGENTS column at `3/3` while all three agents ran
+and `2/3` after the first finished, the head line advancing from
+`3 running · 0 done` to `2 running · 1 done` with `cap 3/3`, the lead's
+`turn 3/32` and active time against the 15-minute limit, and the remaining
+budget falling as agents spent tokens. Agent rows moved through `thinking`,
+`streaming` with an interval rate, `linting`, and `done ✓`, with request
+numbers against the 10-request limit, output tokens, tool counts, and elapsed
+time. The block disappeared when the lead's next request began; the final table
+showed the AGENTS column with 3. The run passed at $0.080.
+
 Automated coverage includes parallel execution bounded by the window, cap
 enforcement and tool withdrawal, rejected nesting and submission, read-only
 agents, the final-request notice and unexecuted pending calls, subagent failures
 and shared-budget exhaustion that preserve the lead's finishing reserve, phase
 and per-agent time limits, research quotas shared with the lead, spawning during
 repair, disabled runs, the setup screen, CLI flags, orchestrator wiring, the
-display column, and lifetime analytics.
+display column, the delegation HUD at every width and terminal height, and
+lifetime analytics.
 
-Validation: `python -m pytest` — 1,176 passed, one paid test deselected;
+Validation: `python -m pytest` — 1,188 passed, one paid test deselected;
 `ruff check .`, `ruff format --check .`, and `git diff --check` passed.
 Temporary settings, projects, logs, and recordings were removed after
 verification.

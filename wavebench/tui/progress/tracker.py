@@ -108,6 +108,8 @@ class ProgressTracker:
         self._parsing: dict[str, dict[str, Any]] = {}
         self._harness: dict[str, dict[str, Any]] = {}
         self._harness_samples: dict[str, dict[str, Any]] = {}
+        # Live subagent rows for the current delegation batch, per lead model.
+        self._subagents: dict[str, dict[int, dict[str, Any]]] = {}
         self._phases: dict[str, float] = {}
         # Live throttle/retry state per model. Cleared once the retry's
         # `until` deadline passes; total count survives so the active-row
@@ -250,6 +252,7 @@ class ProgressTracker:
             self.unregister(model_name)
             self.finish_parsing(model_name)
             self._harness_samples.pop(model_name, None)
+            self._subagents.pop(model_name, None)
 
     def update_harness(
         self, model_name: str, usage: dict, api_seconds: float, *, budget: dict | None = None
@@ -263,12 +266,54 @@ class ProgressTracker:
             "web_search": previous.get("web_search", {}),
             "web_fetch": previous.get("web_fetch", {}),
             "subagents": previous.get("subagents", {}),
+            "phase": previous.get("phase", {}),
             "budget": budget if budget is not None else previous.get("budget", {}),
         }
 
     def update_harness_budget(self, model_name: str, budget: dict) -> None:
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         metrics["budget"] = budget.copy()
+
+    def update_harness_phase(
+        self, model_name: str, *, turn: int, max_turns: int, active_s: float, max_s: float
+    ) -> None:
+        """Record the lead's phase turn and active-time position for the delegation HUD."""
+        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
+        metrics["phase"] = {
+            "turn": turn,
+            "max_turns": max_turns,
+            "active_s": active_s,
+            "max_s": max_s,
+            "updated": time.monotonic(),
+        }
+
+    def update_subagent(self, model_name: str, number: int, **fields: Any) -> None:
+        """Publish one subagent's live state; the batch clears at the lead's next turn."""
+        agents = self._subagents.setdefault(model_name, {})
+        now = time.monotonic()
+        state = agents.setdefault(
+            number,
+            {
+                "label": f"{number:02d}",
+                "status": "waiting",
+                "turn": 0,
+                "max_turns": 0,
+                "output_tokens": 0,
+                "settled_tokens": 0,
+                "tool_calls": 0,
+                "tool_failures": 0,
+                "error": None,
+                "started": now,
+                "finished": None,
+                "sample_time": now,
+                "sample_tokens": 0,
+                "rate": None,
+            },
+        )
+        if "turn" in fields and fields["turn"] != state["turn"]:
+            # A new request streams from zero; never count the settled turn as a burst.
+            state.update(sample_time=now, sample_tokens=0, rate=None)
+        state.update(fields)
 
     def update_harness_tools(
         self,
@@ -314,6 +359,8 @@ class ProgressTracker:
         active = self._active[model_name]
         self._wave_completed_chars += active["chars"]
         active.update(chars=0, last_chars=0, last_rate_time=0.0, smoothed_rate=0.0)
+        # The lead has read its agents' reports; their rows leave the display.
+        self._subagents.pop(model_name, None)
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         now = time.monotonic()
         metrics.update(
@@ -466,6 +513,7 @@ class ProgressTracker:
             "web_searches": searches.get("calls") if searches.get("enabled") else None,
             "web_fetches": fetches.get("calls") if fetches.get("enabled") else None,
             "subagents": agents.get("spawned") if agents.get("enabled") else None,
+            "subagents_active": agents.get("active", 0) if result is None else 0,
             "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
@@ -762,6 +810,11 @@ class ProgressTracker:
                 )
                 if key == "rate":
                     color = _styles.ACCENT
+                elif key == "agents" and values["subagents_active"] and value is not None:
+                    # Agents running now over agents spawned so far.
+                    live = f"{values['subagents_active']}/{value}"
+                    if len(live) <= width:
+                        text, color = live, _styles.ACCENT
             elif key in {"cache", "fail"}:
                 value = values["cache_rate" if key == "cache" else "tool_failure_rate"]
                 text = "—" if value is None else f"{value:.1%}"
@@ -796,6 +849,107 @@ class ProgressTracker:
             for paragraph in detail.splitlines()
             for line in textwrap.wrap(paragraph, max(1, inner_w - 2))
         ]
+
+    @staticmethod
+    def _subagent_rate(state: dict) -> float | None:
+        """Interval-average output rate for one running agent, refreshed every 250 ms."""
+        if state["status"] not in {"thinking", "streaming"}:
+            return None
+        now = time.monotonic()
+        total = state["output_tokens"]
+        elapsed = now - state["sample_time"]
+        if elapsed >= ProgressTracker.HARNESS_SAMPLE_INTERVAL:
+            delta = max(0, total - state["sample_tokens"])
+            state["rate"] = delta / elapsed if total > 0 or state["rate"] is not None else None
+            state.update(sample_time=now, sample_tokens=total)
+        return state["rate"]
+
+    def _format_subagent_row(self, state: dict, inner_w: int, label_w: int) -> str:
+        status = state["status"]
+        labels = {
+            "completed": "done ✓",
+            "failed": "failed ✗",
+            "turn_limit": "turn limit",
+            "time_limit": "time limit",
+            "budget_exhausted": "no budget",
+            "cancelled": "cancelled",
+        }
+        colors = {
+            "streaming": _styles.ACCENT,
+            "completed": S.GRN,
+            "failed": S.RED,
+            "cancelled": S.DIM,
+        }
+        color = colors.get(status, S.YEL if status in labels else S.DIM)
+        end = state["finished"] or time.monotonic()
+        tokens = state["settled_tokens"] + state["output_tokens"]
+        rate = self._subagent_rate(state)
+        turn = f"turn {state['turn']}/{state['max_turns']}" if state["max_turns"] else ""
+        tools = state["tool_calls"]
+        # Status and elapsed time always fit; the label shrinks on narrow terminals.
+        label_w = max(4, min(label_w, inner_w - 4 - 1 - 10 - 1 - 6))
+        prefix = f"    {S.BOLD}{_truncate(state['label'], label_w):<{label_w}}{S.RST} "
+        cells = {
+            "status": f"{color}{_truncate(labels.get(status, status), 10):<10}{S.RST}",
+            "turn": f"{S.DIM}{turn:<10}{S.RST}",
+            "tokens": f"{S.DIM}{tokens:>7,} tk{S.RST}",
+            "rate": f"{_styles.ACCENT}{f'~{rate:,.0f} tk/s' if rate is not None else '':>10}{S.RST}",
+            "tools": f"{S.DIM}{f'{tools} tool' + ('s' if tools != 1 else ''):<8}{S.RST}",
+            "time": f"{S.DIM}{format_duration(end - state['started']):>6}{S.RST}",
+        }
+        # Drop the least essential cells first: rate, tools, turn, then tokens.
+        for drop in (None, "rate", "tools", "turn", "tokens"):
+            cells.pop(drop, None)
+            row = prefix + " ".join(cells.values())
+            if _vlen(row) <= inner_w:
+                return row
+        return _truncate(row, inner_w)
+
+    def _format_subagent_rows(
+        self, name: str, inner_w: int, max_rows: int | None = None
+    ) -> list[str]:
+        """The delegation HUD: batch counts, lead phase position, and one row per agent."""
+        agents = self._subagents.get(name)
+        if not agents or (max_rows is not None and max_rows < 1):
+            return []
+        states = [agents[number] for number in sorted(agents)]
+        metrics = self._harness.get(name, {})
+        pool = metrics.get("subagents") or {}
+        live = {"waiting", "thinking", "streaming", "tools", "linting"}
+        running = sum(state["status"] in live for state in states)
+        done = sum(state["status"] == "completed" for state in states)
+        failed = len(states) - running - done
+        parts = [f"{running} running", f"{done} done"]
+        if failed:
+            parts.append(f"{failed} failed")
+        if pool.get("cap"):
+            parts.append(f"cap {pool.get('spawned', len(states))}/{pool['cap']}")
+        phase = metrics.get("phase") or {}
+        if phase:
+            active = phase["active_s"] + max(0.0, time.monotonic() - phase["updated"])
+            limit = phase["max_s"]
+            limit_s = f"{limit / 60:.0f}m" if limit >= 60 and limit % 60 == 0 else f"{limit:g}s"
+            parts.append(
+                f"lead turn {phase['turn']}/{phase['max_turns']} · "
+                f"~{format_duration(active)}/{limit_s}"
+            )
+        budget = self._harness_metrics(name)["budget"]
+        if budget.get("limit_tokens"):
+            remaining = budget.get("remaining_tokens", 0)
+            parts.append(
+                f"{'~' if budget.get('estimated') else ''}"
+                f"{self._compact_harness_number(remaining, 4)} tk left"
+            )
+        head = _truncate("↳ agents " + " · ".join(parts), max(1, inner_w - 4))
+        rows = [f"{S.DIM}    {head}{S.RST}"]
+        label_w = max(4, min(16, max(_vlen(state["label"]) for state in states)))
+        rows.extend(self._format_subagent_row(state, inner_w, label_w) for state in states)
+        if max_rows is not None and len(rows) > max_rows:
+            shown = rows[: max(1, max_rows - 1)]
+            hidden = len(states) - (len(shown) - 1)
+            shown.append(f"{S.DIM}      +{hidden} more agent{'s' if hidden != 1 else ''}…{S.RST}")
+            rows = shown[:max_rows]
+        return rows
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -1174,10 +1328,17 @@ class ProgressTracker:
                             name, self._results[name], completed_idx, inner_w
                         )
                     elif harness:
+                        main_rows = [
+                            self._format_harness_row(name, inner_w, tick=idx),
+                            *self._format_harness_details(name, inner_w),
+                        ]
+                        # Agent rows never hide their model: they yield to the row budget.
                         row = "\n".join(
                             [
-                                self._format_harness_row(name, inner_w, tick=idx),
-                                *self._format_harness_details(name, inner_w),
+                                *main_rows,
+                                *self._format_subagent_rows(
+                                    name, inner_w, row_budget - visible - len(main_rows)
+                                ),
                             ]
                         )
                     elif name in self._parsing:

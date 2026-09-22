@@ -79,7 +79,11 @@ model. Press **`s`** at the mode prompt to enable Subagents, choose how many run
 at once (2–5), and set the total agent cap per model; the same screen is under
 **Settings → Subagents (Harness)**. Subagents share the lead agent's workspace,
 tools, token budget, and phase time, and only their bounded reports return to
-the lead, which alone submits the project. `--subagents`, `--no-subagents`, and
+the lead, which alone submits the project. While agents run, the live display
+shows a per-agent heads-up display beneath the model's row: running and done
+counts against the cap, the lead's turn and time position, remaining budget,
+and each agent's phase, turn, output tokens, rate, tool calls, and elapsed
+time. `--subagents`, `--no-subagents`, and
 `--agent-cap N` override the saved setting for one run. See
 [Subagents](docs/harness.md#subagents).
 
