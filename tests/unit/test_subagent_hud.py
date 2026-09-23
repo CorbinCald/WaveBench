@@ -1,4 +1,4 @@
-"""The delegation HUD shows running agents, their progress, and the lead's position."""
+"""A delegating model's agents fit on one line beneath its row at every width."""
 
 from __future__ import annotations
 
@@ -11,9 +11,16 @@ import pytest
 from wavebench.tui.progress import ProgressTracker
 from wavebench.tui.progress import tracker as module
 
+SPIN = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]"
+
 
 def plain(text: str) -> str:
     return re.sub(r"\033\[[0-9;?]*[a-zA-Z]", "", text).replace("\r", "")
+
+
+def line(tracker: ProgressTracker, width: int = 112, name: str = "lead") -> str | None:
+    text = tracker._format_subagent_line(name, width)
+    return None if text is None else plain(text)
 
 
 @pytest.fixture
@@ -26,13 +33,7 @@ def clock(monkeypatch):
 @pytest.fixture
 def delegating(clock):
     tracker = ProgressTracker(1, {}, model_names=["lead"])
-    tracker.update_harness(
-        "lead",
-        {"api_turns": 3, "completion_tokens": 900, "cost": 0.02, "total_tokens": 12_000},
-        6.0,
-        budget={"used_tokens": 12_000, "limit_tokens": 400_000, "remaining_tokens": 388_000},
-    )
-    tracker.update_harness_phase("lead", turn=4, max_turns=32, active_s=61.0, max_s=900)
+    tracker.update_harness("lead", {"api_turns": 3, "completion_tokens": 900, "cost": 0.02}, 6.0)
     tracker.update_harness_tools(
         "lead",
         {"calls": 7, "failures": 0},
@@ -44,55 +45,124 @@ def delegating(clock):
     tracker.update_subagent("lead", 3, label="03-contact-page", status="waiting", max_turns=10)
     tracker.update_subagent("lead", 1, status="thinking", turn=2, settled_tokens=400)
     tracker.update_subagent("lead", 1, status="streaming", output_tokens=150)
-    tracker.update_subagent("lead", 2, status="linting", turn=3, settled_tokens=610, tool_calls=2)
+    tracker.update_subagent("lead", 2, status="linting", turn=3, settled_tokens=610)
     clock["now"] += 9.5
-    tracker.update_subagent(
-        "lead", 3, status="completed", turn=3, settled_tokens=805, tool_calls=2, finished=109.5
-    )
+    tracker.update_subagent("lead", 3, status="completed", turn=3, settled_tokens=805)
     return tracker
 
 
-def test_agent_rows_show_status_turn_tokens_rate_tools_and_time(delegating, clock):
+def test_one_line_shows_each_agent_with_its_state_and_request_progress(delegating):
+    text = line(delegating)
+    assert text.startswith("  ╰ ") and "\n" not in text
+    # The bar counts the request in progress: request 2 of 10 fills two of six blocks.
+    assert re.fullmatch(
+        rf"  ╰ {SPIN} home-page    ▰▰▱▱▱▱      {SPIN} about-page   ▰▰▱▱▱▱      "
+        r"✓ contact-page ▰▰▱▱▱▱",
+        text,
+    )
+    assert "01-" not in text and "tk" not in text  # Output detail is for a lone agent.
+
+
+def slots(text: str) -> list[int]:
+    return [match.start() for match in re.finditer(rf"(?:{SPIN}|[✓✗○●]) \S", text)]
+
+
+def test_agents_keep_their_positions_as_they_stall_and_finish(delegating, clock):
+    start = slots(line(delegating))
+    clock["now"] += 2.5  # home-page has streamed nothing for 12 s.
+    stalled = line(delegating)
+    assert re.search(r"● home-page    idle 12s    ", stalled)
+    delegating.update_subagent("lead", 2, status="budget_exhausted")
+    ended = line(delegating)
+    assert re.search(r"✗ about-page   no budget   ", ended)
+    delegating.update_subagent("lead", 1, status="completed")
+    assert slots(stalled) == slots(ended) == slots(line(delegating)) == start
+
+
+def test_a_lone_running_agent_shows_its_output_and_rate(delegating, clock):
+    delegating.update_subagent("lead", 2, status="completed")
     clock["now"] += 0.5
-    rows = [plain(row) for row in delegating._format_subagent_rows("lead", 112)]
-    assert rows[0].startswith("    ↳ agents 2 running · 1 done · cap 3/3")
-    assert "lead turn 4/32 · ~1m 11s/15m" in rows[0]
-    assert "388k tk left" in rows[0]
-    assert [row.split()[0] for row in rows[1:]] == [
-        "01-home-page",
-        "02-about-page",
-        "03-contact-page",
-    ]
-    assert "streaming" in rows[1] and "turn 2/10" in rows[1] and "550 tk" in rows[1]
-    assert "~15 tk/s" in rows[1]  # 150 streamed tokens over the 10 s since the sample began.
-    assert "0 tools" in rows[1] and "10.0s" in rows[1]
-    assert "linting" in rows[2] and "610 tk" in rows[2] and "2 tools" in rows[2]
-    assert "done ✓" in rows[3] and "9.5s" in rows[3] and "tk/s" not in rows[3]
-    assert all(len(row) <= 112 for row in rows)
+    delegating.update_subagent("lead", 1, output_tokens=300)
+    # 300 streamed tokens over the 10 s since this request began.
+    text = line(delegating)
+    assert text.endswith("✓ contact-page ▰▰▱▱▱▱   700 tk · ~30 tk/s")
+    assert re.search(rf"{SPIN} home-page    ▰▰▱▱▱▱      ✓ about-page", text)
 
 
-@pytest.mark.parametrize("width", [32, 44, 52, 72, 90, 112])
-def test_agent_rows_fit_every_width_and_keep_status_and_time(delegating, width):
-    rows = [plain(row) for row in delegating._format_subagent_rows("lead", width)]
-    assert len(rows) == 4
-    assert all(len(row) <= width for row in rows)
-    assert "↳ agents 2 running" in rows[0][:width]
-    for row in rows[1:]:
-        assert re.search(r"\d+(\.\d)?s$", row) or re.search(r"\d+m( \d+s)?$", row)
-    assert "streaming" in rows[1] and "done" in rows[3]
+@pytest.mark.parametrize("width", [16, 24, 32, 44, 52, 72, 90, 112])
+def test_line_fits_every_width_and_keeps_every_state_visible(delegating, width):
+    text = line(delegating, width)
+    assert "\n" not in text and len(text) <= width
+    assert text.startswith("  ╰ ") and re.search(SPIN, text) and "✓" in text
 
 
-def test_row_budget_truncates_agents_instead_of_hiding_the_model(delegating):
-    assert delegating._format_subagent_rows("lead", 112, max_rows=0) == []
-    two = [plain(row) for row in delegating._format_subagent_rows("lead", 112, max_rows=2)]
-    assert two[0].startswith("    ↳ agents") and two[1].strip() == "+3 more agents…"
-    three = [plain(row) for row in delegating._format_subagent_rows("lead", 112, max_rows=3)]
-    assert "01-home-page" in three[1] and three[2].strip() == "+2 more agents…"
-    assert len(delegating._format_subagent_rows("lead", 112, max_rows=4)) == 4
-    assert len(delegating._format_subagent_rows("lead", 112, max_rows=9)) == 4
+def test_folding_keeps_running_and_failed_agents_named(clock):
+    tracker = ProgressTracker(1, {}, model_names=["lead"])
+    names = ["weapons", "hud", "maps", "bots", "audio", "netcode", "menus", "physics", "lobby"]
+    for number, name in enumerate(names, 1):
+        tracker.update_subagent(
+            "lead", number, label=f"{number:02d}-{name}", status="waiting", max_turns=16
+        )
+    for number in (1, 2, 5):
+        tracker.update_subagent("lead", number, status="completed")
+    tracker.update_subagent("lead", 3, status="streaming", turn=9, output_tokens=40)
+    tracker.update_subagent("lead", 4, status="tools", turn=5)
+    tracker.update_subagent("lead", 6, status="turn_limit", turn=16)
+
+    assert "✓ weapons" in line(tracker, 200)  # Every agent keeps its slot when it fits.
+    wide = line(tracker, 112)
+    # Finished agents fold first, then waiting ones; running and failed agents stay named.
+    assert re.fullmatch(
+        rf"  ╰ ✓ 3 done   {SPIN} maps    ▰▰▰▰▱▱      {SPIN} bots    ▰▰▱▱▱▱      "
+        r"✗ netcode no turns    ○ 3 waiting",
+        wide,
+    )
+    assert re.fullmatch(
+        rf"  ╰ ✓ 3 done  {SPIN} maps     {SPIN} bots     ✗ netcode  ○ 3 waiting",
+        line(tracker, 90),
+    )
+    assert re.fullmatch(rf"  ╰ ✓✓✓✗{SPIN}{SPIN}○○○  2 running · 3 waiting", line(tracker, 40))
+    assert re.fullmatch(rf"  ╰ ✓✓✓✗{SPIN}{SPIN}○○○", line(tracker, 24))
 
 
-def test_live_agents_column_shows_running_over_spawned(delegating):
+def test_a_silent_stream_turns_idle_but_reasoning_does_not(delegating, clock):
+    clock["now"] += 2.5  # home-page has streamed nothing for 12 s.
+    assert "● home-page    idle 12s" in line(delegating)
+    delegating.update_subagent("lead", 2, status="thinking", turn=4)
+    clock["now"] += 30
+    text = line(delegating)
+    assert "● home-page    idle 42s" in text
+    assert re.search(rf"{SPIN} about-page   ▰▰▰▱▱▱", text)  # Reasoning is not idle.
+    delegating.update_subagent("lead", 1, output_tokens=200)
+    assert re.search(rf"{SPIN} home-page    ▰▰▱▱▱▱", line(delegating))
+    clock["now"] += 200
+    assert "● home-page    idle 3m" in line(delegating)
+
+
+def test_line_outlives_lead_turns_then_keeps_names_until_it_must_fold(delegating):
+    delegating.start_harness_turn("lead", 500)
+    assert "home-page" in line(delegating)  # No flicker between the lead's turns.
+    before = slots(line(delegating))
+    for number in (1, 2):
+        delegating.update_subagent("lead", number, status="completed")
+    done = line(delegating)
+    assert re.fullmatch(
+        r"  ╰ ✓ home-page +▰▰▱▱▱▱ +✓ about-page +▰▰▱▱▱▱ +✓ contact-page ▰▰▱▱▱▱", done
+    )
+    assert slots(done) == before  # Ending a delegation moves nothing.
+    assert line(delegating, 40) == "  ╰ ✓ 3 agents done"
+    delegating.update_subagent("lead", 4, label="04-late-fix", status="budget_exhausted")
+    assert line(delegating, 60) == "  ╰ ✓ 3 agents done   ✗ late-fix no budget"
+    delegating.update_subagent(
+        "lead-2", 1, label="01-integration-pass", status="completed", turn=4, max_turns=10
+    )
+    assert line(delegating, name="lead-2") == "  ╰ ✓ integration-pass ▰▰▰▱▱▱"
+    assert line(delegating, 24, name="lead-2") == "  ╰ ✓ 1 agent done"
+    delegating.set_phase("lead", "finished")
+    assert line(delegating, 60) == "  ╰ ✓ 3 agents done   ✗ late-fix no budget"  # Lasts the run.
+
+
+def test_agents_column_shows_running_over_spawned(delegating):
     for width in (52, 72, 112):
         row = plain(delegating._format_harness_row("lead", width))
         assert "2/3" in row.split(), row
@@ -111,43 +181,6 @@ def test_live_agents_column_shows_running_over_spawned(delegating):
     assert "2/3" not in plain(delegating._format_harness_row("lead", 112, result))
 
 
-def test_next_lead_turn_and_finish_clear_the_batch(delegating):
-    assert delegating._subagents["lead"]
-    delegating.start_harness_turn("lead", 500)
-    assert "lead" not in delegating._subagents
-    assert delegating._format_subagent_rows("lead", 112) == []
-    delegating.update_subagent("lead", 4, label="04-late", status="waiting")
-    delegating.set_phase("lead", "finished")
-    assert "lead" not in delegating._subagents
-
-
-async def test_live_frame_renders_the_hud_within_the_terminal_height(delegating, monkeypatch):
-    frames = []
-
-    def capture(frame):
-        frames.append(plain(frame))
-        delegating._running = False
-
-    monkeypatch.setattr(delegating, "_flush_frame", capture)
-    # 3 chrome lines above the rows and 3 below leave lines-6 rows for the model;
-    # the HUD head survives down to one spare row, then the model row stands alone.
-    for lines, expected_agents in ((40, 3), (12, 3), (10, 1), (8, 0), (7, None)):
-        monkeypatch.setattr(
-            module.shutil,
-            "get_terminal_size",
-            lambda *args, lines=lines: os.terminal_size((120, lines)),
-        )
-        frames.clear()
-        delegating._running = True
-        await delegating._animate()
-        frame = frames[0]
-        assert len(frame.splitlines()) <= lines
-        assert frame.count("↳ agents") == (0 if expected_agents is None else 1)
-        assert sum("-page" in line for line in frame.splitlines()) == (expected_agents or 0)
-        assert "more…" not in frame  # The model row itself is never hidden by its agents.
-        assert "2/3" in frame
-
-
 def test_waiting_agents_are_counted_apart_from_running(clock):
     tracker = ProgressTracker(1, {}, model_names=["lead"])
     tracker.update_harness("lead", {"api_turns": 2}, 4.0)
@@ -158,23 +191,39 @@ def test_waiting_agents_are_counted_apart_from_running(clock):
     )
     tracker.set_phase("lead", "delegating")
     for number in range(1, 7):
-        tracker.update_subagent("lead", number, label=f"0{number}-part", status="waiting")
+        tracker.update_subagent("lead", number, label=f"0{number}-part{number}", status="waiting")
     for number, status in enumerate(("thinking", "streaming", "tools", "linting"), 1):
         tracker.update_subagent("lead", number, status=status, turn=1, max_turns=16)
-    rows = [plain(row) for row in tracker._format_subagent_rows("lead", 112)]
-    assert rows[0].startswith("    ↳ agents 4 running · 2 waiting · 0 done · cap 6/12")
-    assert "turn" not in rows[5] and "turn" not in rows[6]  # No request made yet.
     assert "4/6" in plain(tracker._format_harness_row("lead", 112)).split()
+    text = line(tracker)
+    assert len(re.findall(rf"{SPIN} part", text)) == 4
+    assert text.endswith("○ 2 waiting")
+    assert line(tracker, 200).endswith("○ part5 ▱▱▱▱▱▱      ○ part6 ▱▱▱▱▱▱")
 
-    # A queued agent's time restarts when it gains a slot, like its recorded time_s.
-    clock["now"] += 7.0
-    assert plain(tracker._format_subagent_rows("lead", 112)[6]).endswith("7.0s")
-    tracker.update_subagent("lead", 1, status="completed", finished=clock["now"])
-    tracker.update_subagent("lead", 5, status="thinking", turn=1)
-    clock["now"] += 2.0
-    rows = [plain(row) for row in tracker._format_subagent_rows("lead", 112)]
-    assert rows[0].startswith("    ↳ agents 4 running · 1 waiting · 1 done")
-    assert rows[1].endswith("7.0s") and rows[5].endswith("2.0s") and rows[6].endswith("9.0s")
+
+async def render(tracker, monkeypatch, lines: int) -> list[str]:
+    frames = []
+
+    def capture(frame):
+        frames.append(plain(frame))
+        tracker._running = False
+
+    monkeypatch.setattr(tracker, "_flush_frame", capture)
+    monkeypatch.setattr(
+        module.shutil, "get_terminal_size", lambda *args: os.terminal_size((120, lines))
+    )
+    tracker._running = True
+    await tracker._animate()
+    return frames[0].splitlines()
+
+
+async def test_live_frame_adds_the_agent_line_when_it_fits(delegating, monkeypatch):
+    # Six chrome lines leave lines-6 rows: the model row, then its agent line.
+    for lines, agent_lines in ((40, 1), (8, 1), (7, 0)):
+        frame = await render(delegating, monkeypatch, lines)
+        assert len(frame) <= lines
+        assert sum("╰ " in row for row in frame) == agent_lines
+        assert "2/3" in "\n".join(frame) and "more…" not in "\n".join(frame)
 
 
 async def test_delegating_models_never_hide_other_models(clock, monkeypatch):
@@ -190,48 +239,32 @@ async def test_delegating_models_never_hide_other_models(clock, monkeypatch):
         tracker.set_phase(name, "delegating" if spawned else "building")
         for number in range(1, spawned + 1):
             tracker.update_subagent(name, number, label=f"0{number}-part", status="streaming")
-    frames = []
-
-    def capture(frame):
-        frames.append(plain(frame))
-        tracker._running = False
-
-    monkeypatch.setattr(tracker, "_flush_frame", capture)
-    # Six chrome lines plus five model rows leave the rest for the two HUDs.
-    for lines, heads, agents in ((40, 2, 11), (18, 2, 3), (13, 2, 0), (12, 1, 0), (11, 0, 0)):
-        monkeypatch.setattr(
-            module.shutil,
-            "get_terminal_size",
-            lambda *args, lines=lines: os.terminal_size((120, lines)),
-        )
-        frames.clear()
-        tracker._running = True
-        await tracker._animate()
-        frame = frames[0].splitlines()
+    # Six chrome lines and five model rows; agent lines take what is left, in order.
+    for lines, agent_lines in ((40, 2), (12, 1), (11, 0)):
+        frame = await render(tracker, monkeypatch, lines)
         assert len(frame) <= lines
-        assert all(any(f" {name} " in line for line in frame) for name in names), lines
-        assert not any(re.search(r"\+\d+ more…", line) for line in frame)
-        assert sum("↳ agents" in line for line in frame) == heads, lines
-        assert sum("-part " in line for line in frame) == agents, lines
+        assert all(any(f" {name} " in row for row in frame) for name in names), lines
+        assert not any(re.search(r"\+\d+ more…", row) for row in frame)
+        assert sum("╰ " in row for row in frame) == agent_lines, lines
 
 
-async def test_hud_rows_do_not_starve_other_models(delegating, monkeypatch):
-    delegating._model_names = ["lead", "other"]
-    delegating._total = 2
-    delegating.update_harness("other", {"api_turns": 1}, 1.0)
-    delegating.set_phase("other", "building")
-    frames = []
-
-    def capture(frame):
-        frames.append(plain(frame))
-        delegating._running = False
-
-    monkeypatch.setattr(delegating, "_flush_frame", capture)
-    monkeypatch.setattr(
-        module.shutil, "get_terminal_size", lambda *args: os.terminal_size((120, 11))
-    )
-    delegating._running = True
-    await delegating._animate()
-    frame = frames[0]
-    assert "other" in frame and "lead" in frame
-    assert len(frame.splitlines()) <= 11
+async def test_live_delegations_take_spare_rows_before_finished_ones(clock, monkeypatch):
+    results = {}
+    tracker = ProgressTracker(3, results, model_names=["done", "solo", "live"])
+    for name in ("solo", "live"):
+        tracker.update_harness(name, {"api_turns": 3}, 6.0)
+        tracker.set_phase(name, "building")
+    tracker.update_subagent("done", 1, label="01-finished-part", status="completed", max_turns=16)
+    tracker.update_subagent("live", 1, label="01-running-part", status="streaming", max_turns=16)
+    results["done"] = {
+        "status": "success",
+        "time_s": 30,
+        "usage": {"api_turns": 4},
+        "harness": {"subagents": {"enabled": True, "spawned": 1}},
+    }
+    # Six chrome lines and three model rows leave one spare row at ten lines.
+    frame = await render(tracker, monkeypatch, 10)
+    assert any("running-part" in row for row in frame)
+    assert not any("finished-part" in row for row in frame)
+    frame = await render(tracker, monkeypatch, 40)
+    assert any("✓ finished-part" in row for row in frame)  # Finished models keep theirs.

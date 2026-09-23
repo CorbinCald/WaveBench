@@ -402,34 +402,36 @@ spawned, such as `2/5` while three more wait, and the phase shows `delegating`.
 When web search, page reads, and agents would truncate a model name on a wide
 terminal, the columns narrow their divider padding before shortening the name.
 
-While a model is delegating, a heads-up display appears beneath its row and
-disappears when the lead's next request begins:
+A model that delegates gets one agent line beneath its row for the rest of the
+run. Each agent keeps a fixed-width slot, so neighbours never shift as agents
+start, stall, or finish:
 
 ```text
-⠼ alphaLead   delegating   600   ~123   $0.002   5   —   5   2/5   0.0%   13.9s
-    ↳ agents 2 running · 1 waiting · 2 done · cap 5/6 · lead turn 1/32 · ~13.6s/30m · 997k tk left
-    01-part-1 done ✓     turn 2/16      240 tk            1 tool     5.5s
-    02-part-2 done ✓     turn 2/16      240 tk            1 tool     6.6s
-    03-part-3 streaming  turn 1/16      448 tk   ~64 tk/s 0 tools    5.8s
-    04-part-4 streaming  turn 1/16      354 tk   ~60 tk/s 0 tools    4.8s
-    05-part-5 waiting                     0 tk            0 tools   11.3s
+⠧ solLead          delegating   720   ~100   $0.002   6    —   6   2/3   0.0%   20.1s
+  ╰ ✓ gameplay-engine ▰▰▱▱▱▱      ● scene-render    idle 12s    ⠋ visual-ui       ▰▱▱▱▱▱
+⠧ lunaLead         building     ~940  ~80    ≥$0.002  6    —   5   1     0.0%   20.1s
+  ╰ ✓ game-engine ▰▰▱▱▱▱
 ```
 
-The head line counts running agents, agents waiting for one of the
-`harness.subagent_parallel` slots, and done and failed agents in the current batch,
-shows spawned agents against the cap, the lead's turn within its phase limit,
-its estimated active time against the phase time limit, and the remaining
-total-token budget. Each agent row shows its label, phase (`waiting` for a
-slot, `thinking`, `streaming`, `tools`, `linting`, `done ✓`, `failed ✗`,
-`turn limit`, `time limit`, `no budget`, or `cancelled`), request number
-against its turn limit, output tokens with the current request's streaming
-estimate, an interval-average output rate while it generates, completed tool
-calls, and elapsed time: a waiting agent's time since it was spawned, then its
-active time from when it gains a slot, matching its recorded `time_s`. Narrow
-terminals drop the rate, tools, turn, and token cells in that order. Every
-model's own row is placed first and the heads-up displays share the remaining
-terminal rows, smaller ones whole and the rest evenly; each shows as many agent
-rows as fit and then a `+N more agents…` line, so agents never hide a model.
+A slot holds a state glyph, the agent's name, and a six-block bar of requests
+used out of `harness.subagent_turns`, counting the request in progress. The glyph
+is a spinner while the agent runs (bright while it streams output, dim while it
+reasons, runs tools, or lints), `○` with an empty bar while it waits for one of
+the `harness.subagent_parallel` slots, and `✓` with its final bar once done.
+A streaming agent that produces no output for 10 seconds shows a yellow `●` and
+`idle 12s` in place of its bar; an agent that ends early shows `✗` and `no turns`,
+`timed out`, `no budget`, `cancelled`, or `failed`. When exactly one agent is
+running, its output tokens and interval-average rate follow the slots.
+
+Finished agents keep their names after the delegation ends and after the model
+finishes. As width shrinks, names shorten, finished agents fold into `✓ 3 done`
+(`✓ 3 agents done` once none are running), waiting agents fold into
+`○ 2 waiting`, and the slots drop; the narrowest form is one glyph per agent,
+grouped by state, with as many counts as fit, such as `✓✓✓✗⠦⠧○○○  2 running ·
+3 waiting`. Every model's own row is placed before any agent line, and agent
+lines take the remaining terminal rows in table order, models with running or
+waiting agents first, so agents never hide a model.
+
 Lifetime analytics
 add an `agents` total. `harness.subagents` in each result records the setting,
 counts, aggregate subagent usage, and one record per run; each agent's
