@@ -79,6 +79,8 @@ class ProgressTracker:
 
     DEFAULT_AVG_TOKENS = 2000
     HARNESS_SAMPLE_INTERVAL = 0.25
+    # Subagent phases that hold one of the lead's parallel slots.
+    SUBAGENT_RUNNING = frozenset({"thinking", "streaming", "tools", "linting"})
 
     def __init__(
         self,
@@ -310,10 +312,28 @@ class ProgressTracker:
                 "rate": None,
             },
         )
+        if state["status"] == "waiting" and fields.get("status") in self.SUBAGENT_RUNNING:
+            # Time a queued agent from when it gains a slot, like its recorded time_s.
+            state["started"] = now
         if "turn" in fields and fields["turn"] != state["turn"]:
             # A new request streams from zero; never count the settled turn as a burst.
             state.update(sample_time=now, sample_tokens=0, rate=None)
         state.update(fields)
+
+    def _subagent_counts(self, model_name: str) -> dict[str, int]:
+        """Agents in the current batch by state; waiting agents have no slot yet."""
+        counts = {"running": 0, "waiting": 0, "done": 0, "failed": 0}
+        for state in self._subagents.get(model_name, {}).values():
+            status = state["status"]
+            if status == "waiting":
+                counts["waiting"] += 1
+            elif status in self.SUBAGENT_RUNNING:
+                counts["running"] += 1
+            elif status == "completed":
+                counts["done"] += 1
+            else:
+                counts["failed"] += 1
+        return counts
 
     def update_harness_tools(
         self,
@@ -514,6 +534,14 @@ class ProgressTracker:
             "web_fetches": fetches.get("calls") if fetches.get("enabled") else None,
             "subagents": agents.get("spawned") if agents.get("enabled") else None,
             "subagents_active": agents.get("active", 0) if result is None else 0,
+            # Agents holding a parallel slot; queued agents are active but not running.
+            "subagents_running": (
+                self._subagent_counts(name)["running"]
+                if name in self._subagents
+                else agents.get("active", 0)
+            )
+            if result is None
+            else 0,
             "tool_failure_rate": tools["failures"] / tools["calls"] if tools.get("calls") else None,
         }
 
@@ -569,13 +597,15 @@ class ProgressTracker:
     def _format_harness_tool_metrics(self, name: str, result: dict | None = None) -> str:
         return f" {S.DIM}·{S.RST} ".join(self._harness_metric_cells(name, result)[4:])
 
-    @staticmethod
-    def _harness_column_gap(inner_w: int) -> int:
+    def _harness_column_gap(self, inner_w: int) -> int:
         """Pad dividers on wide terminals; keep all metrics visible on narrow ones."""
-        return 3 if inner_w >= 108 else 1
+        return self._harness_layout(inner_w)[1]
 
     def _harness_columns(self, inner_w: int) -> list[tuple[str, int]]:
         """Shared column widths keep every model aligned without wrapping."""
+        return self._harness_layout(inner_w)[0]
+
+    def _harness_layout(self, inner_w: int) -> tuple[list[tuple[str, int]], int]:
         keys = ["phase", "tokens", "rate", "cost", "turns", "cache", "tools", "fail", "time"]
         if inner_w >= 100:
             widths = [11, 7, 4, 7, 5, 5, 5, 5, 5]
@@ -627,23 +657,25 @@ class ProgressTracker:
             if 52 <= inner_w < 72 and "cache" in keys:
                 widths.pop(keys.index("cache"))
                 keys.remove("cache")
-        gap = self._harness_column_gap(inner_w)
+        gap = 3 if inner_w >= 108 else 1
         if (show_searches or show_agents) and inner_w >= 100:
-            name_w = inner_w - sum(widths) - gap * len(widths) - 2
             longest_name = max(
                 (_vlen(name) for name in [*self._model_names, *self._harness, *self._results]),
                 default=5,
             )
-            if name_w < longest_name:
+            if inner_w - sum(widths) - gap * len(widths) - 2 < longest_name:
                 # Give model identities priority over the full search/agent headings.
                 for key in ("searches", "agents"):
                     if key in keys:
                         widths[keys.index(key)] = 3
+            if gap == 3 and inner_w - sum(widths) - gap * len(widths) - 2 < longest_name:
+                # Then over the divider padding, which each added column multiplies.
+                gap = 2
         while widths and sum(widths) + gap * len(widths) + 3 > inner_w:
             keys.pop()
             widths.pop()
         name_w = max(1, inner_w - sum(widths) - gap * len(widths) - 2)
-        return [("name", name_w), *zip(keys, widths, strict=True)]
+        return [("name", name_w), *zip(keys, widths, strict=True)], gap
 
     def _format_harness_header(self, inner_w: int) -> str:
         labels = {
@@ -672,12 +704,14 @@ class ProgressTracker:
             "agents": "AGT",
         }
         cells = []
-        for key, width in self._harness_columns(inner_w):
+        columns, gap = self._harness_layout(inner_w)
+        for key, width in columns:
             label = labels[key]
             if len(label) > width:
                 label = short.get(key, label[:width])
             cells.append(f"{label:<{width}}")
-        separator = " │ " if self._harness_column_gap(inner_w) == 3 else "│"
+        # Headings start where their left-aligned values do.
+        separator = {3: " │ ", 2: "│ "}.get(gap, "│")
         return f"{S.DIM}  {separator.join(cells)}{S.RST}"
 
     @staticmethod
@@ -753,7 +787,8 @@ class ProgressTracker:
         ):
             status = "waiting"
         cells = []
-        for key, width in self._harness_columns(inner_w):
+        columns, gap = self._harness_layout(inner_w)
+        for key, width in columns:
             color = S.DIM
             if key == "name":
                 text, color = name, S.BOLD
@@ -812,7 +847,7 @@ class ProgressTracker:
                     color = _styles.ACCENT
                 elif key == "agents" and values["subagents_active"] and value is not None:
                     # Agents running now over agents spawned so far.
-                    live = f"{values['subagents_active']}/{value}"
+                    live = f"{values['subagents_running']}/{value}"
                     if len(live) <= width:
                         text, color = live, _styles.ACCENT
             elif key in {"cache", "fail"}:
@@ -831,7 +866,7 @@ class ProgressTracker:
             text = _truncate(text, width)
             text = f"{text:<{width}}"
             cells.append(f"{color}{text}{S.RST}")
-        separator = " " * self._harness_column_gap(inner_w)
+        separator = " " * gap
         return f"{symbol} {separator.join(cells)}"
 
     def _format_harness_details(
@@ -884,7 +919,11 @@ class ProgressTracker:
         end = state["finished"] or time.monotonic()
         tokens = state["settled_tokens"] + state["output_tokens"]
         rate = self._subagent_rate(state)
-        turn = f"turn {state['turn']}/{state['max_turns']}" if state["max_turns"] else ""
+        turn = (
+            f"turn {state['turn']}/{state['max_turns']}"
+            if state["max_turns"] and state["turn"]
+            else ""
+        )
         tools = state["tool_calls"]
         # Status and elapsed time always fit; the label shrinks on narrow terminals.
         label_w = max(4, min(label_w, inner_w - 4 - 1 - 10 - 1 - 6))
@@ -905,6 +944,17 @@ class ProgressTracker:
                 return row
         return _truncate(row, inner_w)
 
+    def _subagent_row_budgets(self, names: list[str], spare: int) -> dict[str, int]:
+        """Share spare rows among delegation HUDs: small ones whole, the rest evenly."""
+        needs = {
+            name: 1 + len(self._subagents[name]) for name in names if self._subagents.get(name)
+        }
+        budgets = {}
+        for position, name in enumerate(sorted(needs, key=needs.__getitem__)):
+            budgets[name] = min(needs[name], max(0, spare) // (len(needs) - position))
+            spare -= budgets[name]
+        return budgets
+
     def _format_subagent_rows(
         self, name: str, inner_w: int, max_rows: int | None = None
     ) -> list[str]:
@@ -915,13 +965,13 @@ class ProgressTracker:
         states = [agents[number] for number in sorted(agents)]
         metrics = self._harness.get(name, {})
         pool = metrics.get("subagents") or {}
-        live = {"waiting", "thinking", "streaming", "tools", "linting"}
-        running = sum(state["status"] in live for state in states)
-        done = sum(state["status"] == "completed" for state in states)
-        failed = len(states) - running - done
-        parts = [f"{running} running", f"{done} done"]
-        if failed:
-            parts.append(f"{failed} failed")
+        counts = self._subagent_counts(name)
+        parts = [f"{counts['running']} running"]
+        if counts["waiting"]:
+            parts.append(f"{counts['waiting']} waiting")
+        parts.append(f"{counts['done']} done")
+        if counts["failed"]:
+            parts.append(f"{counts['failed']} failed")
         if pool.get("cap"):
             parts.append(f"cap {pool.get('spawned', len(states))}/{pool['cap']}")
         phase = metrics.get("phase") or {}
@@ -1310,35 +1360,22 @@ class ProgressTracker:
                 _chrome = lines + 3
                 max_model_rows = max(1, term.lines - _chrome)
                 completed_idx = 0
-                visible = 0
-                hidden = 0
-                for position, name in enumerate(self._model_names):
+                model_rows: list[tuple[str, list[str]]] = []
+                for name in self._model_names:
                     result = self._results.get(name)
                     harness = name in self._harness or bool(result and result.get("harness"))
                     if result is not None:
                         completed_idx += 1
-                    # Leave room for a hidden-model count unless this is the last model.
-                    row_budget = max_model_rows - int(position < len(self._model_names) - 1)
-                    if hidden or visible >= row_budget:
-                        hidden += 1
-                        continue
 
                     if name in self._results:
                         row = self._format_result_row(
                             name, self._results[name], completed_idx, inner_w
                         )
                     elif harness:
-                        main_rows = [
-                            self._format_harness_row(name, inner_w, tick=idx),
-                            *self._format_harness_details(name, inner_w),
-                        ]
-                        # Agent rows never hide their model: they yield to the row budget.
                         row = "\n".join(
                             [
-                                *main_rows,
-                                *self._format_subagent_rows(
-                                    name, inner_w, row_budget - visible - len(main_rows)
-                                ),
+                                self._format_harness_row(name, inner_w, tick=idx),
+                                *self._format_harness_details(name, inner_w),
                             ]
                         )
                     elif name in self._parsing:
@@ -1369,11 +1406,7 @@ class ProgressTracker:
                                 f" in {remain:.1f}s  {mel:>7}{S.RST}"
                             )
                             row = f"{boxes}   {_rpad(name, self._pad)}  {suffix}"
-                            buf.append(_box_row(row, w) + "\033[K\n")
-                            lines += 1
-                            visible += 1
-                            continue
-                        if ainfo["chars"] == 0:
+                        elif ainfo["chars"] == 0:
                             boxes = self._token_boxes(name, 0)
                             dots = "·" * (1 + (idx // 4) % 3)
                             suffix = f"{S.DIM}reasoning{dots:<4} {mel:>7}{S.RST}"
@@ -1454,14 +1487,32 @@ class ProgressTracker:
                         boxes = self._phase_boxes(0)
                         row = f"{boxes}   {_rpad(name, self._pad)}  {S.DIM}waiting…{S.RST}"
 
-                    model_rows = row.splitlines()
-                    if visible + len(model_rows) > row_budget:
+                    model_rows.append((name, row.splitlines()))
+
+                # Every model's own rows come first; delegation HUDs share the rest.
+                hud_rows = self._subagent_row_budgets(
+                    [name for name, _ in model_rows if name not in self._results],
+                    max_model_rows - sum(len(rows) for _, rows in model_rows),
+                )
+                visible = 0
+                hidden = 0
+                for position, (name, rows) in enumerate(model_rows):
+                    # Leave room for a hidden-model count unless this is the last model.
+                    row_budget = max_model_rows - int(position < len(model_rows) - 1)
+                    if hidden or visible >= row_budget:
                         hidden += 1
                         continue
-                    for model_row in model_rows:
+                    rows = [
+                        *rows,
+                        *self._format_subagent_rows(name, inner_w, hud_rows.get(name, 0)),
+                    ]
+                    if visible + len(rows) > row_budget:
+                        hidden += 1
+                        continue
+                    for model_row in rows:
                         buf.append(_box_row(model_row, w) + "\033[K\n")
-                    lines += len(model_rows)
-                    visible += len(model_rows)
+                    lines += len(rows)
+                    visible += len(rows)
 
                 if hidden > 0:
                     buf.append(_box_row(f"{S.DIM}+{hidden} more…{S.RST}", w) + "\033[K\n")
