@@ -543,6 +543,8 @@ Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
 The same Settings page exposes **Build time limit (s)**, **Repair time limit (s)**,
 **Build request limit**, and **Output tokens per turn**. These save to
 `harness.build_seconds`, `repair_seconds`, `build_turns`, and `turn_tokens`.
+Saving Settings stores every value shown, so a config saved before a default
+changed keeps the older value until it is edited.
 **Subagents (Harness)** saves `subagents` plus `harness.subagent_parallel` and
 `harness.subagent_cap`; `harness.subagent_turns`, `subagent_seconds`, and
 `subagent_report_chars` are editable in the file. See [Subagents](#subagents).
@@ -570,7 +572,7 @@ per phase, then ends the phase.
 | Limit | Default |
 |---|---:|
 | Build / repair model requests | 50 / 20 |
-| Output tokens per request | 64,000 |
+| Output tokens per request, including reasoning | 128,000, or the model's lower limit |
 | Active build / repair time | 1,800 / 300 seconds |
 | Program / startup / lint / dependency setup | 60 / 20 / 30 / 120 seconds |
 | Managed preview review | 600 seconds, or Enter/Ctrl-C |

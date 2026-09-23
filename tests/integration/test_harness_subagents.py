@@ -377,7 +377,7 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
             report = results(messages, 1)[0]
             assert report["status"] == "completed" and report["turns"] == 3
             return calls(index, DONE)
-        assert kwargs["max_tokens"] == 64_000
+        assert kwargs["max_tokens"] == Limits().turn_tokens == 128_000
         if index == 0:
             raise TurnError("truncated", dict(USAGE), failure_code="output_truncated")
         assert "reached the output limit" in json.dumps(messages)
