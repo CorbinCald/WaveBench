@@ -438,7 +438,7 @@ async def test_real_http_retry_utf8_stream_and_second_conversation_request(monke
 async def test_context_exhaustion_is_local(monkeypatch):
     monkeypatch.setattr(api, "_MODEL_CONTEXTS_ATTEMPTED", True)
     monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, "tiny", 100)
-    with pytest.raises(TurnError, match="context budget"):
+    with pytest.raises(TurnError, match="context window"):
         await call_conversation(
             None,
             "key",

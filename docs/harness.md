@@ -60,37 +60,71 @@ when done.
 
 ## File tools
 
-Install WaveBench with `pip install -e .` to get `wb`, or use
+Every model receives the same small set of native tools. Each does one thing and
+takes only the arguments it needs:
+
+| Tool | Arguments | Result the model sees |
+|---|---|---|
+| `read_file` | `path`, optional `start_line`/`end_line` (1-based, inclusive) | The file text. A file over 100,000 characters returns whole lines under a `[path: lines A-B of N]` header, ending with `[Continue with start_line=…]`. |
+| `write_file` | `path`, `content`, optional `append` | `Wrote path (N lines).` `append` adds to the end, so a very large file can be written over several responses. |
+| `edit_file` | `path`, `old_text`, `new_text`, optional `replace_all` | `Edited path (1 replacement).` An absent or ambiguous `old_text` leaves the file unchanged and says why: a whitespace-only difference, escaped `\n`, or the matching line numbers. |
+| `list_files` | optional `path` | Every file below the path with its line count. |
+| `delete_file` | `path` | Deletes a file or a directory tree. |
+| `lint` | — | Each problem with its `file:line`, or `Checked N files; 0 error(s).` |
+| `submit` | `runtime`, `entry`, optional `args`, `preview` | Submits the launch descriptor. |
+
+Results reach the model as plain text rather than JSON, so file contents keep
+their real line breaks and quotes. Errors start with `Error:`. Output other than
+file reads is limited to 32,000 characters and cut at a line boundary with a
+visible marker. The full structured record of every call is saved as
+`metadata/tool-NNNN.json`.
+
+Some providers, including OpenAI's strict function calling, send every optional
+property. An empty string, `0`, `false`, or `[]` therefore means "not set" for
+every optional argument. Unknown arguments are rejected with the tool's name, and
+a missing required argument is named. Tools a caller cannot use are not offered;
+if one is called anyway, the error explains why (a subagent cannot submit, a
+read-only agent cannot change files, web search is disabled).
+
+Calls from one response return in submitted order. Independent reads and calls on
+different files overlap (four at a time); calls on the same path or subtree run
+in order. `lint` and `submit` wait for every earlier call in the response and
+block later ones. `submit` can share a response with final fixes and lint: it runs
+last and is refused if an earlier call in that response failed. Call IDs are
+deduplicated for the session: replaying an ID returns its saved result, and
+reusing an ID with different arguments fails.
+
+Install WaveBench with `pip install -e .` to get the developer CLI `wb`, or use
 `python -m wavebench.harness`. The developer binds an **existing** project root:
 
 ```bash
 mkdir -p /tmp/my-project
-wb --root /tmp/my-project write src/main.py <<'PY'
+wb --root /tmp/my-project write src/main.py <<'EOF'
 from helpers import answer
 print(answer())
-PY
-wb --root /tmp/my-project write src/helpers.py <<'PY'
+EOF
+wb --root /tmp/my-project write src/helpers.py <<'EOF'
 def answer():
     return 42
-PY
-wb --root /tmp/my-project ls src
+EOF
+wb --root /tmp/my-project ls
 wb --root /tmp/my-project read src/main.py 1:2
 wb --root /tmp/my-project edit src/helpers.py <<'JSON'
-{"old":"return 42","new":"return 43"}
+{"old_text":"return 42","new_text":"return 43"}
 JSON
 wb --root /tmp/my-project parallel "read src/main.py" "read src/helpers.py"
 wb --root /tmp/my-project lint
-wb --root /tmp/my-project done <<'JSON'
+wb --root /tmp/my-project submit <<'JSON'
 {"runtime":"python","entry":"src/main.py"}
 JSON
-wb --root /tmp/my-project delete src --recursive
+wb --root /tmp/my-project delete src
 ```
 
-`done` validates and submits a launch descriptor. The standalone file CLI prints
-the descriptor and does not launch a project; only a benchmark's controller
-admits execution. Model calls have one function, `wb`, with a structured
-`command` argument. There is no model-supplied root, environment, shell, or run
-command. `--json` accepts one command object or an array on stdin:
+The CLI prints each result, including the `text` a model would see. `submit`
+prints the descriptor and does not launch a project; only a benchmark's
+controller admits execution. There is no model-supplied root, environment,
+shell, or run command. `--json` accepts one command object or an array on stdin,
+using a `command` verb and the tool's arguments:
 
 ```json
 [
@@ -99,18 +133,6 @@ command. `--json` accepts one command object or an array on stdin:
   {"command":"read","path":"missing.txt"}
 ]
 ```
-
-Every call gets an identified result in submitted order, even on validation
-failure. Independent reads and disjoint-file operations overlap (four at a
-time); conflicting paths and subtree operations wait in order. Lint waits for
-pending writes and blocks subsequent writes. A batch containing `done` and any
-other operation is rejected in full. Call IDs are deduplicated for the session;
-reusing an ID with different arguments fails. An exact edit must match once or
-the file stays unchanged. Output is bounded and explicitly marked when
-truncated; full tool records and subprocess logs are saved in `metadata/`.
-Providers that fill optional schema properties may send unused fields; the
-dispatcher uses only the fields for the selected command. Unknown fields,
-including any attempt to change the root, are rejected.
 
 ## Supported project runners
 
@@ -121,7 +143,7 @@ including any attempt to change the root, are rejected.
 | `python-server` / `node-server` | Entry as above; HTTP listener on `PORT` (8000 inside the private namespace); optional `preview` URL path | An HTTP 2xx/3xx response within 20 seconds |
 | `static` | `.html`/`.htm` entry; optional `preview` URL path | Trusted static server loads the entry over HTTP within 20 seconds |
 
-For example: `{"command":"done","runtime":"python-server","entry":"server.py","preview":"/health"}`.
+For example, `submit` with `{"runtime":"python-server","entry":"server.py","preview":"/health"}`.
 Arguments are passed after the entry point as literal strings. Shell strings,
 package scripts, arbitrary executables, GUI/interactive desktop runners, npm
 dependencies, and development reloaders are unsupported. Use plain HTTP server
@@ -132,12 +154,13 @@ tests or a project quality grade. A static HTML load alone does not validate its
 JavaScript interactions; inspect them in the managed preview.
 
 An initial pass completes the model session. Only first-run failure opens one
-repair phase in the same conversation. It may include many file/lint calls,
-followed by `done` and one final execution. Failed process startup counts as an
-admitted attempt. Missing tooling, unsupported launch descriptors, dependency
-setup errors, failed lint, generation failure, and budget exhaustion before a
-launch do not consume attempts or unlock repair. A cancelled or abandoned
-repair keeps the first failure, with no fabricated second attempt.
+repair phase in the same conversation. The model receives the failed run's reason,
+launch, and output, may use every tool, then calls `submit` for one final
+execution. Failed process startup counts as an admitted attempt. Missing tooling,
+unsupported launch descriptors, dependency setup errors, failed lint, generation
+failure, and phase limits reached before a launch do not consume attempts or
+unlock repair. A cancelled or abandoned repair keeps the first failure, with no
+fabricated second attempt.
 
 ## Isolation and dependency policy
 
@@ -198,9 +221,16 @@ repair gets a fresh dependency target. With Auto-install off, a nonempty
 requirements manifest fails setup explicitly. No LLM guesses imports or shares
 an environment between models.
 
-Lint uses Python compilation without imports, `node --check`, JSON parsing, and
-HTML parsing. It ignores package scripts, project plugins, and configuration
-hooks. HTML checks are structural parsing, not full HTML/CSS validation.
+Lint uses Python compilation without imports, JSON parsing, HTML parsing, and
+Node's syntax check through standard input. Each JavaScript file must parse as an
+ES module or as a CommonJS script. This matters because `node --check file.js`
+silently accepts a broken file that uses `import` or `export`. Inline HTML scripts
+are checked too: `type="module"` as a module, classic scripts as scripts, and
+import maps or JSON scripts as JSON; shaders and other types are skipped. Errors
+name the file and line (inline scripts use the HTML file's line numbers) with
+Node's source and caret lines, without stack traces. Lint ignores package scripts,
+project plugins, and configuration hooks. These are syntax checks, not full
+HTML/CSS validation or a run of the program.
 
 ## Optional web search
 
@@ -261,7 +291,7 @@ Each model gets 20 search attempts across build and repair; set
 `harness.web_search_calls` in `.benchmark_config.json` to change that limit for
 all models. Calls are paced to at most one request per second within a benchmark,
 with a 15-second HTTP timeout, a 1 MB response limit, and bounded snippets. They
-also consume the existing build/repair time and tool-output budgets. Invalid
+also consume the existing build/repair time and tool-output limits. Invalid
 keys, quotas, timeouts, and provider failures return readable tool errors. Requests
 are not automatically retried. Replaying the same tool-call ID returns its saved
 result without another request.
@@ -280,34 +310,13 @@ the connection are checked; loopback, private, link-local, and other nonpublic
 addresses are rejected. Reads use no API credentials, ambient proxies, netrc
 authentication, or cookies.
 
-Search and read results include a `research_budget` with remaining calls and,
-inside a model session, remaining research turns, time, and tokens. Exhausted
-tools are removed from the next model request. Rejected calls still receive
-the budget information. Research closes permanently for that session when an
-allowance or implementation reserve is reached, including across repair and
-compaction; attempts to call a withdrawn tool cannot start network work.
-
-The defaults are eight model requests containing research, 300 active seconds,
-and 200,000 charged tokens. Configure `harness.research_turns`,
-`harness.research_seconds`, and `harness.research_tokens` to lower or raise these
-caps. The controller additionally reserves at least half the phase's model turns
-(at least two), two thirds of its active time, and two thirds of the overall
-token budget for implementation, validation, and submission. Smaller task budgets
-therefore reduce the research allowance. A batch of searches/reads uses one
-research turn; failed and mixed research/workspace turns also count. Research
-time includes model generation and tools, excluding API queue waits. Research
-token charges include repeated input and all output on those turns. A model
-response can cross a research threshold before its requested tools are known;
-the controller then rejects its research calls while allowing workspace work.
-All research tools in a batch share the remaining research deadline.
-
-Models receive the allowance up front, a warning as research runs low, and
-instructions to build and submit when it closes. This cutoff retains normal
-output capacity for implementation; the finishing warning also keeps the configured
-output allowance while reserving capacity to validate and submit. Only the model's `wb done` submits
-the project; reserving capacity cannot guarantee that a model uses it successfully.
-Results record research usage, remaining allowance, and the closure reason under
-`harness.research`, with guidance events in the budget decision records.
+Search and read results end with the calls left, for example
+`(18 searches and 20 page reads left)`. A tool is withdrawn from the next request
+once its calls are used. Research also closes, with one `[WaveBench]` note, once
+half of a phase's requests or a third of its active time is used, and when the
+phase starts finishing. Closure lasts for the rest of the session, including
+repair and subagents. A call rejected for invalid arguments does not use an
+allowance. Results record the closure reason under `harness.research.closed`.
 
 The controller owns requests and credentials; generated code keeps its isolated
 network and receives no Brave key. `harness.web_search` in each result records
@@ -320,7 +329,7 @@ calls do not increase the count. Brave billing is
 separate from the reported OpenRouter cost. `harness.web_fetch` records enabled
 state, attempts, and failures separately; the **READS** column (**GET** in narrow
 terminals) shows page-read attempts. Page reads also contribute to ordinary tool
-counts, logs, time budgets, and model input-token costs, but make no Brave API
+counts, logs, active time, and model input-token costs, but make no Brave API
 request. Older results without page-read metadata remain supported.
 `--no-web-search` disables both tools
 for one run; an enabled configuration with no key stops before model generation
@@ -360,13 +369,13 @@ calls in one turn, hard caps with readable errors, and no nesting.
   remaining agents; it is recorded as a `subagent_reminder` recovery and in
   `harness.subagents.reminded`. Leads that delegate first, finishing leads, and
   disabled runs never receive it.
-- **Same workspace and tools.** Subagents use the same `wb` file tools, lint,
+- **Same workspace and tools.** Subagents use the same file tools, lint,
   and, when enabled, `web_search`/`web_fetch` on the lead's project. They cannot
-  call `done` or `spawn_agent` (depth is one); `read_only: true` also rejects
-  `write`, `edit`, and `delete`. Parallel agents should own disjoint files; the
+  call `submit` or `spawn_agent` (depth is one); a `read_only: true` agent is
+  offered only `read_file`, `list_files`, and `lint`. Parallel agents should own disjoint files; the
   workspace's atomic replacement prevents torn files but not lost updates.
-  Within one lead turn, spawn calls start after the batch's earlier `write`,
-  `edit`, and `delete` calls, and later file changes wait for the agents, so
+  Within one lead turn, spawn calls start after the batch's earlier
+  `write_file`, `edit_file`, and `delete_file` calls, and later file changes wait for the agents, so
   scaffolding written in the same turn is in place before agents read it.
 - **Parallel fan-out.** Each `spawn_agent` call returns when its agent finishes.
   Several calls in one turn run concurrently, up to `harness.subagent_parallel`
@@ -375,19 +384,17 @@ calls in one turn, hard caps with readable errors, and no nesting.
   is withdrawn from the next request once the cap is reached or the finishing
   reserve is active, and rejected calls explain why without spawning.
 - **Bounded agents.** Each agent has at most `harness.subagent_turns` model
-  requests (default 16) and `harness.subagent_seconds` active seconds (default
+  requests (default 20) and `harness.subagent_seconds` active seconds (default
   600), within the lead's phase time. A reminder precedes the final request;
-  pending tool calls on that request are not run. Subagent requests are charged
-  to the lead's total token budget and stop before consuming the lead's
-  [finishing reserve](finishing-reserve.md), so the lead can still validate and
-  submit. The lead's phase deadline cancels running agents.
+  pending tool calls on that request are not run. Failed responses are retried
+  twice, as for the lead. The lead's phase deadline cancels running agents.
 - **Bounded reports.** The tool result is JSON with `ok`, `agent`, `status`
-  (`completed`, `turn_limit`, `time_limit`, `budget_exhausted`, `failed`, or
-  `cancelled`), the plain-text `report` truncated to
+  (`completed`, `turn_limit`, `time_limit`, `failed`, or `cancelled`), the plain-text `report` truncated to
   `harness.subagent_report_chars` (default 6,000), `files` written/edited/deleted
   by that agent, `turns`, `tool_calls`, `tool_failures`, `usage`, `time_s`, and
   `agents_left`. Errors are returned as results; a failed agent never ends the
-  lead's phase. Only the lead's own `wb done` submits the project.
+  lead's phase, and the lead always sees the agent's status, changed files, and
+  report as text. Only the lead's own `submit` submits the project.
 
 Accounting rolls up to the benchmarked model: subagent requests appear in the
 model's turns with phase `subagent`, and in its total tokens, cost, TURNS, and
@@ -420,7 +427,7 @@ reasons, runs tools, or lints), `○` with an empty bar while it waits for one o
 the `harness.subagent_parallel` slots, and `✓` with its final bar once done.
 A streaming agent that produces no output for 10 seconds shows a yellow `●` and
 `idle 12s` in place of its bar; an agent that ends early shows `✗` and `no turns`,
-`timed out`, `no budget`, `cancelled`, or `failed`. When exactly one agent is
+`timed out`, `cancelled`, or `failed`. When exactly one agent is
 running, its output tokens and interval-average rate follow the slots.
 
 Finished agents keep their names after the delegation ends and after the model
@@ -472,57 +479,49 @@ Automatic breakpoints cover that history without inserting user messages or
 rewriting tool results. [Failure analysis and live verification](cache-context-verification.md#tool-result-caching-fix)
 include upstream request evidence and actual cache reads.
 
-Before each build/repair request, Harness checks active context and remaining
-cumulative budget. It compacts when estimated input **exceeds 240,000 tokens**,
-when a smaller model window needs output headroom, or when repeated inputs would
-leave too little budget for useful follow-up work. Budget-driven compaction
-starts below the normal context threshold and must pay for its own request while
-preserving capacity for validation and submission. The compactor is fixed to
-**`openai/gpt-5.6-luna`, High effort**, independent
-of the benchmark's model and reasoning setting; an effort rejection never
-silently downgrades it.
+Before each build/repair request, Harness checks the active context. It compacts
+only for the context window: when estimated input **exceeds 240,000 tokens**, or
+when a smaller model window no longer leaves room for a useful response (the
+smaller of the output allowance and an eighth of the window, at least 8,192
+tokens). Requests clamp their output to the window, so a large output allowance
+does not force early compaction. The compactor is fixed to
+**`openai/gpt-5.6-luna`, High effort**, independent of the benchmark's model and
+reasoning setting; an effort rejection never silently downgrades it.
 
 The controller preserves the leading instructions and **first user message**
 exactly, plus the **latest complete assistant message**, including tool calls,
 reasoning/signature fields, all following tool results, and repair feedback.
 Luna summarizes only the intervening history, retaining requirements,
-corrections, file state, failures, and outstanding work. It receives no tools and
-cannot edit the project. Previous summaries are included in subsequent
-compactions. The summary is factual memory; project files remain readable.
-Only the separate summary request omits opaque provider signatures/encrypted
-reasoning and deduplicates readable reasoning. Archives and the benchmark model's
-preserved prefix and tail remain exact. Affordable, useful compaction is still
-allowed after the finishing warning.
+corrections, file state, research findings with their URLs, failures, and
+outstanding work. It receives no tools and cannot edit the project. Previous
+summaries are included in subsequent compactions. The summary is factual memory;
+project files remain readable. Only the separate summary request omits opaque
+provider signatures/encrypted reasoning and deduplicates readable reasoning.
+Archives and the benchmark model's preserved prefix and tail remain exact.
 
 Paragraphs in which the compactor leaked tool-call syntax (such as
 `to=wb (json)` or chat-template tokens like `<|call|>`) are removed before the
 summary reaches the benchmark model. Fenced code is left alone. The count is
 recorded as `leaked_tool_call_blocks_removed`, and `compaction-NNN.json` keeps
 the original text. Because a summary can absorb earlier controller notices, a
-`[WaveBench budget status]` message follows every successful compaction with the
-phase's remaining model requests, active seconds and total tokens. After the
-finishing warning, it is a `[WaveBench budget reminder]` that repeats the
-instruction to lint and call `done`.
+`[WaveBench]` note follows every successful compaction with the phase's remaining
+requests and active seconds, and repeats the instruction to finish once the phase
+is finishing.
 
 The TUI shows `compacting` during the request. Before replacement, the original
 conversation is archived as `conversation-before-compaction-NNN.json` in model
 metadata. `compaction-NNN.json` records the exact request, complete response,
-usage, duration, reason, and before/after sizes. Empty, truncated, oversized,
-wrong-model, or ineffective summaries leave the original context intact.
-Invalid summaries and mandatory context failures end generation with an error;
-optional compaction with insufficient savings is recorded and skipped. If the required preserved messages cannot fit,
-Harness fails explicitly instead of truncating them. Cache boundaries reset
-after successful replacement; provider affinity remains stable.
+usage, duration, reason, and before/after sizes. An empty, truncated, oversized,
+wrong-model, failed, or ineffective summary leaves the original context intact
+and the build continues; compaction is not retried until the context has grown
+by at least a quarter. Cache boundaries reset after successful replacement;
+provider affinity remains stable.
 
-Compaction input/output and elapsed time count toward the **same total-token and
-active-phase limits** as generation. It consumes no project execution attempt
-and does not reset turn limits. Results include its cost in overall usage, with
-`harness.model_usage`, `harness.compaction.usage`, and `timing.compaction_s`
-separately identifying overhead. Luna's one-use summary input requests no paid
-cache writes. The default **1,000,000 total-token budget** includes every repeated
-input, cached input, generated output, and compaction request. Compaction never
-raises this limit. See [budget-aware compaction](budget-compaction.md) for
-affordability, savings checks, and recorded outcomes.
+Compaction time counts toward the phase's active time. It consumes no project
+execution attempt and does not reset request limits. Results include its cost in
+overall usage, with `harness.model_usage`, `harness.compaction.usage`, and
+`timing.compaction_s` separately identifying overhead. Luna's one-use summary
+input requests no paid cache writes.
 
 Provider references: [OpenRouter caching and routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching),
 [OpenAI cache controls](https://developers.openai.com/api/docs/guides/prompt-caching),
@@ -530,69 +529,74 @@ Provider references: [OpenRouter caching and routing](https://openrouter.ai/docs
 [Google caching](https://ai.google.dev/gemini-api/docs/caching), and
 [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
 
-## Budgets and records
+## Limits and records
 
 Defaults are configured in `wavebench/harness/config.py`. Override them under
 `"harness"` in `.benchmark_config.json`; all values must be positive integers.
+Settings from earlier versions that no longer exist (`total_tokens` and the
+`research_*` allowances) are ignored and dropped when Settings is saved.
 To change the preview review timeout interactively, open `wavebench --config`,
 go to **Settings → Preview review timeout (s)**, and press Space. Enter a positive
 whole number of seconds (Ctrl-A clears the field), press Enter to apply, then
 Enter again to save the menu. Esc cancels an edit. The default is 600 seconds
 (10 minutes); the saved value is `harness.review_seconds`.
 The same Settings page exposes **Build time limit (s)**, **Repair time limit (s)**,
-**Total token budget**, and **Output tokens per turn**. These save to
-`harness.build_seconds`, `repair_seconds`, `total_tokens`, and `turn_tokens`.
+**Build request limit**, and **Output tokens per turn**. These save to
+`harness.build_seconds`, `repair_seconds`, `build_turns`, and `turn_tokens`.
 **Subagents (Harness)** saves `subagents` plus `harness.subagent_parallel` and
 `harness.subagent_cap`; `harness.subagent_turns`, `subagent_seconds`, and
 `subagent_report_chars` are editable in the file. See [Subagents](#subagents).
-Time limits count active model requests and tools; scheduler waiting and preview
-review are separate. The total token budget is per model across every build and
-repair request, including repeated conversation input and generated output.
+Time limits count active model requests, tools, and compaction; waiting for a
+shared API slot, scheduling, and preview review are separate.
 
-The system prompt states each phase's model-request and active-time limits and
-the shared token budget. A response still streaming at the time limit is
-discarded.
+Each phase is bounded by **model requests and active time**, the same for every
+model. There is no cumulative token budget: every request resends the
+conversation, so a token total mostly counted cached input and stopped models
+that worked in many small steps. Usage and cost are still recorded in full.
 
-Before tokens, requests or active time become scarce, the model receives one
-actionable warning to finish essential edits, lint, inspect results, and call
-`done`. The shared [finishing reserve](finishing-reserve.md) accounts for both
-requests' inputs and outputs plus the tool-result round trip; the time reserve
-uses observed response durations. Warning text is counted, finishing keeps
-the configured/model output allowance (including reasoning), and inaccurate estimates or insufficient reserve have
-explicit records. Short reminders restate the remaining limits after compaction,
-once per phase when time runs low after an earlier warning, and before a phase's
-final model request. The model must still submit its work itself.
+The system prompt states each phase's request and time limits. Short
+`[WaveBench]` notes keep them in view and are always delivered:
+
+- **Finishing**, once per phase, when three requests remain or when one more
+  ordinary response would leave less than max(20% of the phase, twice the
+  slowest recent response plus the lint allowance): make only essential fixes,
+  run lint, and call `submit`. Research and `spawn_agent` are withdrawn.
+- **Last request**, before a phase's final model request.
+- **After compaction**, restating the remaining requests and time.
+
+The model must still submit its work itself; a text reply receives one reminder
+per phase, then ends the phase.
 
 | Limit | Default |
 |---|---:|
-| Build / repair model turns | 32 / 12 |
-| Total tokens, including every input and output | 1,000,000 |
-| Output tokens per turn | 64,000 |
+| Build / repair model requests | 50 / 20 |
+| Output tokens per request | 64,000 |
 | Active build / repair time | 1,800 / 300 seconds |
 | Program / startup / lint / dependency setup | 60 / 20 / 30 / 120 seconds |
 | Managed preview review | 600 seconds, or Enter/Ctrl-C |
-| Tool response / saved subprocess diagnostics | 16,000 characters / 8 MiB per subprocess |
+| File read / other tool output | 100,000 / 32,000 characters |
+| Saved subprocess diagnostics | 8 MiB per subprocess |
 | Stream body / generated text | Output-scaled, capped at 128 MiB / 32 MiB |
 | Incomplete stream event / retained parsed fields | 2 MiB / 32 MiB |
 | Connection, request send, and response headers | 60 seconds per HTTP attempt |
 | Stream duration / idle wait | 1,800 / 60 seconds, within the active-phase deadline |
+| Retries of failed responses | 3 per phase, 2 per subagent |
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
 | Subagents at once / total per model | 4 (2–5) / 8 |
-| Subagent model requests / active time / report | 16 / 600 seconds / 6,000 characters |
+| Subagent model requests / active time / report | 20 / 600 seconds / 6,000 characters |
 | File data / project source data | 8 MiB per file / 128 MiB |
 | Total source, runtime and dependency storage | 512 MiB, monitored during subprocesses |
 | Project execution attempts | **One initial run, plus one retry only after failure** |
 
-The token budget uses provider usage where available. Local counting uses
+Context estimates use provider usage where available. Local counting uses
 `tiktoken`'s `o200k_base` as an estimate; it is not an exact tokenizer for every
 vendor. The next input estimate reuses the last measured prompt count for the
 unchanged prefix and counts only appended content locally, calibrated to that
 provider's observed ratio. Ten percent extra is reserved on unmeasured content,
 plus 1,024 tokens for context admission. Compaction retains the calibration but
 resets the measured prefix. Google's separately billed explicit-cache creation
-input is excluded from the context measurement while remaining in total usage
-and budget accounting. Provider context/output caps and reasoning adjustments
+input is excluded from the context measurement while remaining in total usage. Provider context/output caps and reasoning adjustments
 are recorded per turn. Missing usage and cost are persisted as unknown, never
 invented as zero. HTTP retries are bounded separately and never replay completed
 tool effects. Truncated or malformed streamed arguments do not execute.
@@ -625,8 +629,7 @@ breakdown for each Harness model:
   of successes; it remains unknown when no run passed. Search service charges
   are separate. Compaction turns and spend are shown as a subset, not added again.
 - Median and nearest-rank p95 active time for successful runs, with sample counts;
-  first-pass rate, repair frequency and recovery rate; average budget utilization
-  and the number of runs that used at least 90% of their configured token budget.
+  first-pass rate, repair frequency and recovery rate.
 - Average build, repair, API, tool, queue, setup, runtime and compaction durations,
   API retry counts, and the distribution of failure categories. Phase durations
   overlap and should not be added together. A pass checks runtime/startup only;
@@ -636,10 +639,9 @@ Speed divides measured output tokens by the matching API seconds. Cache hits
 are weighted by matching prompt tokens, and tool failure rates by matching tool
 calls. These rates include unsuccessful runs and never average per-run
 percentages. Metrics with incomplete coverage show the measured run count;
-missing measurements display `—`, partial totals display `≥`, and estimated
-budget figures retain `~`. Older history remains readable without migration.
-Budget utilization averages each run's used/limit ratio, so different configured
-budgets remain comparable. Small samples make p95 unstable; the displayed sample
+missing measurements display `—`, partial totals display `≥`, and estimates
+retain `~`. Older history remains readable without migration.
+Small samples make p95 unstable; the displayed sample
 count helps judge it.
 
 The post-benchmark analytics keep the top-ten leaderboard and a compact Harness
@@ -652,11 +654,10 @@ The live dashboard and final results table show each model's status, generated
 output tokens (`OUT TK`, or `OUT` on narrow terminals), output tokens per second
 (`tk/s`), cost, turns, elapsed time, cache hit percentage, tools used, and tool
 failure percentage. Each model has a metric row beneath
-shared column headers, with phase and metrics aligned across models. A separate
-budget line shows cumulative input plus output used, the configured limit, and
-remaining tokens; estimates carry `~`. Final failure details distinguish stream
-limits, token exhaustion, model/protocol failures, and project runtime failures.
-Unaffordable requests include remaining tokens and the next input estimate.
+shared column headers, with phase and metrics aligned across models. Final
+failure details distinguish stream limits, phase request/time limits, the context
+window, model/protocol failures, and project runtime failures. Results from
+Harness version 1 keep their token-budget failure details.
 These details also appear in history, with older records supported. Values
 use compact k/M/B/T suffixes when needed; `—` means unknown, and estimation
 and partial-usage markers remain visible. At 60 columns, abbreviated headings
@@ -699,8 +700,8 @@ compactor's rates. Cache discounts, hidden reasoning, and provider-specific
 charges can make estimates differ from the final bill.
 
 Provider usage replaces estimates as soon as it arrives. The output column uses
-reported completion tokens, including reasoning counted once. Saved usage and
-budget totals still include every call's input and output; reasoning and
+reported completion tokens, including reasoning counted once. Saved usage
+totals still include every call's input and output; reasoning and
 cache-detail counts are subsets, not extra tokens to add again. Cost uses
 `usage.cost`, not the upstream cost or catalog pricing when provider billing
 is available. The global total adds the same unrounded values shown per model,
@@ -711,24 +712,29 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
-Each build or repair phase can recover once from a transient provider error
-received before any model output or after reasoning only; partial streams are
-never replayed, and discarded reasoning never enters history. If a model sends a text
-reply without `wb done`, the controller gives it one submission reminder per
-phase. Only an actual, valid `done` tool call submits the project. These recovery
-requests consume the remaining turn, time and token budgets and are recorded in
-`harness.recoveries`; missing provider usage remains unknown.
+A failed response is never partly used: none of its tool calls run, and nothing
+from it enters the history. Each build or repair phase retries up to three failed
+responses, and each subagent two; every retry is a model request recorded in
+`harness.recoveries` and counts toward the phase's limits:
 
-Each build/repair phase and each subagent also allows one corrective request after
-truncated output, invalid JSON tool arguments, or an oversized tool batch. The
-entire rejected response's calls remain unexecuted. A fresh instruction asks for
-complete arguments and smaller batches; it does not append broken tool calls to
-history. The streaming limit counts distinct calls against `harness.batch_calls`
-(64 by default), as advertised in the tools. Sparse numeric call indices are
-valid identifiers. Persistent failures stop with a specific reason, and all
-recovery requests consume the existing limits. See the
-[September 21](benchmark-failures-verification.md) and
-[September 22](benchmark-failures-sep-22-verification.md) failure investigations.
+- **Provider and stream failures** (a mid-stream provider error, an interrupted
+  or malformed stream, an idle stream, or no response headers) resend the
+  unchanged conversation. An in-stream 4xx error other than 408/429 is not retried.
+- **Truncated output, invalid JSON tool arguments, or too many tool calls** add
+  a short `[WaveBench]` note asking for smaller steps, for example writing a very
+  large file with several `write_file` calls using `append`.
+- **A response that spent its whole output allowance on reasoning** also lowers
+  the session's reasoning effort one level for later requests, for example
+  `max` to `xhigh`, since repeating the same request would fail the same way.
+  `harness.reasoning_effort` records the configured and final effort.
+
+If a model sends a text reply without calling `submit`, the controller gives it
+one reminder per phase. Only an actual, valid `submit` call submits the project.
+Missing provider usage remains unknown. The streaming limit counts distinct calls
+against `harness.batch_calls` (64 by default). Sparse numeric call indices are
+valid identifiers. See the [September 21](benchmark-failures-verification.md),
+[September 22](benchmark-failures-sep-22-verification.md), and
+[lean Harness](lean-harness-verification.md) investigations.
 
 Gemini conversations bind to the provider reported by their first successful
 turn: `Google` maps to `google-vertex`, and `Google AI Studio` maps to

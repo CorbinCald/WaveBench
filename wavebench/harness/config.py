@@ -2,12 +2,17 @@
 
 from dataclasses import asdict, dataclass, fields
 
+# Settings from earlier Harness versions that no longer exist. Saved configs may
+# still contain them; they are ignored rather than rejected.
+RETIRED_SETTINGS = frozenset(
+    {"total_tokens", "research_turns", "research_seconds", "research_tokens"}
+)
+
 
 @dataclass(frozen=True)
 class Limits:
-    build_turns: int = 32
-    repair_turns: int = 12
-    total_tokens: int = 1_000_000
+    build_turns: int = 50
+    repair_turns: int = 20
     turn_tokens: int = 64_000
     build_seconds: int = 1800
     repair_seconds: int = 300
@@ -16,7 +21,8 @@ class Limits:
     setup_seconds: int = 120
     lint_seconds: int = 30
     review_seconds: int = 600
-    output_chars: int = 16_000
+    output_chars: int = 32_000
+    read_chars: int = 100_000
     diagnostic_bytes: int = 8 * 1024 * 1024
     workspace_bytes: int = 512 * 1024 * 1024
     parallel_calls: int = 4
@@ -24,9 +30,6 @@ class Limits:
     process_concurrency: int = 4
     web_search_calls: int = 20
     web_fetch_calls: int = 20
-    research_turns: int = 8
-    research_seconds: int = 300
-    research_tokens: int = 200_000
     stream_raw_min_bytes: int = 16 * 1024 * 1024
     stream_raw_bytes_per_token: int = 1024
     stream_raw_max_bytes: int = 128 * 1024 * 1024
@@ -40,7 +43,7 @@ class Limits:
     stream_idle_seconds: int = 60
     subagent_parallel: int = 4
     subagent_cap: int = 8
-    subagent_turns: int = 16
+    subagent_turns: int = 20
     subagent_seconds: int = 600
     subagent_report_chars: int = 6_000
 
@@ -59,7 +62,8 @@ class Limits:
 
     @classmethod
     def from_config(cls, config: dict):
-        return cls(**(config.get("harness") or {}))
+        settings = config.get("harness") or {}
+        return cls(**{k: v for k, v in settings.items() if k not in RETIRED_SETTINGS})
 
     def record(self) -> dict:
         return asdict(self)

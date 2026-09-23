@@ -191,23 +191,66 @@ class TurnError(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
-def response_recovery_notice(failure_code: str | None, batch_calls: int) -> str | None:
-    reason = {
-        "output_truncated": "Your response exhausted its output allowance before completing.",
-        "invalid_tool_arguments": "Your response contained invalid JSON tool arguments.",
-        "tool_batch_limit": f"Your response exceeded the limit of {batch_calls} tool calls per turn.",
-    }.get(failure_code)
-    if reason is None:
+# Stream failures after which the unchanged conversation can simply be sent
+# again: nothing from the failed response entered the history.
+RESEND_FAILURES = frozenset(
+    {
+        "provider_stream_error",
+        "incomplete_stream",
+        "stream_disconnected",
+        "stream_idle_timeout",
+        "malformed_stream",
+        "response_headers_timeout",
+    }
+)
+RECOVERY_NOTICES = {
+    "output_truncated": (
+        "Your last response reached the output limit before it finished, so none of its tool "
+        "calls ran. Reply again with shorter reasoning and smaller steps: write a very large "
+        "file in several write_file calls with append set, or change it with edit_file."
+    ),
+    "invalid_tool_arguments": (
+        "Your last response contained tool arguments that were not valid JSON, so none of its "
+        "tool calls ran. Retry with valid JSON arguments."
+    ),
+    "tool_batch_limit": "Your last response had too many tool calls, so none of them ran. Retry with fewer calls.",
+}
+
+
+def recovery(exc: BaseException) -> tuple[str, str | None] | None:
+    """How to retry a failed response, if at all: (kind, notice for the model or None)."""
+    if not isinstance(exc, TurnError) or not exc.request_sent:
         return None
+    if exc.failure_code in RECOVERY_NOTICES:
+        return "response_retry", "[WaveBench] " + RECOVERY_NOTICES[exc.failure_code]
+    if exc.failure_code in RESEND_FAILURES:
+        code = ((exc.diagnostics or {}).get("provider_error") or {}).get("code")
+        if type(code) is int and 400 <= code < 500 and code not in {408, 429}:
+            return None  # The provider rejected the request itself; resending cannot help.
+        return "provider_retry", None
+    return None
+
+
+def reasoning_only(exc: BaseException) -> bool:
+    """A truncated response that produced nothing but reasoning."""
+    sizes = (getattr(exc, "diagnostics", None) or {}).get("bytes") or {}
     return (
-        "[WaveBench response recovery] "
-        + reason
-        + " No tool calls from that response were executed or added to the conversation. "
-        "Retry the unfinished work with complete JSON arguments and a smaller batch: "
-        f"at most {min(8, batch_calls)} calls, then wait for their results. "
-        "Split large file changes across turns and keep reasoning concise. "
-        "Earlier successful work is still present. The same token, turn, and time limits apply."
+        getattr(exc, "failure_code", None) == "output_truncated"
+        and sizes.get("reasoning", 0) > 0
+        and not sizes.get("content")
+        and not sizes.get("tool_arguments")
     )
+
+
+def lower_effort(model_id: str, effort: str | None) -> str | None:
+    """The next reasoning effort below the one this model actually receives, if any."""
+    supported = api._supported_efforts(model_id)
+    if not supported or effort not in api._EFFORT_ORDER:
+        return None
+    order = api._EFFORT_ORDER
+    current = order.index(api._map_effort(effort, supported))
+    below = [level for level in supported if level in order and order.index(level) < current]
+    return max(below, key=order.index) if below else None
 
 
 @dataclass(frozen=True)
@@ -819,7 +862,7 @@ async def call_conversation(
     )
     if resolved < 1:
         raise TurnError(
-            "conversation context budget exhausted; no request sent", request_sent=False
+            "conversation exceeds the model context window; no request sent", request_sent=False
         )
     reasoning = (
         api._reasoning_attempts(model_id, reasoning_effort, resolved) if reasoning_effort else []

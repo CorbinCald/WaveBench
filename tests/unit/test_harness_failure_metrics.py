@@ -46,13 +46,13 @@ def example():
 
 
 @pytest.mark.parametrize("width", [52, 72, 112])
-def test_gemini_example_distinguishes_output_and_cumulative_budget(width):
+def test_legacy_token_budget_failure_still_renders(width):
+    """Harness version 1 results ended on a cumulative token budget; history keeps them readable."""
     result = example()
     tracker = ProgressTracker(1, {"Gemini": result}, model_names=["Gemini"])
     values = tracker._harness_metrics("Gemini", result)
     assert values["tokens"].value == 78_094
-    assert values["budget"]["used_tokens"] == 934_688
-    assert values["budget"]["remaining_tokens"] == 65_312
+    assert "budget" not in values
     rendered = tracker._format_result_row("Gemini", result, 1, width)
     plain = re.sub(r"\033\[[0-9;?]*[a-zA-Z]", "", rendered)
     assert "Budget " not in plain
@@ -62,62 +62,17 @@ def test_gemini_example_distinguishes_output_and_cumulative_budget(width):
     assert all(len(line) <= width for line in plain.splitlines())
 
 
-def test_live_budget_counts_cached_input_and_marks_unknown_estimates():
-    tracker = ProgressTracker(1, {}, model_names=["Gemini"])
-    result = example()
-    tracker.update_harness("Gemini", result["usage"], 90, budget=result["harness"]["budget"])
-    tracker.start_harness_turn("Gemini", 2000)
-    tracker.update_harness_stream("Gemini", {}, 100)
-    values = tracker._harness_metrics("Gemini")
-    assert values["budget"]["used_tokens"] == 936_788
-    assert values["budget"]["estimated"] is True
-    assert tracker._format_harness_details("Gemini", 112) == []
-    tracker.update_harness_stream(
-        "Gemini",
-        {
-            "prompt_tokens": 3000,
-            "completion_tokens": 100,
-            "total_tokens": 3100,
-            "prompt_tokens_details": {"cached_tokens": 2900},
-        },
-        100,
-    )
-    values = tracker._harness_metrics("Gemini")
-    assert values["budget"]["used_tokens"] == 937_788
-    assert values["budget"]["estimated"] is False
-    assert result["usage"]["total_tokens"] == 934_688
-
-
-def test_total_only_provider_snapshots_do_not_double_count_visible_output():
-    tracker = ProgressTracker(1, {}, model_names=["Model"])
-    tracker.update_harness(
-        "Model",
-        {"api_turns": 0},
-        0,
-        budget={
-            "used_tokens": 0,
-            "limit_tokens": 10_000,
-            "remaining_tokens": 10_000,
-            "estimated": False,
-        },
-    )
-    tracker.start_harness_turn("Model", 500)
-    for total, output in [(1000, 10), (1100, 20), (1200, 30)]:
-        tracker.update_harness_stream("Model", {"total_tokens": total}, output)
-        budget = tracker._harness_metrics("Model")["budget"]
-        assert budget["used_tokens"] == total
-        assert budget["estimated"] is False
-    tracker.update_harness_stream("Model", {"total_tokens": 1200}, 35)
-    budget = tracker._harness_metrics("Model")["budget"]
-    assert budget["used_tokens"] == 1205
-    assert budget["estimated"] is True
-
-
 @pytest.mark.parametrize(
     "exc,kwargs,category",
     [
         (TurnError("wire guard", failure_code="stream_raw_limit"), {}, "stream_limit"),
         (BudgetError("total token budget exhausted"), {}, "token_budget"),
+        (BudgetError("building exceeded 50 model turns"), {}, "harness_limit"),
+        (
+            TurnError("conversation exceeds the model context window; no request sent"),
+            {},
+            "context_window",
+        ),
         (TurnError("malformed SSE JSON", failure_code="malformed_stream"), {}, "model_protocol"),
         (RuntimeError("exit 1"), {"runtime": True}, "project_runtime"),
         (asyncio.CancelledError(), {}, "cancelled"),

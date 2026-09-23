@@ -23,6 +23,8 @@ from wavebench.harness.workspace import allocate_run
 from wavebench.tokens import prompt_tokens
 from wavebench.tui.progress import ProgressTracker
 
+from ..harness_calls import native, tool_call
+
 
 @pytest.mark.parametrize("enabled", [False, True])
 async def test_search_results_reach_agent_and_generated_program(factory, monkeypatch, enabled):
@@ -93,17 +95,18 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
             name, args = "web_search", {"query": "example reference"}
         elif enabled and turns == 1:
             assert tracker._harness_metrics(session.name)["web_searches"] == 1
-            result = json.loads(messages[-1]["content"])
-            assert result["results"][0]["url"] == source_url
+            listing = messages[-1]["content"]
+            assert listing.startswith(f"1. Reference\n   {source_url}\n   Open the reference")
             assert source_token not in json.dumps(messages)
-            name, args = "web_fetch", {"url": result["results"][0]["url"]}
+            name, args = "web_fetch", {"url": source_url}
         elif turns == 2 * int(enabled):
             value = "42"
             if enabled:
                 assert tracker._harness_metrics(session.name)["web_fetches"] == 1
-                result = json.loads(messages[-1]["content"])
-                assert source_token in result["content"]
-                value = result["content"].splitlines()[-1]
+                page = messages[-1]["content"]
+                assert page.startswith(f"Source: {source_url}\nRetrieved: ")
+                assert source_token in page
+                value = source_token
             args = {
                 "command": "write",
                 "path": "main.py",
@@ -115,6 +118,8 @@ async def test_search_results_reach_agent_and_generated_program(factory, monkeyp
         else:
             args = {"command": "done", "runtime": "python", "entry": "main.py"}
         turns += 1
+        if name == "wb":
+            name, args = native(args)
         return Turn(
             {
                 "role": "assistant",
@@ -303,11 +308,7 @@ def scripted(
         message = {
             "role": "assistant",
             "tool_calls": [
-                {
-                    "id": f"{model_id}-{index}-{i}",
-                    "type": "function",
-                    "function": {"name": "wb", "arguments": json.dumps(args)},
-                }
+                {**tool_call(f"{model_id}-{index}-{i}", args), "index": i}
                 for i, args in enumerate(command)
             ],
         }
@@ -489,7 +490,7 @@ async def test_cancellation_during_repair_keeps_first_failure(factory, monkeypat
     repairing = asyncio.Event()
 
     async def pause(*args, **kwargs):
-        if args[3][-1].get("role") == "user" and "run 1 failed" in args[3][-1].get("content", ""):
+        if args[3][-1].get("role") == "user" and "Run 1 failed" in args[3][-1].get("content", ""):
             repairing.set()
             await asyncio.Event().wait()
         return await model(*args, **kwargs)
@@ -541,10 +542,10 @@ async def test_local_request_rejection_does_not_add_a_turn(factory, monkeypatch)
     session = factory()
     await session.build()
     assert session.usage()["api_turns"] == 0
-    assert session.budget_tokens == 0
+    assert session.turns == []
 
 
-async def test_reported_zero_usage_does_not_consume_an_estimated_budget(factory, monkeypatch):
+async def test_reported_zero_usage_is_kept_as_measured(factory, monkeypatch):
     scripted(monkeypatch)
     original = module.call_conversation
 
@@ -558,7 +559,7 @@ async def test_reported_zero_usage_does_not_consume_an_estimated_budget(factory,
     await session.build()
     assert session.generation == "submitted"
     assert session.usage()["api_turns"] == 3
-    assert session.usage()["total_tokens"] == session.budget_tokens == 0
+    assert session.usage()["total_tokens"] == 0
     assert session.usage()["cost"] == 0
 
 
@@ -586,7 +587,10 @@ async def test_failure_before_next_stream_does_not_reuse_previous_turn_usage(fac
     assert session.turns[-1]["usage"] == {}
 
 
-async def test_measured_prompt_usage_keeps_large_projects_within_budget(factory, monkeypatch):
+async def test_large_contexts_are_limited_by_requests_and_time_not_token_totals(
+    factory, monkeypatch
+):
+    """Version 1 stopped this run on a 100,000-token total of mostly cached input."""
     requests = []
 
     async def model(client, api_key, model_id, messages, tools, **kwargs):
@@ -594,60 +598,27 @@ async def test_measured_prompt_usage_keeps_large_projects_within_budget(factory,
         requests.append(kwargs)
         if index == 0:
             command = {"command": "write", "path": "main.py", "content": "value = 'hello'\n" * 3000}
-        elif index < 5:
+        elif index < 9:
             command = {"command": "ls"}
         else:
             command = {"command": "done", "runtime": "python", "entry": "main.py"}
-        message = {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call-{index}",
-                    "type": "function",
-                    "function": {"name": "wb", "arguments": json.dumps(command)},
-                }
-            ],
-        }
+        message = {"role": "assistant", "tool_calls": [tool_call(f"call-{index}", command)]}
         usage = {
             "prompt_tokens": 1000 if index == 0 else 14000,
             "completion_tokens": 12000 if index == 0 else 100,
+            "prompt_tokens_details": {"cached_tokens": 0 if index == 0 else 13900},
         }
-        usage["total_tokens"] = sum(usage.values())
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         return Turn(message, usage, model_id, "offline-provider", "tool_calls", {})
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=100_000))
+    session = factory()
     await session.build()
     assert session.generation == "submitted", session.error
-    assert len(requests) == 6
-    assert session.budget_tokens == 83_500
+    assert len(requests) == 10 and session.usage()["total_tokens"] == 139_900
     assert session.turns[-1]["input_tokens_bound"] < 16_000
-    assert 0 < requests[-1]["max_tokens"] <= session.limits.turn_tokens
-    used_before_last = sum(turn["usage"]["total_tokens"] for turn in session.turns[:-1])
-    assert (
-        used_before_last + requests[-1]["input_tokens_bound"] + requests[-1]["max_tokens"]
-        <= session.limits.total_tokens
-    )
-    assert not session.attempts
-
-
-async def test_token_limit_identifies_usage_and_next_request_reserve(factory, monkeypatch):
-    calls, _ = scripted(monkeypatch)
-    original = module.call_conversation
-
-    async def model(*args, **kwargs):
-        turn = await original(*args, **kwargs)
-        turn.usage = {"prompt_tokens": 8500, "completion_tokens": 500, "total_tokens": 9000}
-        return turn
-
-    monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=10_000))
-    await session.build()
-    assert session.generation == "budget_exhausted"
-    assert calls[session.model_id] == 1
-    assert "9,000 / 10,000 tokens used" in session.error
-    assert "next input estimate" in session.error and "time" not in session.error
-    assert not session.attempts
+    assert all(request["max_tokens"] == session.limits.turn_tokens for request in requests)
+    assert not session.compactions and not session.attempts
 
 
 @pytest.mark.parametrize("repair", [False, True])
@@ -658,7 +629,7 @@ async def test_active_deadline_names_the_phase_and_time_limit(factory, monkeypat
     async def model(*args, **kwargs):
         # A low-time reminder may follow the repair request in a one-second phase.
         repairing = any(
-            m.get("role") == "user" and "run 1 failed" in (m.get("content") or "") for m in args[3]
+            m.get("role") == "user" and "Run 1 failed" in (m.get("content") or "") for m in args[3]
         )
         if not repair or repairing:
             await asyncio.sleep(2)
@@ -702,7 +673,7 @@ def seed_context(session):
     return json.loads(json.dumps(session.messages))
 
 
-async def test_compaction_then_build_and_repair_preserves_history_budget_and_two_run_rule(
+async def test_compaction_then_build_and_repair_preserves_history_and_two_run_rule(
     factory, monkeypatch
 ):
     calls, conversations = scripted(monkeypatch, fail_first=True)
@@ -732,7 +703,7 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
     monkeypatch.setattr(module, "call_conversation", model)
     tracker = ProgressTracker(1, {})
     tracker._running = True
-    session = factory(limits=Limits(total_tokens=900_000), auto_open="off", tracker=tracker)
+    session = factory(auto_open="off", tracker=tracker)
     before = seed_context(session)
     key = session.cache_policy.key
     await session.build()
@@ -747,11 +718,10 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
     # Compaction restates the remaining limits after the protected interaction.
     assert resumed[-1]["role"] == "user"
     assert resumed[-1]["content"].startswith(
-        "[WaveBench budget status] Earlier conversation was summarized. "
-        "32 model requests remain in this phase."
+        "[WaveBench] Earlier conversation was summarized above. 50 requests and about"
     )
     assert session.cache_policy.key == key
-    assert session.budget_tokens == 5500 + 6 * 15
+    assert session.usage()["total_tokens"] == 5500 + 6 * 15
     result = session.result()
     assert result["usage"]["cost"] == pytest.approx(0.008)
     assert result["harness"]["model_usage"]["total_tokens"] == 90
@@ -771,10 +741,24 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
 @pytest.mark.parametrize(
     "failure", ["empty", "truncated", "tools", "wrong_model", "timeout", "cancelled"]
 )
-async def test_failed_compaction_never_replaces_or_executes_original_context(
+async def test_failed_compaction_keeps_the_original_context_and_the_build_continues(
     factory, monkeypatch, failure
 ):
-    async def model(*args, **kwargs):
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(model_id)
+        if model_id != COMPACTION_MODEL:
+            # The benchmark model continues with its unchanged history.
+            assert messages[: len(before)] == before
+            return Turn(
+                {"role": "assistant", "content": "Stopping here."},
+                {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105},
+                model_id,
+                "offline",
+                "stop",
+                {},
+            )
         if failure == "timeout":
             await asyncio.sleep(2)
         if failure == "cancelled":
@@ -793,29 +777,25 @@ async def test_failed_compaction_never_replaces_or_executes_original_context(
         )
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=900_000, build_seconds=1))
+    session = factory(limits=Limits(build_seconds=1))
     before = seed_context(session)
     await session.build()
+    assert session.messages[: len(before)] == before
+    assert not session.attempts and not session.workspace.ls()
+    assert session.turns[0]["phase"] == "compacting"
     if failure == "cancelled":
         assert session.generation == "cancelled"
-    assert session.messages == before
-    assert session.compactions[0]["status"] == "failed"
-    assert session.budget_tokens > 0
-    assert not session.attempts and not session.workspace.ls()
-    if failure not in {"timeout", "cancelled"}:
-        assert session.usage()["total_tokens"] == 1020
-    if failure == "timeout":
+        assert session.compactions[0]["status"] == "cancelled"
+    elif failure == "timeout":
         assert "active time budget exhausted" in session.error
-
-
-async def test_compaction_cannot_bypass_total_budget(factory, monkeypatch):
-    calls, _ = scripted(monkeypatch)
-    session = factory(limits=Limits(total_tokens=2000))
-    before = seed_context(session)
-    await session.build()
-    assert session.generation == "budget_exhausted"
-    assert "cannot fit Luna context compaction" in session.error
-    assert not calls and not session.compactions and session.messages == before
+        assert session.compactions[0]["status"] == "cancelled"
+    else:
+        # The failure is recorded once; the build went on and ended on its own terms.
+        assert session.compactions[0]["status"] == "failed"
+        assert len(session.compactions) == 1
+        assert requests.count(COMPACTION_MODEL) == 1 and len(requests) == 3
+        assert session.failure["code"] == "project_abandoned"
+        assert session.usage()["total_tokens"] == 1020 + 2 * 105
 
 
 async def test_cache_usage_totals_use_actual_reports_and_costs(factory):
@@ -867,7 +847,7 @@ async def test_repeated_compaction_carries_previous_summary_and_newest_tool_tail
         )
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=900_000))
+    session = factory()
     original = seed_context(session)
     await session.compact("test threshold", 240_001, 10)
     session.messages.extend(
@@ -893,28 +873,44 @@ async def test_repeated_compaction_carries_previous_summary_and_newest_tool_tail
     assert session.messages[-2:] == before_second[-2:]
     assert "Persistent fact" in json.dumps(requests[1]["history_to_summarize"])
     assert "Newest correction" in json.dumps(requests[1]["history_to_summarize"])
-    assert len(session.compactions) == 2 and session.budget_tokens == 2100
+    assert len(session.compactions) == 2 and session.usage()["total_tokens"] == 2100
     assert (
         json.loads((session.metadata / "conversation-before-compaction-002.json").read_text())
         == before_second
     )
 
 
-async def test_ineffective_compaction_retains_oversized_protected_message(factory, monkeypatch):
-    async def model(*args, **kwargs):
+async def test_ineffective_compaction_keeps_history_and_is_not_retried(factory, monkeypatch):
+    compactions = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        if model_id == COMPACTION_MODEL:
+            compactions.append(messages)
+            # Longer than the history it replaces.
+            return Turn(
+                {"role": "assistant", "content": "fact " * 6000}, {}, model_id, "OpenAI", "stop", {}
+            )
+        command = (
+            {"command": "write", "path": "main.py", "content": "print(42)\n"}
+            if not session.workspace.ls()
+            else {"command": "done", "runtime": "python", "entry": "main.py"}
+        )
         return Turn(
-            {"role": "assistant", "content": "Summary"}, {}, COMPACTION_MODEL, "OpenAI", "stop", {}
+            {"role": "assistant", "tool_calls": [tool_call(f"call-{len(messages)}", command)]},
+            {"prompt_tokens": 240_500, "completion_tokens": 10, "total_tokens": 240_510},
+            model_id,
+            "offline",
+            "tool_calls",
+            {},
         )
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(total_tokens=900_000))
-    seed_context(session)
-    session.messages[1]["content"] = "preserve " * 241_000
-    before = json.loads(json.dumps(session.messages))
+    session = factory()
+    before = seed_context(session)
     await session.build()
-    assert session.generation == "budget_exhausted"
-    assert "cannot fit preserved messages" in session.error
-    assert session.messages == before and not session.attempts
+    assert session.generation == "submitted", session.error
+    assert len(compactions) == 1 and session.compactions[0]["status"] == "ineffective"
+    assert session.messages[: len(before)] == before
 
 
 @pytest.fixture

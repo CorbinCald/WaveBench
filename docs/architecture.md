@@ -17,7 +17,7 @@ flowchart LR
   Run2 -->|Failure| Failed[Runtime failed]
 ```
 
-`HarnessSession` owns the conversation, budgets, phase transitions and attempt
+`HarnessSession` owns the conversation, phase limits, phase transitions and attempt
 list in controller memory. `HarnessBatch` coordinates initial builds. In
 `after_all`, every initial build settles before execution tasks begin; failed,
 cancelled, unsupported, and exhausted builds all release the barrier. Other
@@ -37,20 +37,21 @@ and retry policy from `api.py`. It assembles indexed tool calls and reasoning
 fields across complete UTF-8 SSE fragments. Only a finished, valid turn reaches
 `Dispatcher.batch`; results use the OpenRouter assistant/tool-call/tool-result
 conversation format, with the schema on every request. HTTP retries occur before
-side effects. Context and total-token admission include the whole conversation.
+side effects. Context admission includes the whole conversation.
 Actual model/provider, usage, reasoning/context adjustments, and transport retry
 events are saved per turn.
 
-`Dispatcher` is shared with the `wb` CLI and has no shell evaluator. Its bounded
+`Dispatcher` is shared with the `wb` CLI and has no shell evaluator. It exposes
+small single-purpose tools and renders each result as plain text. Its bounded
 scheduler overlaps independent calls, serializes conflicting paths, and puts
 lint behind writes. With Subagents enabled, the lead's dispatcher also exposes
 `spawn_agent`, routed to a session-owned `SubagentPool` in `subagents.py`. Each
 spawned `SubagentRun` is a fresh conversation of the same model with a child
-dispatcher on the same workspace and runtime: no `done`, no `spawn_agent`, an
+dispatcher on the same workspace and runtime: no `submit`, no `spawn_agent`, an
 optional read-only mode, research calls routed through the lead's quotas, and
 tool counts added to the lead's totals. Subagent turns are appended to the
-session's turn list and charged to its total token budget, stopping before the
-lead's finishing reserve; only a bounded report and changed-file list return as
+session's turn list and run within the lead's phase time; only a bounded report
+and changed-file list return as
 the tool result. The root is fixed in `Workspace`, whose operations use
 `dir_fd`, `O_NOFOLLOW`, regular-file checks, and atomic replacement. Invocation
 and model directory creation is exclusive, including sanitized-name collisions.
@@ -111,7 +112,7 @@ The package intentionally re-exports common entry points from package
 | Harness conversations, streamed tool arguments, provider fields | `wavebench/harness/transport.py` |
 | Bounded file tools and developer CLI | `wavebench/harness/commands.py`, `workspace.py`, `__main__.py` |
 | Sandbox, manifests, lint, managed previews | `wavebench/harness/runtime.py`, `trusted.py` |
-| Build/repair budgets, scheduling, attempt admission | `wavebench/harness/session.py` |
+| Build/repair limits, notices, recovery, scheduling, attempt admission | `wavebench/harness/session.py` |
 | Subagent tool, admission, caps, and reports | `wavebench/harness/subagents.py`, `commands.py` |
 | Subagents setup screen | `wavebench/tui/menus/subagents_menu.py` |
 | Reasoning-effort payload formats and per-model effort mapping | `wavebench/api.py` (`_reasoning_attempts`, `_supported_efforts`) |

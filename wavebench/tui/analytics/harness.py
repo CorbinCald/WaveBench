@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from statistics import median
 
 from wavebench.harness.accounting import Measurement, reported_total, valid_number
-from wavebench.harness.failure import budget_record, result_failure
+from wavebench.harness.failure import result_failure
 
 
 @dataclass
@@ -78,6 +78,7 @@ def usage_measurement(result: dict, key: str) -> Measurement:
 
 FAILURE_LABELS = {
     "token_budget": "Token budget",
+    "context_window": "Context window",
     "harness_limit": "Time / turn limit",
     "stream_limit": "Stream limit",
     "request_timeout": "Request timeout",
@@ -104,8 +105,6 @@ class HarnessStats:
     repairs: int = 0
     recovered: int = 0
     first_pass: int = 0
-    budget: Total = field(default_factory=Total)
-    near_budget: int = 0
     failures: Counter = field(default_factory=Counter)
 
     def add(self, result: dict) -> None:
@@ -161,12 +160,6 @@ class HarnessStats:
             self.repairs += repaired
             self.recovered += repaired and status == "success"
             self.first_pass += not repaired and status == "success"
-
-        budget = budget_record(harness)
-        used, limit = budget.get("used_tokens"), budget.get("limit_tokens")
-        if valid_number(used) and valid_number(limit) and limit > 0:
-            self.budget.add(used / limit, estimated=bool(budget.get("estimated")))
-            self.near_budget += used / limit >= 0.9
 
         for key in (
             "api_s",

@@ -139,10 +139,10 @@ async def test_invalid_arguments_make_no_requests(brave_server, query, count):
 async def test_optional_dispatch_budget_replay_and_safe_logs(brave_server, tmp_path):
     disabled = Dispatcher(None, None, tmp_path, Limits())
     call = {"id": "search-1", "name": "web_search", "arguments": {"query": "docs"}}
-    assert [tool["function"]["name"] for tool in disabled.tools] == ["wb"]
-    assert disabled.tools[0]["function"]["parameters"] == TOOL_SCHEMA[0]["function"]["parameters"]
-    assert "at most 64 native tool calls" in disabled.tools[0]["function"]["description"]
-    assert "disabled" in (await disabled.batch([call]))[0]["error"]
+    assert [tool["function"]["name"] for tool in disabled.tools] == [
+        tool["function"]["name"] for tool in TOOL_SCHEMA
+    ]
+    assert "web_search is not enabled" in (await disabled.batch([call]))[0]["error"]
     assert not brave_server["requests"]
 
     dispatcher = Dispatcher(
@@ -152,17 +152,21 @@ async def test_optional_dispatch_budget_replay_and_safe_logs(brave_server, tmp_p
         Limits(web_search_calls=2),
         web_search=module.BraveSearch("test-private-key"),
     )
-    assert dispatcher.tools[-1] == module.WEB_SEARCH_SCHEMA
+    assert module.WEB_SEARCH_SCHEMA in dispatcher.tools
     first = await dispatcher.batch([call])
     assert first[0]["ok"] and first[0]["results"][0]["url"] == "https://example.com/docs"
+    assert first[0]["text"].startswith("1. ") and "https://example.com/docs" in first[0]["text"]
+    assert first[0]["text"].endswith("(1 searches and 20 page reads left)")
     assert await dispatcher.batch([call]) == first
     assert len(brave_server["requests"]) == 1
     # A different tool name cannot replay a previous search response.
-    assert not (await dispatcher.batch([{**call, "name": "wb"}]))[0]["ok"]
+    assert not (await dispatcher.batch([{**call, "name": "read_file"}]))[0]["ok"]
     brave_server["status"] = 429
     assert not (await dispatcher.batch([{**call, "id": "search-2"}]))[0]["ok"]
-    dispatcher.reopen()  # Repair shares the same budget.
-    assert "budget" in (await dispatcher.batch([{**call, "id": "search-3"}]))[0]["error"]
+    dispatcher.reopen()  # Repair shares the same call limit.
+    assert (
+        "call limit reached" in (await dispatcher.batch([{**call, "id": "search-3"}]))[0]["error"]
+    )
     assert dispatcher.web_search_usage == {"calls": 2, "failures": 1}
     assert len(brave_server["requests"]) == 2
     logs = "".join(path.read_text() for path in tmp_path.glob("tool-*.json"))

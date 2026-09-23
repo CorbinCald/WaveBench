@@ -1,6 +1,6 @@
 """Tabbed configuration menu — Models/TTS/Image tabs (catalog browser + manual add)
 and Settings tab (theme, reasoning-effort, analytics sort, directory naming,
-auto-open, Harness budgets, preview review timeout, auto-install).
+auto-open, Harness limits, preview review timeout, auto-install).
 
 ``interactive_config_menu`` is a single function that drives the tabs through
 a shared event loop; further decomposition is deferred per the maintainability
@@ -331,7 +331,7 @@ def interactive_config_menu(
                 ("review_seconds", "Preview review timeout (s)"),
                 ("build_seconds", "Build time limit (s)"),
                 ("repair_seconds", "Repair time limit (s)"),
-                ("total_tokens", "Total token budget"),
+                ("build_turns", "Build request limit"),
                 ("turn_tokens", "Output tokens per turn"),
             )
         ],
@@ -927,6 +927,12 @@ def interactive_config_menu(
     new_config["image_model_ids"] = [
         it["id"] for it in model_items if it["selected"] and it.get("category") == "image"
     ]
+    if isinstance(new_config.get("harness"), dict):
+        from wavebench.harness.config import RETIRED_SETTINGS
+
+        new_config["harness"] = {
+            k: v for k, v in new_config["harness"].items() if k not in RETIRED_SETTINGS
+        }
 
     print()
     return selected, new_config

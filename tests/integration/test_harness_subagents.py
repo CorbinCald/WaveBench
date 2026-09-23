@@ -1,4 +1,4 @@
-"""Subagents share the lead's workspace and budget; only the lead submits."""
+"""Subagents share the lead's workspace and phase limits; only the lead submits."""
 
 from __future__ import annotations
 
@@ -12,12 +12,15 @@ import sys
 import pytest
 
 from wavebench.harness import session as module
+from wavebench.harness.commands import TOOL_SCHEMA
 from wavebench.harness.config import Limits
 from wavebench.harness.session import HarnessSession
 from wavebench.harness.subagents import FINAL_NOTICE
 from wavebench.harness.transport import Turn, TurnError
 from wavebench.harness.workspace import allocate_run
 from wavebench.tui.progress import ProgressTracker
+
+from ..harness_calls import native
 
 USAGE = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.001}
 
@@ -35,7 +38,8 @@ async def factory(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "capability", capable)
     monkeypatch.setattr(module, "open_preview", lambda url, log_path: True)
     run = allocate_run(tmp_path, "subagents", "test")
-    sessions = []
+    sessions = SESSIONS
+    sessions.clear()
     api_slots = asyncio.Semaphore(4)
     process_slots = asyncio.Semaphore(2)
 
@@ -63,6 +67,9 @@ async def factory(tmp_path, monkeypatch):
         await session.close()
 
 
+SESSIONS: list[HarnessSession] = []
+
+
 def role(messages) -> tuple[str, str]:
     """Identify the conversation: ("lead", "") or ("sub", agent name)."""
     if messages[0]["content"].startswith("You are a subagent"):
@@ -79,7 +86,7 @@ def calls(index: int, *specs) -> Turn:
     """An assistant turn with tool calls; each spec is (name, arguments) or arguments."""
     tool_calls = []
     for position, spec in enumerate(specs):
-        name, arguments = spec if isinstance(spec, tuple) else ("wb", spec)
+        name, arguments = spec if isinstance(spec, tuple) else native(spec)
         tool_calls.append(
             {
                 "id": f"call-{index}-{position}",
@@ -111,9 +118,19 @@ def text(content: str, *specs, usage=None) -> Turn:
 
 
 def results(messages, count: int) -> list[dict]:
-    """The latest tool results; budget and research notices may follow them."""
-    tool_messages = [message for message in messages if message["role"] == "tool"]
-    return [json.loads(message["content"]) for message in tool_messages[-count:]]
+    """The latest tool results of this conversation, with the text the model saw."""
+    kind, agent = role(messages)
+    session = SESSIONS[-1]
+    dispatcher = session.dispatcher
+    if kind == "sub":
+        dispatcher = next(run for run in session.subagents.runs if run.name == agent).dispatcher
+    tool_messages = [message for message in messages if message["role"] == "tool"][-count:]
+    found = []
+    for message in tool_messages:
+        result = dispatcher._calls[message["tool_call_id"]][1]
+        assert message["content"] == result["text"]
+        found.append(result)
+    return found
 
 
 def spawn(name: str, task: str, **extra) -> tuple[str, dict]:
@@ -180,7 +197,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
                 )
             return calls(index, DONE)
         assert "spawn_agent" not in tool_names(tools)
-        assert "done" not in tools[0]["function"]["parameters"]["properties"]["command"]["enum"]
+        assert "submit" not in tool_names(tools)
         assert "Build a small project" in messages[1]["content"]
         assert f"Write lib/{agent}.py" in messages[1]["content"]
         if index == 0:
@@ -209,7 +226,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
     assert phases.count("building") == 3 and phases.count("subagent") == 6
     assert sorted({turn.get("agent") for turn in session.turns if "agent" in turn}) == [1, 2, 3]
     assert session.usage()["api_turns"] == 9
-    assert session.budget_tokens == 9 * 15
+    assert session.usage()["total_tokens"] == 9 * 15
     assert session.usage()["cost"] == pytest.approx(0.009)
     assert session.dispatcher.tool_usage == {"calls": 9, "failures": 0}
     result = session.result()
@@ -278,7 +295,7 @@ async def test_cap_rejections_no_nesting_no_submission_and_read_only(factory, mo
                     write("lib/value.py", "VALUE = 4\n"),
                 )
             nested, done, written = results(messages, 3)
-            assert "cannot spawn" in nested["error"] and "cannot submit" in done["error"]
+            assert "cannot spawn" in nested["text"] and "cannot submit" in done["text"]
             assert written["ok"]
             return text("wrote lib/value.py")
         if index == 0:
@@ -292,7 +309,12 @@ async def test_cap_rejections_no_nesting_no_submission_and_read_only(factory, mo
     session = factory(limits=Limits(subagent_cap=2, review_seconds=1))
     await session.build()
     await session.execute()
-    assert session.status == "success", session.error
+    assert session.status == "success", (
+        session.error,
+        session.generation,
+        session.attempts,
+        session.failure,
+    )
     assert not session.workspace.ls("notes.md") if False else True
     assert "notes.md" not in [entry["name"] for entry in session.workspace.ls()]
     agents = session.result()["harness"]["subagents"]
@@ -358,7 +380,7 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
         assert kwargs["max_tokens"] == 64_000
         if index == 0:
             raise TurnError("truncated", dict(USAGE), failure_code="output_truncated")
-        assert "[WaveBench response recovery]" in json.dumps(messages)
+        assert "reached the output limit" in json.dumps(messages)
         if index == 1:
             return calls(index, write("main.py", "print(42)\n"))
         assert messages[-1]["content"] == FINAL_NOTICE
@@ -370,7 +392,7 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
     await session.execute()
     assert session.status == "success", session.error
     assert len(session.attempts) == 1
-    assert session.budget_tokens == 5 * USAGE["total_tokens"]
+    assert session.usage()["total_tokens"] == 5 * USAGE["total_tokens"]
     assert session.recoveries == [
         {
             "kind": "response_retry",
@@ -382,9 +404,8 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
     ]
 
 
-async def test_subagent_failure_and_budget_exhaustion_keep_the_lead_working(factory, monkeypatch):
+async def test_a_failed_subagent_keeps_the_lead_working(factory, monkeypatch):
     seen: dict[str, int] = {}
-    warned = []
 
     async def model(client, key, model_id, messages, tools, **kwargs):
         kind, agent = role(messages)
@@ -395,38 +416,35 @@ async def test_subagent_failure_and_budget_exhaustion_keep_the_lead_working(fact
                 return calls(
                     index,
                     spawn("crash", "Write lib/crash.py"),
-                    spawn("hungry", "Write lib/hungry.py"),
+                    spawn("worker", "Write lib/worker.py"),
                 )
             if index == 1:
-                crash, hungry = results(messages, 2)
+                crash, worker = results(messages, 2)
                 assert crash["status"] == "failed" and "provider failed" in crash["error"]
                 assert crash["usage"] == {"total_tokens": 7, "cost": None}
-                assert hungry["status"] == "budget_exhausted"
-                assert "finishing reserve" in hungry["error"]
-                assert hungry["files"]["written"] == ["lib/hungry.py"] and hungry["turns"] == 1
-                warned.append(any("budget warning" in m.get("content", "") for m in messages))
-                return calls(index, write("main.py", "from lib.hungry import H\nprint(H)\n"), LINT)
+                assert crash["text"].startswith("Agent 01-crash failed after 1 request ")
+                assert worker["status"] == "completed"
+                assert worker["files"]["written"] == ["lib/worker.py"]
+                return calls(index, write("main.py", "from lib.worker import W\nprint(W)\n"), LINT)
             return calls(index, DONE)
         if agent == "crash":
             raise TurnError("provider failed", {"total_tokens": 7})
         if index == 0:
+            # A very large request no longer exhausts anything: only turns and time bound work.
             big = {"prompt_tokens": 940_000, "completion_tokens": 50_000, "total_tokens": 990_000}
-            return text("", write("lib/hungry.py", "H = 9\n"), usage=big)
-        pytest.fail("a subagent must stop before consuming the lead's finishing reserve")
+            return text("", write("lib/worker.py", "W = 9\n"), usage=big)
+        return text("wrote lib/worker.py")
 
     monkeypatch.setattr(module, "call_conversation", model)
     session = factory(limits=Limits(review_seconds=1))
     await session.build()
     await session.execute()
     assert session.status == "success", session.error
-    assert warned == [True]
-    assert session.budget_tokens == 990_000 + 7 + 3 * 15
     agents = session.result()["harness"]["subagents"]
-    assert [run["status"] for run in agents["runs"]] == ["failed", "budget_exhausted"]
-    assert agents["failed"] == 2 and agents["completed"] == 0
+    assert [run["status"] for run in agents["runs"]] == ["failed", "completed"]
+    assert agents["failed"] == 1 and agents["completed"] == 1
     assert agents["runs"][0]["failure"]["category"] == "model_protocol"
-    assert agents["usage"]["known_total_tokens"] == 990_007
-    assert session.usage()["total_tokens"] == 990_052
+    assert agents["usage"]["known_total_tokens"] == 990_007 + 15
     assert session.usage()["cost"] is None  # The crash reported no cost.
 
 
@@ -506,8 +524,8 @@ async def test_subagent_research_shares_the_lead_quotas(factory, monkeypatch):
             )
         first, second, third = results(messages, 3)
         assert first["ok"] and second["ok"]
-        assert not third["ok"] and "budget exhausted" in third["error"]
-        assert third["research_budget"]["search_calls_left"] == 0
+        assert not third["ok"] and "call limit reached" in third["error"]
+        assert third["text"].endswith("(0 searches and 20 page reads left)")
         assert "web_search" not in tool_names(tools) and "web_fetch" in tool_names(tools)
         return text("found two results")
 
@@ -541,7 +559,7 @@ async def test_repair_phase_can_still_spawn_within_the_shared_cap(factory, monke
             if index == 1:
                 return calls(index, DONE)
             if index == 2:
-                assert "run 1 failed" in messages[-1]["content"]
+                assert "Run 1 failed" in messages[-1]["content"]
                 assert "spawn_agent" in tool_names(tools)
                 return calls(index, spawn("fixer", "Make main.py print 42"))
             if index == 3:
@@ -593,7 +611,7 @@ async def test_disabled_subagents_expose_no_tool_and_reject_calls(factory, monke
     await session.build()
     await session.execute()
     assert session.status == "success", session.error
-    assert seen == [["wb"], ["wb"]]
+    assert seen == [[tool["function"]["name"] for tool in TOOL_SCHEMA]] * 2
     assert session.result()["harness"]["subagents"] == {"enabled": False}
     assert session.result()["harness"]["timing"]["subagent_s"] == 0.0
 

@@ -49,6 +49,36 @@ async def test_lint_fix_then_real_multifile_run(runtime):
     assert attempt["outcome"] == "success" and attempt["diagnostics"].strip() == "42"
 
 
+async def test_lint_checks_module_javascript_and_inline_scripts_by_line(runtime):
+    """node --check alone exits 0 for a broken ES-module .js file; browser games need both."""
+    ws = runtime.workspace
+    ws.write("js/game.js", 'import * as T from "three";\nexport const speed = ;\n')
+    ws.write("js/ok.js", "export const ok = 1;\n")
+    ws.write("server.js", 'const fs = require("fs");\nmodule.exports = fs;\n')
+    ws.write(
+        "index.html",
+        "<!doctype html>\n<html><head>\n"
+        '<script type="importmap">{"imports": {"three": "./three.js",}}</script>\n'
+        "</head><body>\n"
+        '<script type="module">\nimport { ok } from "./js/ok.js";\nconst scene = new Scene(;\n</script>\n'
+        "<script>\nlet classic = 1;\n</script>\n"
+        '<script type="x-shader/x-vertex">void main() { gl_Position = vec4(0.0); }</script>\n'
+        '<script src="js/ok.js" type="module"></script>\n'
+        "</body></html>\n",
+    )
+    result = await runtime.lint()
+    lines = result["diagnostics"].splitlines()
+    assert result["exit_code"] == 1
+    assert lines[0].startswith("index.html:3: inline importmap JSON:")
+    assert lines[1] == "index.html:7: SyntaxError: Unexpected token ';'"
+    assert lines[2].strip() == "const scene = new Scene(;"
+    assert "js/game.js:2: SyntaxError: Unexpected token ';'" in lines
+    assert lines[-1] == "Checked 4 files and 3 inline script(s); 3 error(s)."
+    ws.write("js/game.js", 'import * as T from "three";\nexport const speed = 2;\n')
+    ws.write("index.html", "<!doctype html><script type=module>const a = 1;</script>\n")
+    assert (await runtime.lint())["exit_code"] == 0
+
+
 async def test_runtime_cannot_read_host_secrets_environment_or_siblings(
     runtime, tmp_path, monkeypatch
 ):
@@ -181,7 +211,7 @@ async def test_missing_setup_and_server_failure_are_explicit(runtime):
     runtime.workspace.write("requirements.txt", "-r /etc/passwd")
     with pytest.raises(SetupError, match="specifications"):
         await runtime.setup(descriptor)
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="runtime must be python, node"):
         launch_descriptor({"runtime": "gui", "entry": "main.py"}, runtime.workspace)
 
 

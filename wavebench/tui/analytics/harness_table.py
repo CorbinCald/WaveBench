@@ -98,15 +98,6 @@ def _summary(stats: HarnessStats, width: int, *, compact: bool = False) -> None:
         + _coverage(stats.repair_known, stats.runs),
         width,
     )
-    budget = stats.budget
-    marker = "~" if budget.estimated else ""
-    budget_mean = f"{marker}{budget.mean:.1%}" if budget.mean is not None else "—"
-    near = f"{marker}{stats.near_budget}/{budget.count}" if budget.count else "—"
-    _rows(
-        f"Budget used: avg {budget_mean} · at least 90% used {near}"
-        + _coverage(budget.count, stats.runs),
-        width,
-    )
     _rows(
         f"API retries {total('retries')} · compaction turns {total('compaction_turns')}"
         f" · compaction spend {total('compaction_cost', money=True)} (included above)",
@@ -159,7 +150,7 @@ def display_harness_analytics(
     _summary(total, width, compact=compact)
     if compact:
         _rows(
-            "wavebench --stats: per-model speed, costs, repairs, budgets and failure causes.",
+            "wavebench --stats: per-model speed, costs, repairs and failure causes.",
             width,
             dim=True,
         )

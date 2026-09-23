@@ -78,7 +78,7 @@ Harness agents can also delegate work to parallel **subagents** of the same
 model. Press **`s`** at the mode prompt to enable Subagents, choose how many run
 at once (2–5), and set the total agent cap per model; the same screen is under
 **Settings → Subagents (Harness)**. Subagents share the lead agent's workspace,
-tools, token budget, and phase time, and only their bounded reports return to
+tools, and phase time, and only their bounded reports return to
 the lead, which alone submits the project. The live display adds one line
 beneath each delegating model with a fixed slot per agent: its state (running,
 waiting for a slot, idle, done, or failed), its name, and the requests it has
@@ -115,7 +115,7 @@ Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**.
 | `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
 | `--subagents` / `--no-subagents` | Enable or disable parallel subagents for Harness agents for one run |
 | `--agent-cap N` | Total subagents each Harness model may spawn this run; implies `--subagents` unless `--no-subagents` is given |
-| `--stats` | Display all lifetime models plus Harness efficiency, reliability, budget, and failure breakdowns |
+| `--stats` | Display all lifetime models plus Harness efficiency, reliability, and failure breakdowns |
 | `--clear-history` | Reset all analytics history |
 
 Examples:
@@ -135,7 +135,7 @@ wavebench --stats
 ## How It Works
 
 1. **Prompt** — You enter a description of what you want built or answered.
-2. **Build** — Harness allocates a fresh project per model. Models use the same `wb` file and lint tools over an OpenRouter conversation, then submit a runtime and entry point with `done`. With Subagents enabled, a model can also call `spawn_agent` to run bounded parallel subagents of itself in the same workspace; their usage counts toward the model's budget.
+2. **Build** — Harness allocates a fresh project per model. Every model gets the same small tools (`read_file`, `write_file`, `edit_file`, `list_files`, `delete_file`, `lint`, and `submit`) with plain-text results, bounded by the same number of model requests and active time. With Subagents enabled, a model can also call `spawn_agent` to run bounded parallel subagents of itself in the same workspace; their usage counts toward the model's totals.
 3. **Schedule** — `incremental` validates submitted projects immediately. `after_all` waits until every model has submitted or reached a terminal generation outcome. `off` validates immediately without opening previews. Waiting projects release API slots.
 4. **Validate** — WaveBench admits one sandboxed project run. Exit code 0 passes console programs; an HTTP readiness check passes web/server startup. These checks measure runtime/startup, not subjective project quality.
 5. **Repair** — Only a failed first run gives the same model/conversation one bounded repair phase, then one final run. Lint never consumes a run. Cancellation never unlocks a retry.
@@ -144,7 +144,7 @@ wavebench --stats
 
 Text mode still saves Markdown, TTS saves audio and provides native playback, and image mode saves images and its gallery. See [Harness commands, runtimes, limits, and verification](docs/harness.md).
 
-Harness uses explicit prompt caching for Anthropic, GPT-5.6 and later, and Gemini 2.5 and later, with stable routing for other models. Above 240,000 context tokens (earlier for smaller model windows), GPT-5.6 Luna at High effort summarizes older history while preserving the first user message and latest complete assistant response with its tool results. See [cache and compaction behavior](docs/harness.md#prompt-caching-and-context-compaction), including budget accounting.
+Harness uses explicit prompt caching for Anthropic, GPT-5.6 and later, and Gemini 2.5 and later, with stable routing for other models. Above 240,000 context tokens (earlier for smaller model windows), GPT-5.6 Luna at High effort summarizes older history while preserving the first user message and latest complete assistant response with its tool results. See [cache and compaction behavior](docs/harness.md#prompt-caching-and-context-compaction).
 
 ## Configuration Menu
 
@@ -165,7 +165,7 @@ The menu has four tabs:
   - **Web search (Harness)** — Press Space for Brave setup, key replacement, or disabling.
   - **Subagents (Harness)** — Press Space to enable parallel subagents, choose 2–5 agents at once, and set the total agent cap per model. See [Subagents](docs/harness.md#subagents).
   - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
-  - **Harness limits** — Preview review timeout and separate build/repair time and token budgets. See [Harness limits](docs/harness.md#budgets-and-records).
+  - **Harness limits** — Preview review timeout, build/repair time limits, the build request limit, and output tokens per request. See [Harness limits](docs/harness.md#limits-and-records).
   - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
   - **Image settings** — Provider defaults or custom aspect ratio and image size.
 
@@ -224,10 +224,10 @@ wavebench/
 │   └── tts.py                  # TTSMode prompt framing + audio-byte pass-through
 ├── harness/                    # Bounded projects, tools, conversations, managed execution
 │   ├── workspace.py            # Root-bound file operations and exclusive allocation
-│   ├── commands.py             # Shared wb CLI/model dispatcher
+│   ├── commands.py             # Model tools and the dispatcher shared with the wb CLI
 │   ├── transport.py            # OpenRouter streamed conversations/tool arguments
 │   ├── session.py              # Budgets, scheduling, attempts, repair, results
-│   ├── subagents.py            # Parallel subagents sharing the lead's workspace and budget
+│   ├── subagents.py            # Parallel subagents sharing the lead's workspace and limits
 │   ├── runtime.py              # Sandbox, dependencies, supervision, preview proxy
 │   └── trusted.py              # Read-only sandbox checks and launch helper
 ├── core/                       # Benchmark orchestration and artifact handling
