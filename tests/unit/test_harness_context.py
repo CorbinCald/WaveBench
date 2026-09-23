@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from wavebench.harness.context import compaction_reason, plan_compaction
+from wavebench.harness.context import clean_summary, compaction_reason, plan_compaction
 from wavebench.tokens import prompt_tokens
 
 
@@ -108,3 +108,33 @@ def test_summary_request_deduplicates_readable_reasoning_and_omits_opaque_state(
     assert prompt_tokens(request, []) < 1000
     assert messages == before and plan.middle == before[2:4]
     assert plan.apply("Correction remembered")[-4:] == before[-4:]
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        ' to=wb  (json)\n{"command":"lint"}',
+        '<|channel|>commentary to=functions.wb <|constrain|>json<|message|>{"command":"ls"}<|call|>',
+        'commentary to=functions.web_search json\n{"query":"three.js"}',
+        '{"command":"read","path":"main.js"}<|call|>',
+    ],
+)
+def test_leaked_tool_call_paragraphs_are_removed_from_summary(leak):
+    summary = (
+        f"{leak}\n\n## Handoff\n- main.js renders the level.\n\n{leak}\n\nOutstanding: submit."
+    )
+    cleaned, removed = clean_summary(summary)
+    assert removed == 2
+    assert cleaned == "## Handoff\n- main.js renders the level.\n\nOutstanding: submit."
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "## Handoff\n\n\n- Files: `index.html`.\n  Lint passed.\n\nOutstanding: none.\n",
+        "Router maps to=home in app.js; redirect to=login is unchanged.",
+        "## Notes\n\n```text\nto=wb stays inside a fenced example\n\n<|call|>\n```\n\nDone.",
+    ],
+)
+def test_ordinary_summaries_are_kept_byte_for_byte(summary):
+    assert clean_summary(summary) == (summary, 0)

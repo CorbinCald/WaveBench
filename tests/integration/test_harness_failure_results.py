@@ -393,7 +393,9 @@ def tool_response(command, call_id):
     }
 
 
-@pytest.mark.parametrize("recovery", ["submission_reminder", "empty_provider_retry"])
+@pytest.mark.parametrize(
+    "recovery", ["submission_reminder", "empty_provider_retry", "reasoning_provider_retry"]
+)
 async def test_recovery_preserves_project_and_accounts_for_every_request(
     sessions, monkeypatch, recovery
 ):
@@ -401,30 +403,43 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
     write = tool_response(
         {"command": "write", "path": "main.py", "content": "print(42)\n"}, "write"
     )
-    interrupted = (
-        {
-            "choices": [{"delta": {"content": "Implemented; ready."}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105},
-        }
-        if recovery == "submission_reminder"
-        else {
-            "error": {"code": 503, "message": "private provider body"},
-            "usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100},
-        }
-    )
+    interrupted = {
+        "submission_reminder": [
+            {
+                "choices": [{"delta": {"content": "Implemented; ready."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105},
+            }
+        ],
+        "empty_provider_retry": [
+            {
+                "error": {"code": 503, "message": "private provider body"},
+                "usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100},
+            }
+        ],
+        # The Grok 4.7 failure: reasoning streamed, then the provider returned 502.
+        "reasoning_provider_retry": [
+            {"choices": [{"delta": {"reasoning": "Plan the level, then write it."}}]},
+            {
+                "error": {"code": 502, "message": "private provider body"},
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 12,
+                    "total_tokens": 112,
+                    "completion_tokens_details": {"reasoning_tokens": 12},
+                },
+            },
+        ],
+    }[recovery]
     responses = [
-        write,
+        [write],
         interrupted,
-        tool_response({"command": "done", "runtime": "python", "entry": "main.py"}, "done"),
+        [tool_response({"command": "done", "runtime": "python", "entry": "main.py"}, "done")],
     ]
 
     async def handler(request):
         requests.append(await request.json())
-        payload = responses[len(requests) - 1]
-        return web.Response(
-            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
-            content_type="text/event-stream",
-        )
+        events = "".join(f"data: {json.dumps(p)}\n\n" for p in responses[len(requests) - 1])
+        return web.Response(text=events + "data: [DONE]\n\n", content_type="text/event-stream")
 
     app = web.Application()
     app.router.add_post("/chat/completions", handler)
@@ -437,25 +452,31 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
     assert session.workspace.read("main.py") == "print(42)\n"
     assert session.descriptor["entry"] == "main.py"
     assert session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
-    expected_tokens = sum(response["usage"]["total_tokens"] for response in responses)
+    expected_tokens = sum(events[-1]["usage"]["total_tokens"] for events in responses)
     assert result["usage"]["total_tokens"] == expected_tokens
     assert result["harness"]["budget"]["used_tokens"] == expected_tokens
     assert len(result["harness"]["turns"]) == len(requests) == 3
     assert result["failure"] is None
     assert result["harness"]["recoveries"] == [{"kind": recovery, "phase": "building", "turn": 2}]
-    if recovery == "empty_provider_retry":
+    if recovery != "submission_reminder":
+        # The retry resends the unchanged conversation; partial reasoning is discarded.
         assert requests[1] == requests[2]
+        assert "Plan the level" not in json.dumps(requests[2])
         assert result["harness"]["turns"][1]["failure"]["code"] == "provider_stream_error"
 
 
 @pytest.mark.parametrize(
     "partial,code,build_turns,expected_requests",
     [
-        (False, None, 32, 2),
-        (False, 503, 32, 2),
-        (False, 503, 1, 1),
-        (True, 503, 32, 1),
-        (False, 400, 32, 1),
+        (None, None, 32, 2),
+        (None, 503, 32, 2),
+        (None, 503, 1, 1),
+        ("tool", 503, 32, 1),
+        (None, 400, 32, 1),
+        # One retry per phase, even when each attempt only streamed reasoning.
+        ("reasoning", 502, 32, 2),
+        ("reasoning", 502, 1, 1),
+        ("reasoning", 400, 32, 1),
     ],
 )
 async def test_provider_retry_is_bounded_and_never_replays_partial_output(
@@ -467,8 +488,11 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
         nonlocal requests
         requests += 1
         prefix = ""
-        if partial:
+        if partial == "tool":
             payload = tool_response({"command": "write", "path": "bad.py", "content": "bad"}, "bad")
+            prefix = f"data: {json.dumps(payload)}\n\n"
+        elif partial == "reasoning":
+            payload = {"choices": [{"delta": {"reasoning": "Plan first."}}]}
             prefix = f"data: {json.dumps(payload)}\n\n"
         failure = {"error": {"code": code, "message": "private"}}
         return web.Response(

@@ -4,6 +4,20 @@ from wavebench.tokens import PromptEstimate
 
 FINISH_WARNING_TOKENS = 512
 FINISH_TOOL_TOKENS = 4_096
+FINISH_TIME_FRACTION = 0.2
+
+
+def finish_seconds(request_seconds: list[float], max_seconds: float, lint_seconds: float) -> float:
+    """Active time to keep for a final fix/lint response and a standalone done response.
+
+    Response time is only observable, so the slowest of the last three requests
+    stands in for each finishing request. A fixed share of the phase also covers
+    models whose first response alone is long, before any duration is known.
+    """
+    floor = max_seconds * FINISH_TIME_FRACTION
+    if not request_seconds:
+        return floor
+    return max(floor, 2 * max(request_seconds[-3:]) + lint_seconds)
 
 
 def finish_tool_tokens(output_chars: int = 16_000) -> int:

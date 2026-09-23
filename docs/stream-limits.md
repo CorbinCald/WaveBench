@@ -74,9 +74,13 @@ report `invalid_tool_arguments`, or `output_truncated` when reported completion
 tokens reached the allowance even if the provider reported `tool_calls`.
 The transport never replays a failed stream. The build/repair
 controller allows one further request per phase when an explicit provider error
-arrives before any model output, with a transient or missing error code. Partial
-output, native failure reasons, malformed streams, disconnections and limits do
-not qualify for that provider retry. Separately, each phase and each subagent can
+has a transient or missing error code (408, 429, 5xx gateway/server codes,
+`server_error`, `rate_limit_exceeded`) and arrives either before any model output
+or after reasoning only. The unchanged conversation is sent again; discarded
+reasoning is never inserted into history. Visible text, tool calls or arguments,
+completion tokens beyond reported reasoning tokens, native failure reasons,
+malformed streams, disconnections and limits do not qualify for that provider
+retry. Separately, each phase and each subagent can
 issue one corrective request for truncated output, invalid JSON arguments, or an
 oversized batch. The notice asks for smaller complete operations; discarded calls
 are neither executed nor inserted into history. Other malformed streams,
@@ -88,8 +92,11 @@ policy, raw/content/reasoning/tool/assembly byte counters, pending line/event si
 event count, completion state, elapsed time, and short sanitized model/provider
 identifiers when available. Provider errors also retain numeric HTTP error codes,
 recognized symbolic codes and recognized native finish reasons (such as
-`MALFORMED_FUNCTION_CALL`), with a flag indicating eligibility for the single
-empty-response retry. Arbitrary error messages and metadata are discarded.
+`MALFORMED_FUNCTION_CALL`), with flags indicating eligibility for the single
+provider retry: `retryable_empty_response` before any output and
+`retryable_after_reasoning` after reasoning only. Results record the recovery as
+`empty_provider_retry` or `reasoning_provider_retry`. Arbitrary error messages and
+metadata are discarded.
 Recognized corrupted, invalid or missing Gemini thought-signature errors are
 classified as `thought_signature_invalid` for both HTTP rejections and SSE
 errors. Only the classification is retained from the provider's message or

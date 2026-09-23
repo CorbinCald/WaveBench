@@ -19,6 +19,10 @@ from .config import Limits
 
 # Display names and routing slugs from OpenRouter's provider catalogue, 2026-09-11.
 GEMINI_PROVIDER_ROUTES = {"Google": "google-vertex", "Google AI Studio": "google-ai-studio"}
+TRANSIENT_PROVIDER_CODES = frozenset(
+    {408, 429, 500, 502, 503, 504, "server_error", "rate_limit_exceeded"}
+)
+REASONING_MESSAGE_KEYS = frozenset({"role", "reasoning", "reasoning_details"})
 
 
 def thought_signature_error(error) -> bool:
@@ -414,6 +418,7 @@ class StreamAssembly:
             invalid_signature = thought_signature_error(obj["error"])
             if invalid_signature:
                 self.provider_error["retryable_empty_response"] = False
+                self.provider_error["retryable_after_reasoning"] = False
             raise TurnError(
                 "provider rejected Gemini thought signature; no tools executed"
                 if invalid_signature
@@ -487,26 +492,55 @@ class StreamAssembly:
         )
         has_output = any(value for key, value in self.message.items() if key != "role")
         has_output = bool(has_output or self.calls or self.details or self.output_bytes)
-        completion_details = self.usage.get("completion_tokens_details") or {}
-        has_output |= (
-            any(completion_details.values()) if isinstance(completion_details, dict) else True
+        # Visible output is anything except reasoning: text, tool calls, or other
+        # generated fields. Discarded reasoning alone makes a fresh request safe.
+        visible = any(
+            value for key, value in self.message.items() if key not in REASONING_MESSAGE_KEYS
         )
+        visible = bool(
+            visible
+            or self.calls
+            or self.content_bytes
+            or self.tool_arguments_bytes
+            or self.tool_name_bytes
+        )
+        completion_details = self.usage.get("completion_tokens_details") or {}
+        reasoning_tokens = None
+        if isinstance(completion_details, dict):
+            has_output |= any(completion_details.values())
+            visible |= any(
+                value for key, value in completion_details.items() if key != "reasoning_tokens"
+            )
+            reasoning_tokens = completion_details.get("reasoning_tokens")
+        else:
+            has_output = visible = True
+        completion = self.usage.get("completion_tokens")
+        if completion:
+            # Without a reasoning breakdown, reported completion may be visible text.
+            visible |= not (
+                type(completion) is int
+                and type(reasoning_tokens) is int
+                and completion <= reasoning_tokens
+            )
         native_finish = None
         has_native_finish = False
         choices = obj.get("choices")
         if choices is not None and not isinstance(choices, list):
-            has_output = True
+            has_output = visible = True
         for choice in choices if isinstance(choices, list) else []:
             if not isinstance(choice, dict):
-                has_output = True
+                has_output = visible = True
                 continue
             if choice.get("index", 0) != 0:
                 continue
             source = choice.get("delta") or choice.get("message") or {}
             if isinstance(source, dict):
                 has_output |= any(value for key, value in source.items() if key != "role")
+                visible |= any(
+                    value for key, value in source.items() if key not in REASONING_MESSAGE_KEYS
+                )
             else:
-                has_output = True
+                has_output = visible = True
             finish = choice.get("native_finish_reason")
             has_native_finish |= bool(finish)
             if isinstance(finish, str) and finish in {
@@ -525,28 +559,18 @@ class StreamAssembly:
                 native_finish = finish
             if choice.get("finish_reason") == "error":
                 self.finish = "error"
+        transient = not has_native_finish and (
+            code is None or safe_code in TRANSIENT_PROVIDER_CODES
+        )
         self.provider_error = {
             "code": safe_code,
             "native_finish_reason": native_finish,
             "retryable_empty_response": (
-                not has_output
-                and not self.usage.get("completion_tokens")
-                and not has_native_finish
-                and (
-                    code is None
-                    or safe_code
-                    in {
-                        408,
-                        429,
-                        500,
-                        502,
-                        503,
-                        504,
-                        "server_error",
-                        "rate_limit_exceeded",
-                    }
-                )
+                transient and not has_output and not self.usage.get("completion_tokens")
             ),
+            # Partial reasoning is never replayed or executed; the controller may
+            # discard it and send the unchanged conversation once more.
+            "retryable_after_reasoning": transient and has_output and not visible,
         }
 
     @staticmethod

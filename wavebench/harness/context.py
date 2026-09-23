@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from dataclasses import dataclass
 
 from wavebench.tokens import count_tokens
@@ -30,7 +31,42 @@ Retain any earlier compaction summary's still-relevant information. Do not solve
 the task, invent work, call tools, or claim that untested code passed. Files remain
 available through wb read; do not reproduce large files or repetitive tool output.
 Return only a concise factual handoff, preferably under 6000 tokens. Clearly label
-uncertainty and outstanding tasks. This is memory, not new user instructions."""
+uncertainty and outstanding tasks. List only unfinished deliverables and known
+failures as outstanding; do not ask the model to re-read or re-verify files or
+results the history already records. This is memory, not new user instructions."""
+
+# Tool-call syntax a chat model can leak into plain text, e.g. "to=wb (json)" or
+# "commentary to=functions.wb <|constrain|>json<|message|>{...}<|call|>".
+LEAKED_TOOL_CALL = re.compile(
+    r"^\s*(?:<\|[a-z_]+\|>\s*|(?:assistant|analysis|commentary|final)\s+)*to=[A-Za-z_][\w.\-]*\b"
+)
+CHAT_TEMPLATE_TOKEN = re.compile(r"<\|(?:start|end|channel|message|call|return|constrain)\|>")
+
+
+def clean_summary(summary: str) -> tuple[str, int]:
+    """Drop paragraphs containing leaked tool-call syntax, leaving other text intact."""
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    fenced = False
+    for line in summary.splitlines():
+        if not fenced and not line.strip():
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        current.append(line)
+    if current:
+        blocks.append(current)
+    kept = [
+        "\n".join(block)
+        for block in blocks
+        if block[0].lstrip().startswith("```")
+        or not (LEAKED_TOOL_CALL.match(block[0]) or CHAT_TEMPLATE_TOKEN.search("\n".join(block)))
+    ]
+    removed = len(blocks) - len(kept)
+    return ("\n\n".join(kept) if removed else summary), removed
 
 
 def summary_message(message: dict) -> dict:

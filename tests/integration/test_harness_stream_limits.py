@@ -393,26 +393,52 @@ async def test_utf8_split_and_multiline_sse_event(monkeypatch):
     assert turn.adjustments["stream"]["bytes"]["reasoning"] == len("想".encode())
 
 
+REASONED = {"completion_tokens": 12, "completion_tokens_details": {"reasoning_tokens": 12}}
+
+
 @pytest.mark.parametrize(
-    "code,native,delta,usage,expected_code,retryable",
+    "code,native,delta,usage,expected_code,retryable,after_reasoning",
     [
-        (503, None, {}, {}, 503, True),
-        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 0}}, 503, True),
-        ("server_error", None, {}, {}, "server_error", True),
-        (None, None, {}, {}, None, True),
-        (400, None, {}, {}, 400, False),
-        (503, "MALFORMED_FUNCTION_CALL", {}, {}, 503, False),
-        (503, "private prompt", {}, {}, 503, False),
-        ("private prompt sk-secret-local", None, {}, {}, None, False),
-        ({"private": "sk-secret-local"}, None, {}, {}, None, False),
-        (503, None, {"content": "partial"}, {}, 503, False),
-        (503, None, {"tool_calls": [{"index": 0, "function": {"arguments": "{"}}]}, {}, 503, False),
-        (503, None, {}, {"completion_tokens": 12}, 503, False),
-        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 12}}, 503, False),
+        (503, None, {}, {}, 503, True, False),
+        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 0}}, 503, True, False),
+        ("server_error", None, {}, {}, "server_error", True, False),
+        (None, None, {}, {}, None, True, False),
+        (400, None, {}, {}, 400, False, False),
+        (503, "MALFORMED_FUNCTION_CALL", {}, {}, 503, False, False),
+        (503, "private prompt", {}, {}, 503, False, False),
+        ("private prompt sk-secret-local", None, {}, {}, None, False, False),
+        ({"private": "sk-secret-local"}, None, {}, {}, None, False, False),
+        (503, None, {"content": "partial"}, {}, 503, False, False),
+        (
+            503,
+            None,
+            {"tool_calls": [{"index": 0, "function": {"arguments": "{"}}]},
+            {},
+            503,
+            False,
+            False,
+        ),
+        (503, None, {}, {"completion_tokens": 12}, 503, False, False),
+        # Reasoning alone is discarded, so a transient failure may be requested again.
+        (503, None, {}, {"completion_tokens_details": {"reasoning_tokens": 12}}, 503, False, True),
+        (502, None, {"reasoning": "planning"}, {}, 502, False, True),
+        (503, None, {}, REASONED, 503, False, True),
+        (
+            503,
+            None,
+            {},
+            {"completion_tokens": 20, "completion_tokens_details": {"reasoning_tokens": 12}},
+            503,
+            False,
+            False,
+        ),
+        (503, None, {"reasoning": "planning", "content": "partial"}, {}, 503, False, False),
+        (400, None, {"reasoning": "planning"}, {}, 400, False, False),
+        (503, "MALFORMED_FUNCTION_CALL", {"reasoning": "planning"}, {}, 503, False, False),
     ],
 )
 async def test_provider_error_codes_are_safe_and_partial_errors_cannot_recover(
-    monkeypatch, code, native, delta, usage, expected_code, retryable
+    monkeypatch, code, native, delta, usage, expected_code, retryable, after_reasoning
 ):
     async def handler(request):
         payload = {
@@ -444,6 +470,7 @@ async def test_provider_error_codes_are_safe_and_partial_errors_cannot_recover(
         "code": expected_code,
         "native_finish_reason": native if native == "MALFORMED_FUNCTION_CALL" else None,
         "retryable_empty_response": retryable,
+        "retryable_after_reasoning": after_reasoning,
     }
     assert diagnostics["parsing"]["finish_reason"] == "error"
     assert diagnostics["provider"] == "Google AI Studio"

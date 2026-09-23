@@ -4,8 +4,9 @@ WaveBench sends one remaining-budget warning when another ordinary request could
 use the capacity needed to finish. This projection includes that request's output
 and tool results in both subsequent inputs. The model is told to batch essential file
 edits with `wb lint`, inspect the tool results, then call `wb done` alone with
-the runtime and entry file. It also warns with two model requests left in a phase.
-The controller never submits on the model's behalf.
+the runtime and entry file. It also warns with two model requests left in a phase,
+or when the phase's remaining active time falls to the time reserve described
+below. The controller never submits on the model's behalf.
 
 The policy is the same for every benchmark model. Let `I` be the calibrated input
 bound and `O` the smaller of the model's output limit and the configured turn limit
@@ -28,6 +29,41 @@ the former hidden 4,096-token cap could cut off thinking or a file write while
 hundreds of thousands of task tokens remained. The model's reasoning setting stays
 unchanged. See OpenRouter's [reasoning and output limits](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 Tool evidence retains the existing full local artifacts and diagnostic limits.
+
+## Time reserve
+
+Response time is only observable, so the time reserve uses the slowest of the
+model's last three requests `R`:
+
+```text
+max(20% of the phase's active time, 2 × R + lint allowance)
+```
+
+Before any request has finished, only the 20 percent share applies. The warning
+states the remaining active seconds and the slowest recent response. If
+`2 × R + lint` no longer fits, it says the finishing sequence no longer fits.
+A response still streaming at the phase deadline is discarded, so a model with
+several-minute responses is warned while one more complete round trip remains.
+The warning's record lists its `triggers` (`tokens`, `turns`, `time`), with
+`seconds_left`, `time_reserve_seconds` and `time_affordable` when timed.
+
+## Reminders
+
+The warning is sent once, but compaction can summarize it away, and a model can
+ignore it. Short reminders therefore restate the phase's remaining requests,
+active seconds and total tokens:
+
+- after every successful compaction (`[WaveBench budget status]`, or
+  `[WaveBench budget reminder]` once finishing has begun);
+- once per phase when time runs low after an earlier token or request warning;
+- before a phase's final model request, telling the model to call `done` alone
+  now if the project can run.
+
+No reminder is added when a warning is sent for the same request, or when the
+reminder itself would not fit the remaining tokens. Each is recorded as a
+`budget_notice` with its reason and delivery outcome.
+
+## Compaction
 
 Compaction gets the first opportunity at the shared budget boundary. A compaction
 request must leave the same finishing reserve for its projected replacement

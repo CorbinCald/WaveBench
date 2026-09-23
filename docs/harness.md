@@ -492,6 +492,16 @@ reasoning and deduplicates readable reasoning. Archives and the benchmark model'
 preserved prefix and tail remain exact. Affordable, useful compaction is still
 allowed after the finishing warning.
 
+Paragraphs in which the compactor leaked tool-call syntax (such as
+`to=wb (json)` or chat-template tokens like `<|call|>`) are removed before the
+summary reaches the benchmark model. Fenced code is left alone. The count is
+recorded as `leaked_tool_call_blocks_removed`, and `compaction-NNN.json` keeps
+the original text. Because a summary can absorb earlier controller notices, a
+`[WaveBench budget status]` message follows every successful compaction with the
+phase's remaining model requests, active seconds and total tokens. After the
+finishing warning, it is a `[WaveBench budget reminder]` that repeats the
+instruction to lint and call `done`.
+
 The TUI shows `compacting` during the request. Before replacement, the original
 conversation is archived as `conversation-before-compaction-NNN.json` in model
 metadata. `compaction-NNN.json` records the exact request, complete response,
@@ -537,12 +547,19 @@ Time limits count active model requests and tools; scheduler waiting and preview
 review are separate. The total token budget is per model across every build and
 repair request, including repeated conversation input and generated output.
 
-Before that capacity becomes scarce, the model receives one actionable warning
-to finish essential edits, lint, inspect results, and call `done`. The shared
-[finishing reserve](finishing-reserve.md) accounts for both requests' inputs and
-outputs plus the tool-result round trip. Warning text is counted, finishing keeps
+The system prompt states each phase's model-request and active-time limits and
+the shared token budget. A response still streaming at the time limit is
+discarded.
+
+Before tokens, requests or active time become scarce, the model receives one
+actionable warning to finish essential edits, lint, inspect results, and call
+`done`. The shared [finishing reserve](finishing-reserve.md) accounts for both
+requests' inputs and outputs plus the tool-result round trip; the time reserve
+uses observed response durations. Warning text is counted, finishing keeps
 the configured/model output allowance (including reasoning), and inaccurate estimates or insufficient reserve have
-explicit records. The model must still submit its work itself.
+explicit records. Short reminders restate the remaining limits after compaction,
+once per phase when time runs low after an earlier warning, and before a phase's
+final model request. The model must still submit its work itself.
 
 | Limit | Default |
 |---|---:|
@@ -692,8 +709,9 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 `≥`; `~…+` means an estimated subtotal with some usage still unknown. A completely
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
-Each build or repair phase can recover once from a provider error received before
-any model output; partial streams are never replayed. If a model sends a text
+Each build or repair phase can recover once from a transient provider error
+received before any model output or after reasoning only; partial streams are
+never replayed, and discarded reasoning never enters history. If a model sends a text
 reply without `wb done`, the controller gives it one submission reminder per
 phase. Only an actual, valid `done` tool call submits the project. These recovery
 requests consume the remaining turn, time and token budgets and are recorded in
@@ -707,7 +725,8 @@ history. The streaming limit counts distinct calls against `harness.batch_calls`
 (64 by default), as advertised in the tools. Sparse numeric call indices are
 valid identifiers. Persistent failures stop with a specific reason, and all
 recovery requests consume the existing limits. See the
-[September 21 failure investigation](benchmark-failures-verification.md).
+[September 21](benchmark-failures-verification.md) and
+[September 22](benchmark-failures-sep-22-verification.md) failure investigations.
 
 Gemini conversations bind to the provider reported by their first successful
 turn: `Google` maps to `google-vertex`, and `Google AI Studio` maps to

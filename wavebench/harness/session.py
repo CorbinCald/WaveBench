@@ -24,6 +24,7 @@ from .budget import (
     FINISH_TOOL_TOKENS,
     FINISH_WARNING_TOKENS,
     finish_reserve,
+    finish_seconds,
     finish_tool_tokens,
     finishing_trigger,
 )
@@ -33,6 +34,7 @@ from .context import (
     COMPACTION_EFFORT,
     COMPACTION_MODEL,
     COMPACTION_THRESHOLD,
+    clean_summary,
     compaction_reason,
     plan_compaction,
 )
@@ -68,8 +70,22 @@ def research_notice() -> str:
     )
 
 
+def limits_notice(limits: Limits) -> str:
+    return (
+        f"Limits: the build phase allows at most {limits.build_turns} model requests and "
+        f"{limits.build_seconds} active seconds (model responses, tools, and context summaries); "
+        f"a repair phase allows {limits.repair_turns} requests and {limits.repair_seconds} "
+        f"seconds. All phases share {limits.total_tokens:,} total tokens, including repeated "
+        "conversation input. A response still streaming at the time limit is discarded, so "
+        "keep responses focused and submit before the limits are reached. "
+    )
+
+
 def system_prompt(
-    auto_install: str, web_search: bool = False, subagents: dict | None = None
+    auto_install: str,
+    web_search: bool = False,
+    subagents: dict | None = None,
+    limits: Limits | None = None,
 ) -> str:
     return (
         "Build the requested project in your workspace. Use wb file tools and lint as needed; "
@@ -78,10 +94,20 @@ def system_prompt(
         "A text reply does not submit the project. WaveBench controls execution "
         "and allows one repair after a failed first run. Available: Python 3, Node, static HTML, "
         "and HTTP servers listening on PORT; no GUI or development reloaders. "
+        + (limits_notice(limits) if limits else "")
         + dependency_notice(auto_install)
         + (research_notice() if web_search else "")
         + (lead_instructions(subagents["parallel"], subagents["cap"]) if subagents else "")
     )
+
+
+def provider_retry_kind(provider_error: dict) -> str | None:
+    """The single per-phase provider retry, when no visible output would be lost."""
+    if provider_error.get("retryable_empty_response"):
+        return "empty_provider_retry"
+    if provider_error.get("retryable_after_reasoning"):
+        return "reasoning_provider_retry"
+    return None
 
 
 class BudgetError(RuntimeError):
@@ -152,6 +178,7 @@ class HarnessSession:
                     {"parallel": limits.subagent_parallel, "cap": limits.subagent_cap}
                     if subagents
                     else None,
+                    limits,
                 ),
             },
             {"role": "user", "content": prompt},
@@ -176,6 +203,8 @@ class HarnessSession:
         self.finishing = False
         self.budget_decisions: list[dict] = []
         self._finishing_warning: dict | None = None
+        self._time_notice_phase: str | None = None
+        self.request_seconds: list[float] = []
         self.prompt_estimate = PromptEstimate()
         self.cache_policy = CachePolicy(model_id)
         self.gemini_provider: str | None = None
@@ -512,18 +541,46 @@ class HarnessSession:
             )
             self.budget_decision("research", **budget)
 
+    def time_short(self, seconds_left: float, max_seconds: float) -> bool:
+        return seconds_left <= finish_seconds(
+            self.request_seconds, max_seconds, self.limits.lint_seconds
+        )
+
     def prepare_finishing(
-        self, local_input: int, input_bound: int, output_tokens: int, turns_left: int
+        self,
+        local_input: int,
+        input_bound: int,
+        output_tokens: int,
+        turns_left: int,
+        *,
+        seconds_left: float | None = None,
+        max_seconds: float | None = None,
     ) -> tuple[int, int, int]:
         """Warn once, reserving normal output capacity for validation and submission."""
         remaining = self.limits.total_tokens - self.budget_tokens
         reserve = finish_reserve(input_bound, output_tokens, self.limits.output_chars)
-        first_warning = not self.finishing and (
-            remaining
-            <= finishing_trigger(input_bound, output_tokens, reserve, self.limits.output_chars)
-            or turns_left <= 2
-        )
+        timed = seconds_left is not None and max_seconds is not None
+        triggers = [
+            name
+            for name, reached in (
+                (
+                    "tokens",
+                    remaining
+                    <= finishing_trigger(
+                        input_bound, output_tokens, reserve, self.limits.output_chars
+                    ),
+                ),
+                ("turns", turns_left <= 2),
+                ("time", timed and self.time_short(seconds_left, max_seconds)),
+            )
+            if reached
+        ]
+        first_warning = not self.finishing and bool(triggers)
         if first_warning:
+            slowest = max(self.request_seconds[-3:], default=0.0)
+            time_fits = (
+                not timed or not slowest or seconds_left >= 2 * slowest + self.limits.lint_seconds
+            )
             warning = {
                 "role": "user",
                 "content": (
@@ -532,7 +589,18 @@ class HarnessSession:
                     f"and all output. The estimated finishing reserve is {reserve:,} tokens "
                     f"for final fixes and validation, its tool results, then submission. "
                     f"At most {turns_left} model requests remain in this phase. "
-                    "Finish now: batch any essential file edits with wb lint, inspect the results, "
+                    + (
+                        f"About {max(0.0, seconds_left):,.0f} active seconds remain in this phase"
+                        + (
+                            f"; recent responses took up to {slowest:,.0f} seconds"
+                            if slowest
+                            else ""
+                        )
+                        + ", and a response still streaming at the limit is discarded. "
+                        if timed
+                        else ""
+                    )
+                    + "Finish now: batch any essential file edits with wb lint, inspect the results, "
                     "then call wb done alone with runtime and entry. Avoid optional work and "
                     "large reads. "
                     + ("Do not spawn agents. " if self.subagents else "")
@@ -541,7 +609,7 @@ class HarnessSession:
                     + (
                         "The full finishing sequence no longer fits the estimate; use the remaining "
                         "capacity carefully. "
-                        if remaining < reserve or turns_left < 2
+                        if remaining < reserve or turns_left < 2 or not time_fits
                         else ""
                     )
                     + "The budget stays fixed. Only your done call submits the project."
@@ -559,12 +627,29 @@ class HarnessSession:
                 return local_input, input_bound, output_tokens
             self.messages.append(warning)
             self.finishing = True
+            if "time" in triggers:
+                self._time_notice_phase = self.phase_name
             self._finishing_warning = self.budget_decision(
                 "warning",
                 input_tokens_bound=warned_bound,
                 warning_input_tokens=warned_bound - input_bound,
                 reserve_tokens=reserve,
                 reserve_affordable=remaining >= reserve and turns_left >= 2,
+                triggers=triggers,
+                **(
+                    {
+                        "seconds_left": round(seconds_left, 2),
+                        "time_reserve_seconds": round(
+                            finish_seconds(
+                                self.request_seconds, max_seconds, self.limits.lint_seconds
+                            ),
+                            2,
+                        ),
+                        "time_affordable": time_fits,
+                    }
+                    if timed
+                    else {}
+                ),
                 status="pending",
             )
             if warned_bound - input_bound > FINISH_WARNING_TOKENS:
@@ -601,6 +686,65 @@ class HarnessSession:
                 max_output_tokens=output_tokens,
             )
         return local_input, input_bound, output_tokens
+
+    def budget_notice(
+        self, reason: str, turns_left: int, seconds_left: float, *, compacted: bool = False
+    ) -> bool:
+        """Restate remaining limits after compaction, when time runs low, or before the final request.
+
+        Compaction summarizes earlier controller notices away, and the finishing
+        warning is only sent once. This keeps the current limits in view.
+        """
+        remaining = self.limits.total_tokens - self.budget_tokens
+        final = turns_left <= 1
+        if self.finishing and final:
+            action = (
+                "Call wb done alone with runtime and entry now if the project can run; "
+                "a text reply does not submit. "
+            )
+        elif self.finishing:
+            action = (
+                "The finishing warning still applies: batch any essential file edits with "
+                "wb lint, inspect the results, then call wb done alone with runtime and entry. "
+                "Avoid optional work and large reads. "
+            )
+        else:
+            action = "Only wb done alone with runtime and entry submits the project. "
+        notice = {
+            "role": "user",
+            "content": (
+                ("[WaveBench budget reminder] " if self.finishing else "[WaveBench budget status] ")
+                + (
+                    "Earlier conversation was summarized. "
+                    if compacted or reason == "compaction"
+                    else ""
+                )
+                + ("Active time is running low. " if reason == "time" else "")
+                + (
+                    "This is the final model request in this phase; no response follows its "
+                    "tool results. "
+                    if final
+                    else f"{turns_left} model requests remain in this phase. "
+                )
+                + f"About {max(0.0, seconds_left):,.0f} active seconds remain in this phase, "
+                f"and {max(0, remaining):,} total tokens remain. A response still streaming "
+                "at the time limit is discarded. " + action + "The budget stays fixed."
+            ),
+        }
+        bound = self.prompt_estimate.bound(prompt_tokens([*self.messages, notice], self.tools))
+        delivered = bound < remaining
+        if delivered:
+            self.messages.append(notice)
+        self.budget_decision(
+            "budget_notice",
+            reason=reason,
+            compacted=compacted or reason == "compaction",
+            turns_left=turns_left,
+            seconds_left=round(seconds_left, 2),
+            finishing=self.finishing,
+            outcome="delivered" if delivered else "insufficient_budget",
+        )
+        return delivered
 
     async def compact(self, reason: str, before: int, timeout: float) -> bool:
         """Replace history only when a complete summary leaves useful request capacity."""
@@ -742,7 +886,13 @@ class HarnessSession:
                 raise ValueError("compactor did not return a complete text summary")
             if turn.model != COMPACTION_MODEL:
                 raise ValueError(f"compactor returned unexpected model {turn.model!r}")
-            replacement = plan.apply(turn.message.get("content"), summary_tokens)
+            summary = turn.message.get("content")
+            if isinstance(summary, str):
+                # The saved compaction response keeps the original text for audit.
+                summary, leaked = clean_summary(summary)
+                if leaked:
+                    record["leaked_tool_call_blocks_removed"] = leaked
+            replacement = plan.apply(summary, summary_tokens)
             after = prompt_tokens(replacement, self.tools)
             record["after_tokens"] = replacement_estimate.estimate(after)
             charged = reported_total(turn.usage)
@@ -887,11 +1037,12 @@ class HarnessSession:
                     ),
                     output_chars=self.limits.output_chars,
                 )
+                compacted = False
                 if reason:
                     async with self.api_slots:
                         started = time.monotonic()
                         try:
-                            await self.compact(
+                            compacted = await self.compact(
                                 reason,
                                 self.prompt_estimate.estimate(local_input),
                                 max_seconds - active,
@@ -903,8 +1054,15 @@ class HarnessSession:
                     self.phase(phase)
                     local_input = prompt_tokens(self.messages, self.tools)
                     input_bound = self.prompt_estimate.bound(local_input)
+                turns_left, seconds_left = max_turns - turn_index, max_seconds - active
+                warning = self._finishing_warning
                 local_input, input_bound, output_tokens = self.prepare_finishing(
-                    local_input, input_bound, output_tokens, max_turns - turn_index
+                    local_input,
+                    input_bound,
+                    output_tokens,
+                    turns_left,
+                    seconds_left=seconds_left,
+                    max_seconds=max_seconds,
                 )
                 if (
                     self.finishing
@@ -914,6 +1072,25 @@ class HarnessSession:
                     self.prepare_research(max_turns, turn_index, max_seconds, active)
                     local_input = prompt_tokens(self.messages, self.tools)
                     input_bound = self.prompt_estimate.bound(local_input)
+                # A warning sent for this request already states every limit.
+                notice = None
+                if self._finishing_warning is warning:
+                    if self.finishing and turns_left == 1:
+                        notice = "final_request"
+                    elif compacted:
+                        notice = "compaction"
+                    elif (
+                        self.finishing
+                        and self._time_notice_phase != phase
+                        and self.time_short(seconds_left, max_seconds)
+                    ):
+                        notice = "time"
+                if notice:
+                    if notice != "compaction" or self.time_short(seconds_left, max_seconds):
+                        self._time_notice_phase = phase
+                    if self.budget_notice(notice, turns_left, seconds_left, compacted=compacted):
+                        local_input = prompt_tokens(self.messages, self.tools)
+                        input_bound = self.prompt_estimate.bound(local_input)
                 self._next_input_tokens = input_bound
                 remaining_tokens = self.limits.total_tokens - self.budget_tokens - input_bound
                 if remaining_tokens <= 0:
@@ -1019,22 +1196,16 @@ class HarnessSession:
                             if charged is not None
                             else input_bound + self._turn_output_tokens
                         )
-                    if (
-                        isinstance(exc, TurnError)
+                    retry_kind = (
+                        provider_retry_kind(exc.diagnostics.get("provider_error") or {})
+                        if isinstance(exc, TurnError)
                         and exc.failure_code == "provider_stream_error"
-                        and (exc.diagnostics.get("provider_error") or {}).get(
-                            "retryable_empty_response"
-                        )
-                        and not provider_retried
-                        and turn_index + 1 < max_turns
-                    ):
+                        else None
+                    )
+                    if retry_kind and not provider_retried and turn_index + 1 < max_turns:
                         provider_retried = True
                         self.recoveries.append(
-                            {
-                                "kind": "empty_provider_retry",
-                                "phase": phase,
-                                "turn": len(self.turns),
-                            }
+                            {"kind": retry_kind, "phase": phase, "turn": len(self.turns)}
                         )
                         self.save()
                         continue
@@ -1062,6 +1233,7 @@ class HarnessSession:
                         elapsed = time.monotonic() - started
                         active += elapsed
                         self.api_seconds += elapsed
+                        self.request_seconds.append(elapsed)
                         if self.tracker and self.tracker.is_running:
                             self.tracker.update_harness(
                                 self.name,

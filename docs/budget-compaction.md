@@ -63,6 +63,23 @@ still applies. Required compactions rejected before a paid request are recorded
 in harness events. Full transcripts and summary requests/responses stay in the
 run's diagnostic directory.
 
+## Handoff integrity
+
+The summary is the benchmark model's only memory of earlier work, so two checks
+protect it. Paragraphs containing leaked tool-call syntax, such as `to=wb (json)`
+or chat-template tokens like `<|call|>`, are removed before replacement. Fenced
+code is exempt, and clean summaries are kept byte for byte. The record counts
+removals as `leaked_tool_call_blocks_removed`; the saved response keeps the
+original text. The compactor is also told to list only unfinished deliverables
+and known failures as outstanding, not re-reads of work the history already
+records.
+
+Earlier controller notices, including the one-time finishing warning, can be
+summarized away. After every successful compaction the controller therefore
+adds a short notice with the phase's remaining model requests, active seconds and
+total tokens. Once finishing has begun, the notice repeats the instruction to
+lint and call `done`. See [finishing reserve](finishing-reserve.md#reminders).
+
 ## Verification
 
 `tests/unit/test_budget_compaction.py` uses the real tokenizer and conversation
