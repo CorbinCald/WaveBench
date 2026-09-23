@@ -1,9 +1,9 @@
-"""Bounded, parallel subagents that share a lead agent's workspace and budget.
+"""Bounded, parallel subagents that share a lead agent's workspace and phase limits.
 
 The lead model delegates with ``spawn_agent``. Each subagent is a fresh
 conversation of the same model with the same file tools, no submission, and no
-nesting. Its requests are charged to the lead's total token budget and phase
-time. Only a bounded report and the files it changed return to the lead.
+nesting. Its requests count toward the lead's usage and run within the lead's
+phase time. Only a bounded report and the files it changed return to the lead.
 """
 
 from __future__ import annotations
@@ -12,22 +12,19 @@ import asyncio
 import json
 import time
 
-from wavebench import api
 from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
-from .accounting import reported_total
-from .budget import finish_reserve
-from .commands import Dispatcher
+from .commands import FILE_CHANGES, Dispatcher
 from .config import Limits
 from .failure import failure_record
-from .transport import GEMINI_PROVIDER_ROUTES, TurnError, response_recovery_notice
+from .transport import GEMINI_PROVIDER_ROUTES, TurnError, recovery
 from .workspace import safe_name
 
 MAX_NAME_CHARS = 40
 MAX_TASK_CHARS = 24_000
-MIN_REQUEST_OUTPUT = 1_024
 REMINDER_WRITES = 2
+MAX_RECOVERIES = 2
 FINAL_NOTICE = (
     "[WaveBench] This is your final model request. Reply now with your report as plain "
     "text and no tool calls; further tool calls will not run."
@@ -46,16 +43,14 @@ def subagents_status(config: dict) -> str:
 
 def lead_instructions(parallel: int, cap: int) -> str:
     return (
-        " Subagents are enabled: spawn_agent runs a subagent of your own model that shares this "
-        f"workspace, tools, and budget; up to {parallel} run at once and {cap} in total. Unless "
-        "the whole project fits in one or two small files, delegate: first decide the file "
-        "layout and the shared contracts (entry file, data formats, function and CSS class "
-        "names, module interfaces) and write that scaffolding yourself; then spawn one agent per "
-        "independent file or module, all in the same turn so they run in parallel; then read "
-        "their reports, integrate, lint, and submit. Each agent starts with an empty context, so "
-        "its task must be a complete brief: objective, the exact files it owns, interfaces to "
-        "follow, constraints, and the report you need. Give parallel agents disjoint files, "
-        "verify their work before integrating, and submit only with your own wb done."
+        "Subagents: spawn_agent starts a fresh instance of your own model in this workspace; up "
+        f"to {parallel} run at once and {cap} in total. Unless the project fits in one or two "
+        "small files, delegate: decide the file layout and shared interfaces (entry file, module "
+        "APIs, data formats, names), write that scaffolding yourself, spawn one agent per "
+        "independent file or module in the same response so they run in parallel, then review "
+        "their reports, integrate, lint, and submit. Each brief must be complete, because an "
+        "agent sees nothing else: objective, the files it owns, interfaces to follow, and the "
+        "report you need."
     )
 
 
@@ -63,23 +58,22 @@ def subagent_prompt(auto_install: str, web_search: bool, limits: Limits, *, read
     from . import session  # The session module imports this one; resolve lazily.
 
     return (
-        "You are a subagent inside a WaveBench project workspace, working for a lead agent that "
-        "integrates, lints, and submits the project. Complete only the task below, then report. "
+        "You are a subagent working for a lead agent who integrates, lints, and submits the "
+        "project. Complete only the task below, then report. "
         + (
-            "This agent is read-only: use wb ls, read, and lint; do not write, edit, or delete. "
+            "You are read-only: use read_file, list_files, and lint; do not change files. "
             if read_only
-            else "Use wb file tools on the shared workspace and batch independent operations. "
-            "Change only the files your task assigns to you; other agents may be editing other "
-            "files at the same time. "
+            else "Change only the files your task assigns to you; other agents may be editing "
+            "other files at the same time. Call independent tools together in one response. "
         )
         + "You cannot submit the project or spawn agents. "
         + session.dependency_notice(auto_install)
-        + (session.research_notice() if web_search else "")
-        + f" Limits: at most {limits.subagent_turns} model requests and "
-        f"{limits.subagent_seconds} active seconds; a reminder arrives before your final "
-        "request. Finish with a plain-text reply and no tool calls: a concise report of what "
-        "you did or found, the files you changed, interfaces the lead must know, lint results, "
-        "and anything unfinished or uncertain. The lead sees only that report."
+        + (" " + session.research_notice() if web_search else "")
+        + f" Limits: {limits.subagent_turns} model requests and {limits.subagent_seconds} seconds "
+        "of active time; a reminder arrives before your final request. Finish with a plain-text "
+        "reply and no tool calls: a concise report of what you did or found, the files you "
+        "changed, interfaces the lead must know, lint results, and anything unfinished. The "
+        "lead sees only that report."
     )
 
 
@@ -102,7 +96,7 @@ def bind_gemini_provider(model_id: str, current: str | None, turn) -> str | None
 
 
 class SubagentPool:
-    """Per-model admission: total cap, parallel window, and shared-budget reservations."""
+    """Per-model admission: total cap and parallel window."""
 
     def __init__(self, session, limits: Limits):
         self.session = session
@@ -114,7 +108,6 @@ class SubagentPool:
         self.rejected = 0
         self.lead_writes = 0
         self.reminded = False
-        self.reserved_tokens = 0
         self.seconds = 0.0
         self._chars: dict[int, int] = {}
 
@@ -150,20 +143,6 @@ class SubagentPool:
             "runs": [run.record() for run in self.runs],
         }
 
-    def affordable(self) -> int:
-        """Tokens one subagent request may use while the lead keeps its finishing reserve."""
-        session, limits = self.session, self.limits
-        pending = sum(run.status in {"pending", "running"} for run in self.runs)
-        growth = pending * PromptEstimate().bound(limits.subagent_report_chars // 3 + 512)
-        output = min(
-            limits.turn_tokens,
-            api._MODEL_MAX_COMPLETION_CACHE.get(session.model_id, limits.turn_tokens),
-        )
-        reserve = finish_reserve(
-            (session._next_input_tokens or 0) + growth, output, limits.output_chars
-        )
-        return limits.total_tokens - session.budget_tokens - self.reserved_tokens - reserve
-
     def reminder(self, calls: list[dict], results: list[dict]) -> str | None:
         """One nudge once a lead has written files itself without delegating anything."""
         if self.reminded or self.runs or not self.available():
@@ -171,9 +150,7 @@ class SubagentPool:
         self.lead_writes += sum(
             1
             for call, result in zip(calls, results, strict=True)
-            if call.get("name", "wb") == "wb"
-            and (call.get("arguments") or {}).get("command") == "write"
-            and result.get("ok")
+            if call.get("name") == "write_file" and result.get("ok")
         )
         if self.lead_writes < REMINDER_WRITES:
             return None
@@ -221,9 +198,7 @@ class SubagentPool:
             if session.dispatcher.submission is not None:
                 raise ValueError("phase already submitted; skipped")
             if session.finishing:
-                raise ValueError(
-                    "the finishing reserve is active; finish and submit the project yourself"
-                )
+                raise ValueError("the phase is finishing; complete and submit the project yourself")
             if self.remaining <= 0:
                 raise ValueError(
                     f"agent cap reached ({self.cap} per model); continue the work yourself"
@@ -359,17 +334,11 @@ class SubagentRun:
             on_diagnostics=self.on_diagnostics,
         )
 
-    def account(self, record: dict, input_bound: int, message: dict | None) -> None:
-        charged = reported_total(record["usage"])
-        if charged is None:
-            charged = input_bound + max(
-                prompt_tokens([message], []) if message else 0, self._turn_output_tokens
-            )
+    def account(self, record: dict) -> None:
         session = self.session
         session.turns.append(record)
         self.turns.append(record)
-        session.budget_tokens += charged
-        completion = record["usage"].get("completion_tokens")
+        completion = (record.get("usage") or {}).get("completion_tokens")
         self.output_tokens += (
             completion if type(completion) is int and completion >= 0 else self._turn_output_tokens
         )
@@ -377,20 +346,15 @@ class SubagentRun:
     def publish_usage(self) -> None:
         session, tracker = self.session, self.session.tracker
         if tracker and tracker.is_running:
-            tracker.update_harness(
-                session.name, session.usage(), session.api_seconds, budget=session.budget_record()
-            )
+            tracker.update_harness(session.name, session.usage(), session.api_seconds)
             self.publish(settled_tokens=self.output_tokens, output_tokens=0)
 
     def note_files(self, calls: list[dict], results: list[dict]) -> None:
-        kinds = {"write": "written", "edit": "edited", "delete": "deleted"}
+        kinds = {"write_file": "written", "edit_file": "edited", "delete_file": "deleted"}
         for call, result in zip(calls, results, strict=True):
-            command = call.get("arguments") or {}
-            if call.get("name", "wb") != "wb" or not result.get("ok"):
-                continue
-            verb, path = command.get("command"), command.get("path")
-            if verb in kinds and isinstance(path, str):
-                self.files[kinds[verb]].add(path)
+            path = (call.get("arguments") or {}).get("path")
+            if call.get("name") in FILE_CHANGES and result.get("ok") and isinstance(path, str):
+                self.files[kinds[call["name"]]].add(path)
 
     async def run(self) -> None:
         session, limits = self.session, self.limits
@@ -398,7 +362,7 @@ class SubagentRun:
         self.started, self.started_at = time.monotonic(), time.time()
         deadline = self.started + limits.subagent_seconds
         max_turns = limits.subagent_turns
-        response_retried = False
+        recoveries = 0
         try:
             for turn_index in range(max_turns):
                 final = turn_index + 1 == max_turns
@@ -407,22 +371,7 @@ class SubagentRun:
                 tools = self.dispatcher.available_tools()
                 local_input = await asyncio.to_thread(prompt_tokens, self.messages, tools)
                 input_bound = self.estimate.bound(local_input)
-                output_tokens = min(
-                    limits.turn_tokens,
-                    api._MODEL_MAX_COMPLETION_CACHE.get(session.model_id, limits.turn_tokens),
-                )
-                remaining = self.pool.affordable() - input_bound
-                if remaining < MIN_REQUEST_OUTPUT:
-                    self.status = "budget_exhausted"
-                    self.error = (
-                        "shared token budget cannot fit another subagent request while keeping "
-                        f"the lead's finishing reserve ({session.budget_tokens:,} / "
-                        f"{limits.total_tokens:,} tokens used; next input estimate {input_bound:,})"
-                    )
-                    return
-                request_output = min(output_tokens, remaining)
-                reservation = input_bound + request_output
-                self.pool.reserved_tokens += reservation
+                request_output = session.output_tokens()
                 started = time.monotonic()
                 turn = None
                 record = {
@@ -450,7 +399,7 @@ class SubagentRun:
                         finish_reason=turn.finish_reason,
                         adjustments=turn.adjustments,
                     )
-                    self.account(record, input_bound, turn.message)
+                    self.account(record)
                 except BaseException as exc:
                     if getattr(exc, "request_sent", True):
                         record.update(
@@ -461,18 +410,16 @@ class SubagentRun:
                             ),
                             stream=getattr(exc, "diagnostics", None) or self._stream_diagnostics,
                         )
-                        self.account(record, input_bound, None)
-                    notice = (
-                        response_recovery_notice(exc.failure_code, limits.batch_calls)
-                        if isinstance(exc, TurnError) and getattr(exc, "request_sent", True)
-                        else None
-                    )
-                    if notice and not response_retried and not final:
-                        response_retried = True
-                        self.messages.append({"role": "user", "content": notice})
+                        self.account(record)
+                    plan = recovery(exc)
+                    if plan and recoveries < MAX_RECOVERIES and not final:
+                        recoveries += 1
+                        kind, note = plan
+                        if note:
+                            self.messages.append({"role": "user", "content": note})
                         session.recoveries.append(
                             {
-                                "kind": "response_retry",
+                                "kind": kind,
                                 "phase": "subagent",
                                 "agent": self.number,
                                 "turn": len(self.turns),
@@ -482,7 +429,6 @@ class SubagentRun:
                         continue
                     raise
                 finally:
-                    self.pool.reserved_tokens -= reservation
                     elapsed = time.monotonic() - started
                     self.api_seconds += elapsed
                     session.api_seconds += elapsed
@@ -493,13 +439,6 @@ class SubagentRun:
                 )
                 self.estimate.observe(local_input, measured)
                 self.messages.append(turn.message)
-                if session.budget_tokens > limits.total_tokens:
-                    self.status = "budget_exhausted"
-                    self.error = (
-                        f"total token budget exhausted ({session.budget_tokens:,} / "
-                        f"{limits.total_tokens:,} tokens used); tool calls skipped"
-                    )
-                    return
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
                     self.report = turn.message.get("content") or ""
@@ -533,11 +472,7 @@ class SubagentRun:
                     self.publish(**self.tool_counts())
                 self.note_files(native, results)
                 self.messages.extend(
-                    {
-                        "role": "tool",
-                        "tool_call_id": result["id"],
-                        "content": json.dumps(result, ensure_ascii=False),
-                    }
+                    {"role": "tool", "tool_call_id": result["id"], "content": result["text"]}
                     for result in results
                 )
                 self.save()

@@ -29,11 +29,10 @@ from wavebench.harness.accounting import (
     Measurement,
     cache_read_ratio,
     estimate_cost,
-    reported_total,
     settled,
     valid_number,
 )
-from wavebench.harness.failure import budget_record, failure_summary
+from wavebench.harness.failure import failure_summary
 from wavebench.tui import styles as _styles
 from wavebench.tui.analytics.cost import compute_cost
 from wavebench.tui.progress.wave import (
@@ -266,9 +265,7 @@ class ProgressTracker:
             self.finish_parsing(model_name)
             self._harness_samples.pop(model_name, None)
 
-    def update_harness(
-        self, model_name: str, usage: dict, api_seconds: float, *, budget: dict | None = None
-    ) -> None:
+    def update_harness(self, model_name: str, usage: dict, api_seconds: float) -> None:
         """Publish cumulative usage after a turn, including failed calls and compaction."""
         previous = self._harness.get(model_name, {})
         self._harness[model_name] = {
@@ -278,12 +275,7 @@ class ProgressTracker:
             "web_search": previous.get("web_search", {}),
             "web_fetch": previous.get("web_fetch", {}),
             "subagents": previous.get("subagents", {}),
-            "budget": budget if budget is not None else previous.get("budget", {}),
         }
-
-    def update_harness_budget(self, model_name: str, budget: dict) -> None:
-        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
-        metrics["budget"] = budget.copy()
 
     def update_subagent(self, model_name: str, number: int, **fields: Any) -> None:
         """Publish one subagent's live state; its model's agent line lasts for the run."""
@@ -445,7 +437,6 @@ class ProgressTracker:
             fetches = harness.get("web_fetch") or {}
             agents = harness.get("subagents") or {}
             metrics = {}
-            budget = budget_record(harness).copy()
         else:
             metrics = self._harness[name]
             usage = metrics["usage"]
@@ -455,7 +446,6 @@ class ProgressTracker:
             searches = metrics.get("web_search") or {}
             fetches = metrics.get("web_fetch") or {}
             agents = metrics.get("subagents") or {}
-            budget = (metrics.get("budget") or {}).copy()
         cache_usages = [usage] if turns else []
         tokens = settled(usage, "completion_tokens", turns)
         completion = usage.get("completion_tokens")
@@ -494,28 +484,12 @@ class ProgressTracker:
                     cost += estimate_cost(0, extra, {**pricing, "prompt": "0", "request": "0"})
             else:
                 cost += estimate_cost(prompt, output, pricing)
-            if budget:
-                current_total = reported_total(current)
-                total = current.get("total_tokens")
-                anchor = (
-                    "total_tokens" if type(total) is int and total >= 0 else "completion_tokens"
-                )
-                extra = max(
-                    0,
-                    metrics["output_tokens"] - metrics["usage_anchors"].get(anchor, 0),
-                )
-                estimated = current_total is None or bool(extra)
-                current_total = prompt + output if current_total is None else current_total + extra
-                budget["used_tokens"] += current_total
-                budget["remaining_tokens"] = max(0, budget["limit_tokens"] - budget["used_tokens"])
-                budget["estimated"] = budget.get("estimated", False) or estimated
         # Input estimates must not look like generated output. Before any output
         # or completed call, the display has no output count to publish yet.
         if result is None and not usage.get("api_turns", 0) and tokens.value == 0:
             tokens = Measurement(None)
         return {
             "tokens": tokens,
-            "budget": budget,
             "cost": cost,
             "turns": turns,
             "rate": rate,

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from wavebench.harness import subagents as module
-from wavebench.harness.commands import SPAWN_TOOL_SCHEMA, SUBAGENT_TOOL_SCHEMA, TOOL_SCHEMA
+from wavebench.harness.commands import SPAWN_AGENT, TOOL_SCHEMA, Dispatcher
 from wavebench.harness.config import Limits
 from wavebench.harness.session import system_prompt
 from wavebench.harness.subagents import SubagentPool, subagent_prompt, subagents_status
@@ -25,7 +25,7 @@ def plain(text: str) -> str:
 def test_limits_validate_the_parallel_window_and_positive_caps():
     defaults = Limits()
     assert (defaults.subagent_parallel, defaults.subagent_cap) == (4, 8)
-    assert (defaults.subagent_turns, defaults.subagent_seconds) == (16, 600)
+    assert (defaults.subagent_turns, defaults.subagent_seconds) == (20, 600)
     assert Limits(subagent_parallel=2).subagent_parallel == 2
     assert Limits(subagent_parallel=5).subagent_parallel == 5
     for value in (1, 6):
@@ -48,29 +48,43 @@ def test_status_strings_follow_config_and_harness_caps():
     )
 
 
-def test_tool_schemas_separate_lead_and_subagent_capabilities():
-    function = SPAWN_TOOL_SCHEMA["function"]
+def names(tools):
+    return [tool["function"]["name"] for tool in tools]
+
+
+def test_tool_schemas_separate_lead_and_subagent_capabilities(tmp_path):
+    function = SPAWN_AGENT["function"]
     assert function["name"] == "spawn_agent"
     assert function["parameters"]["required"] == ["name", "task"]
     assert set(function["parameters"]["properties"]) == {"name", "task", "read_only"}
     assert function["parameters"]["additionalProperties"] is False
-    assert "all spawned in the same turn" in function["description"]
-    (subagent_wb,) = SUBAGENT_TOOL_SCHEMA
-    commands = subagent_wb["function"]["parameters"]["properties"]["command"]["enum"]
-    assert "done" not in commands and {"write", "edit", "lint"} <= set(commands)
-    assert "runtime" not in subagent_wb["function"]["parameters"]["properties"]
-    assert "done" in TOOL_SCHEMA[0]["function"]["parameters"]["properties"]["command"]["enum"]
+    assert "run in parallel" in function["description"]
+    pool = SimpleNamespace(available=lambda: True)
+    lead = Dispatcher(None, None, tmp_path, Limits(), subagents=pool)
+    assert names(lead.available_tools()) == [*names(TOOL_SCHEMA), "spawn_agent"]
+    writer = Dispatcher(None, None, tmp_path, Limits(), parent=lead)
+    assert names(writer.tools) == [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "delete_file",
+        "lint",
+    ]
+    # A read-only agent is never offered tools it may not use.
+    reader = Dispatcher(None, None, tmp_path, Limits(), parent=lead, read_only=True)
+    assert names(reader.tools) == ["read_file", "list_files", "lint"]
 
 
 def test_prompts_state_caps_ownership_and_the_report_contract():
     lead = system_prompt("off", False, {"parallel": 3, "cap": 7})
     assert "up to 3 run at once and 7 in total" in lead
-    assert "disjoint files" in lead and "own wb done" in lead
+    assert "in the same response so they run in parallel" in lead and "submit" in lead
     assert lead.startswith(system_prompt("off", False, None))
     assert "Subagents" not in system_prompt("on", True)
     limits = Limits(subagent_turns=5, subagent_seconds=90)
     writer = subagent_prompt("on", True, limits, read_only=False)
-    assert "at most 5 model requests and 90 active seconds" in writer
+    assert "5 model requests and 90 seconds of active time" in writer
     assert "PyPI wheels" in writer and "web_search" in writer
     assert "cannot submit the project or spawn agents" in writer
     assert "The lead sees only that report" in writer
@@ -97,24 +111,11 @@ def test_spawn_arguments_are_validated_before_any_request(arguments, message):
     assert SubagentPool.validate({"name": " api ", "task": "brief"}) == ("api", "brief", False)
 
 
-def test_affordability_reserves_the_lead_finishing_round_trip():
-    session = SimpleNamespace(
-        model_id="vendor/model",
-        budget_tokens=0,
-        _next_input_tokens=10_000,
-        finishing=False,
-        turns=[],
-    )
-    limits = Limits(total_tokens=100_000, turn_tokens=8_000)
-    pool = SubagentPool(session, limits)
-    affordable = pool.affordable()
-    assert 0 < affordable < limits.total_tokens - session._next_input_tokens
-    session.budget_tokens = 60_000
-    assert pool.affordable() == affordable - 60_000
-    pool.reserved_tokens = 5_000
-    assert pool.affordable() == affordable - 65_000
+def test_finishing_withdraws_spawning():
+    session = SimpleNamespace(model_id="vendor/model", finishing=False, turns=[])
+    pool = SubagentPool(session, Limits())
+    assert pool.available() is True
     pool.runs.append(SimpleNamespace(status="running"))
-    assert pool.affordable() < affordable - 65_000  # A pending report will grow the lead input.
     session.finishing = True
     assert pool.available() is False
     assert pool.usage()["active"] == 1
@@ -346,8 +347,6 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
         finishing=False,
         phase_name="building",
         model_id="vendor/model",
-        budget_tokens=0,
-        _next_input_tokens=100,
         turns=[],
     )
     pool = SubagentPool(session, Limits(subagent_cap=1))
@@ -355,7 +354,7 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
         await pool.spawn("call", {"name": "a", "task": "b"})
     session.dispatcher.submission = None
     session.finishing = True
-    with pytest.raises(ValueError, match="finishing reserve"):
+    with pytest.raises(ValueError, match="the phase is finishing"):
         await pool.spawn("call", {"name": "a", "task": "b"})
     session.finishing = False
     pool.runs.append(SimpleNamespace(status="completed"))
@@ -383,45 +382,47 @@ def test_spawn_treats_null_read_only_as_false():
 
 
 @pytest.mark.parametrize(
-    "command,expected",
+    "name,arguments,expected",
     [
-        ({"command": "write", "path": "a.py", "content": ""}, True),
-        ({"command": "edit", "path": "a.py", "old": "x", "new": "y"}, True),
-        ({"command": "delete", "path": "a.py"}, True),
-        ({"command": "read", "path": "a.py"}, False),
-        ({"command": "ls"}, False),
-        ({"command": "lint"}, True),
-        ({"command": "done", "runtime": "python", "entry": "a.py"}, True),
+        ("write_file", {"path": "a.py", "content": ""}, True),
+        ("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, True),
+        ("delete_file", {"path": "a.py"}, True),
+        ("read_file", {"path": "a.py"}, False),
+        ("list_files", {}, False),
+        ("lint", {}, True),
+        ("submit", {"runtime": "python", "entry": "a.py"}, True),
     ],
 )
-def test_spawn_calls_wait_for_file_changes_but_overlap_reads_and_spawns(command, expected):
-    from wavebench.harness.commands import Dispatcher
-
-    spawn = {"name": "a", "task": "b"}
-    assert Dispatcher._conflicts(command, spawn, "wb", "spawn_agent") is expected
-    assert Dispatcher._conflicts(spawn, command, "spawn_agent", "wb") is expected
-    assert Dispatcher._conflicts(spawn, spawn, "spawn_agent", "spawn_agent") is False
-    assert Dispatcher._conflicts({"query": "q"}, spawn, "web_search", "spawn_agent") is False
+def test_spawn_calls_wait_for_file_changes_but_overlap_reads_and_spawns(name, arguments, expected):
+    spawn = {"name": "spawn_agent", "arguments": {"name": "a", "task": "b"}}
+    other = {"name": name, "arguments": arguments}
+    assert Dispatcher._conflicts(other, spawn) is expected
+    assert Dispatcher._conflicts(spawn, other) is expected
+    assert Dispatcher._conflicts(spawn, spawn) is False
+    search = {"name": "web_search", "arguments": {"query": "q"}}
+    assert Dispatcher._conflicts(search, spawn) is False
 
 
 @pytest.mark.parametrize(
-    "command,message",
+    "name,arguments,message",
     [
-        ({"command": "edit", "old": "a", "new": "b"}, "edit requires path"),
-        ({"command": "edit", "path": "f.py"}, "edit requires old, new"),
-        ({"command": "write", "path": "f.py"}, "write requires content"),
-        ({"command": "read"}, "read requires path"),
-        ({"command": "delete", "path": None}, "delete requires path"),
+        ("edit_file", {"old_text": "a", "new_text": "b"}, "edit_file requires path"),
+        ("edit_file", {"path": "f.py"}, "edit_file requires old_text, new_text"),
+        ("write_file", {"path": "f.py"}, "write_file requires content"),
+        ("read_file", {}, "read_file requires path"),
+        ("delete_file", {"path": None}, "delete_file requires path"),
+        ("submit", {"entry": "main.py"}, "submit requires runtime"),
     ],
 )
-async def test_missing_required_fields_produce_readable_tool_errors(tmp_path, command, message):
-    from wavebench.harness.commands import Dispatcher
+async def test_missing_required_fields_produce_readable_tool_errors(
+    tmp_path, name, arguments, message
+):
     from wavebench.harness.workspace import Workspace
 
     workspace = Workspace(tmp_path)
     try:
         dispatcher = Dispatcher(workspace, None, tmp_path, Limits())
-        (result,) = await dispatcher.batch([{"id": "c1", "arguments": command}])
+        (result,) = await dispatcher.batch([{"id": "c1", "name": name, "arguments": arguments}])
     finally:
         workspace.close()
     assert not result["ok"] and result["error"] == message

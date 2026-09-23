@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import codecs
 import ipaddress
-import json
 import re
 import socket
 import zlib
@@ -587,20 +586,3 @@ def empty_markdown_tables(text: str) -> bool:
             else:
                 empty += 1
     return bool(empty and not populated)
-
-
-def fit_fetch_result(result: dict, output_chars: int) -> dict:
-    """Preserve continuation metadata when JSON escaping exceeds the tool budget."""
-    if not result.get("ok") or "content" not in result:
-        return result
-    while len(json.dumps(result, ensure_ascii=False)) > output_chars and result["content"]:
-        result["content"] = result["content"][: len(result["content"]) // 2]
-        result["next_start"] = result["start"] + len(result["content"])
-        result["truncated"] = True
-    if not result["content"] and result["total_chars"] > result["start"]:
-        return {
-            "id": result["id"],
-            "ok": False,
-            "error": "Tool output budget is too small for source content and metadata",
-        }
-    return result

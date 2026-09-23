@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -12,10 +11,11 @@ from aiohttp.test_utils import TestServer
 from wavebench import api
 from wavebench.harness import session as module
 from wavebench.harness.config import Limits
-from wavebench.harness.failure import failure_summary
 from wavebench.harness.session import HarnessSession
 from wavebench.harness.workspace import allocate_run
 from wavebench.tokens import prompt_tokens
+
+from ..harness_calls import tool_call
 
 
 @pytest.fixture
@@ -30,12 +30,12 @@ async def sessions(tmp_path, monkeypatch):
     run = allocate_run(tmp_path, "failure-metrics", "safe fixture")
     created = []
 
-    def create(client=None, **limits):
+    def create(client=None, model="fixture/model", effort=None, **limits):
         session = HarnessSession(
             run,
             len(created) + 1,
             "Fixture",
-            "fixture/model",
+            model,
             "List the empty workspace.",
             client,
             "offline-key",
@@ -43,7 +43,7 @@ async def sessions(tmp_path, monkeypatch):
             asyncio.Semaphore(1),
             asyncio.Semaphore(1),
             auto_open="off",
-            reasoning_effort=None,
+            reasoning_effort=effort,
         )
         created.append(session)
         return session
@@ -80,17 +80,17 @@ async def test_stream_failure_diagnostics_and_usage_reach_saved_results(sessions
     assert result["failure"]["code"] == "stream_output_limit"
     assert result["failure"]["diagnostics"]["bytes"]["content"] == 500
     assert result["harness"]["turns"][0]["stream"]["bytes"]["content"] == 500
-    assert result["harness"]["budget"]["used_tokens"] == 13
     assert result["usage"]["total_tokens"] == 13
     assert result["usage"]["cost"] is None
     assert session.dispatcher.tool_usage["calls"] == 0
     assert requests == 1
 
 
-@pytest.mark.parametrize("remaining,output_limit", [(302_021, 64_000), (304_249, 32_000)])
-async def test_finishing_warning_allows_reasoning_and_complete_file_tools(
-    sessions, monkeypatch, remaining, output_limit
+@pytest.mark.parametrize("output_limit", [64_000, 32_000])
+async def test_finishing_requests_keep_full_output_and_reasoning(
+    sessions, monkeypatch, output_limit
 ):
+    """Finishing narrows the work, never the response: a whole file still fits."""
     requests = []
     monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, "fixture/model", output_limit)
 
@@ -99,7 +99,7 @@ async def test_finishing_warning_allows_reasoning_and_complete_file_tools(
         requests.append(data)
         assert data["max_tokens"] == output_limit
         assert data["reasoning"] == {"effort": "high"}
-        assert "[WaveBench budget warning]" in json.dumps(data["messages"])
+        assert "Finish now: make only essential fixes" in json.dumps(data["messages"])
         if len(requests) == 1:
             command = {
                 "command": "write",
@@ -107,7 +107,7 @@ async def test_finishing_warning_allows_reasoning_and_complete_file_tools(
                 "content": "# " + "code " * 6000 + "\nprint(42)\n",
             }
         else:
-            assert json.loads(data["messages"][-1]["content"])["ok"]
+            assert data["messages"][-1]["content"] == "Wrote main.py (2 lines)."
             command = {"command": "done", "runtime": "python", "entry": "main.py"}
         payload = tool_response(command, f"complete-{len(requests)}")
         payload["choices"][0]["delta"]["reasoning"] = "Check the file and complete the tool call."
@@ -128,32 +128,12 @@ async def test_finishing_warning_allows_reasoning_and_complete_file_tools(
     app.router.add_post("/chat/completions", handler)
     async with TestServer(app) as server, aiohttp.ClientSession() as client:
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
-        session = sessions(client)
-        session.reasoning_effort = "high"
-        session.finishing = output_limit < 64_000
-        # The lower provider cap can put this outside the warning frontier;
-        # exercise a warning already delivered by an earlier, larger context.
-        if session.finishing:
-            session.messages.append(
-                {"role": "user", "content": "[WaveBench budget warning] Finish and submit."}
-            )
-        session.budget_tokens = session.limits.total_tokens - remaining
-        session.turns.append(
-            {
-                "phase": "building",
-                "usage": {
-                    "prompt_tokens": session.budget_tokens,
-                    "completion_tokens": 0,
-                    "total_tokens": session.budget_tokens,
-                },
-            }
-        )
+        session = sessions(client, effort="high", build_turns=3)
         await session.build()
     assert session.generation == "submitted", session.error
     assert session.workspace.read("main.py").endswith("print(42)\n")
     assert len(requests) == 2 and session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
-    assert session.budget_tokens == session.usage()["total_tokens"] < 1_000_000
-    assert session.recoveries == []
+    assert session.notices[0]["kind"] == "finishing" and session.recoveries == []
 
 
 @pytest.mark.parametrize(
@@ -190,8 +170,8 @@ async def test_bad_response_retries_once_without_executing_any_failed_calls(
                         "id": "broken",
                         "type": "function",
                         "function": {
-                            "name": "wb",
-                            "arguments": '{"command":"write","content":"unfinished',
+                            "name": "write_file",
+                            "arguments": '{"path":"x.py","content":"unfinished',
                         },
                     }
                 )
@@ -201,13 +181,13 @@ async def test_bad_response_retries_once_without_executing_any_failed_calls(
                         "index": n,
                         "id": f"extra-{n}",
                         "type": "function",
-                        "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                        "function": {"name": "list_files", "arguments": "{}"},
                     }
                     for n in range(1, 65)
                 )
             outgoing = data["max_tokens"] if failure in {"length", "truncated_arguments"} else 100
         else:
-            assert "[WaveBench response recovery]" in json.dumps(data["messages"])
+            assert "[WaveBench] Your last response" in json.dumps(data["messages"])
             assert "rejected.py" not in json.dumps(data["messages"])
             if len(requests) == 2:
                 assert not session.workspace.ls()
@@ -240,14 +220,11 @@ async def test_bad_response_retries_once_without_executing_any_failed_calls(
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
         session = sessions(client)
         await session.build()
-    assert len(requests) == (2 if persistent else 3)
-    assert len(session.recoveries) == 1
-    if reported:
-        assert session.budget_tokens == session.usage()["total_tokens"]
-    else:
+    # A persistent failure is retried at most three times per phase.
+    assert len(requests) == (4 if persistent else 3)
+    assert len(session.recoveries) == (3 if persistent else 1)
+    if not reported:
         assert session.usage()["total_tokens"] is None
-        assert session.budget_record()["estimated"] and session.budget_tokens > 0
-    assert session.budget_tokens <= session.limits.total_tokens
     assert "rejected.py" not in str(session.workspace.ls())
     first = session.turns[0]
     assert first["failure"]["code"] == (
@@ -268,7 +245,7 @@ async def test_bad_response_retries_once_without_executing_any_failed_calls(
 
 
 @pytest.mark.parametrize("phase_expires_first", [False, True])
-async def test_header_wait_failure_is_saved_without_inventing_usage_or_retrying(
+async def test_header_wait_failure_is_saved_retried_and_bounded_by_the_phase(
     sessions, monkeypatch, phase_expires_first
 ):
     release = asyncio.Event()
@@ -286,61 +263,36 @@ async def test_header_wait_failure_is_saved_without_inventing_usage_or_retrying(
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
         session = sessions(
             client,
-            response_headers_seconds=3 if phase_expires_first else 1,
+            response_headers_seconds=3 if phase_expires_first else 2,
             build_seconds=1 if phase_expires_first else 3,
         )
         try:
-            await asyncio.wait_for(session.build(), 3)
+            await asyncio.wait_for(session.build(), 5)
         finally:
             release.set()
     result = json.loads((session.metadata / "result.json").read_text())
-    failure = result["failure"]
-    assert failure["code"] == (
-        "time_or_turn_limit" if phase_expires_first else "response_headers_timeout"
-    )
-    if not phase_expires_first:
-        assert failure["category"] == "request_timeout"
-        assert failure_summary(result) == "No response headers received"
-        assert failure["diagnostics"]["policy"] == {"response_headers_seconds": 1}
-    turn = result["harness"]["turns"][0]
-    assert turn["stream"]["stage"] == "response_headers"
-    assert turn["stream"]["failure_code"] == (
-        "request_cancelled" if phase_expires_first else "response_headers_timeout"
-    )
-    assert turn["usage"] == {}
-    assert result["usage"]["api_turns"] == 1
+    # Either way the phase's time limit ends the run; a header timeout is retried once first.
+    assert result["failure"]["code"] == "time_or_turn_limit"
+    turns = result["harness"]["turns"]
+    assert all(turn["stream"]["stage"] == "response_headers" for turn in turns)
+    assert all(turn["usage"] == {} for turn in turns)
     assert result["usage"]["total_tokens"] is None and result["usage"]["cost"] is None
-    assert result["harness"]["budget"]["estimated"]
-    assert result["harness"]["budget"]["used_tokens"] > 0
-    assert result["harness"]["recoveries"] == [] and result["retries"] == []
-    assert session.dispatcher.tool_usage["calls"] == 0 and requests == 1
-
-
-async def test_unaffordable_next_request_has_remaining_and_input_estimate(sessions):
-    session = sessions(total_tokens=1_000_000)
-    session.budget_tokens = 934_688
-    session.turns = [
-        {
-            "phase": "building",
-            "usage": {
-                "prompt_tokens": 856_594,
-                "completion_tokens": 78_094,
-                "total_tokens": 934_688,
-                "prompt_tokens_details": {"cached_tokens": 800_000},
-            },
-        }
-    ]
-    session.prompt_estimate = SimpleNamespace(
-        bound=lambda value: 80_687, estimate=lambda value: 70_000
-    )
-    await session.build()
-    result = session.result()
-    assert result["failure"]["category"] == "token_budget"
-    assert result["failure"]["budget"]["remaining_tokens"] == 65_312
-    assert result["failure"]["budget"]["next_input_tokens_estimate"] == 80_687
-    assert result["harness"]["budget"]["used_tokens"] == 934_688
-    assert result["usage"]["completion_tokens"] == 78_094
-    assert len(result["harness"]["turns"]) == 1
+    if phase_expires_first:
+        assert requests == 1 and turns[0]["stream"]["failure_code"] == "request_cancelled"
+        assert result["harness"]["recoveries"] == []
+    else:
+        assert requests == 2
+        assert turns[0]["failure"]["summary"] == "No response headers received"
+        assert turns[0]["stream"]["policy"] == {"response_headers_seconds": 2}
+        assert result["harness"]["recoveries"] == [
+            {
+                "kind": "provider_retry",
+                "phase": "building",
+                "turn": 1,
+                "failure_code": "response_headers_timeout",
+            }
+        ]
+    assert result["retries"] == [] and session.dispatcher.tool_usage["calls"] == 0
 
 
 @pytest.mark.parametrize("build_turns,expected_requests", [(32, 2), (1, 1)])
@@ -369,23 +321,14 @@ async def test_complete_text_without_done_reports_missing_submission(
     assert len(requests) == expected_requests
     assert session.descriptor is None and session.attempts == []
     if expected_requests == 2:
-        assert "has not received a submission" in requests[1]["messages"][-1]["content"]
+        assert "No project has been submitted" in requests[1]["messages"][-1]["content"]
 
 
 def tool_response(command, call_id):
     return {
         "choices": [
             {
-                "delta": {
-                    "tool_calls": [
-                        {
-                            "index": 0,
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": "wb", "arguments": json.dumps(command)},
-                        }
-                    ]
-                },
+                "delta": {"tool_calls": [tool_call(call_id, command)]},
                 "finish_reason": "tool_calls",
             }
         ],
@@ -393,9 +336,7 @@ def tool_response(command, call_id):
     }
 
 
-@pytest.mark.parametrize(
-    "recovery", ["submission_reminder", "empty_provider_retry", "reasoning_provider_retry"]
-)
+@pytest.mark.parametrize("recovery", ["submission_reminder", "empty_error", "reasoning_error"])
 async def test_recovery_preserves_project_and_accounts_for_every_request(
     sessions, monkeypatch, recovery
 ):
@@ -410,14 +351,14 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
                 "usage": {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105},
             }
         ],
-        "empty_provider_retry": [
+        "empty_error": [
             {
                 "error": {"code": 503, "message": "private provider body"},
                 "usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100},
             }
         ],
         # The Grok 4.7 failure: reasoning streamed, then the provider returned 502.
-        "reasoning_provider_retry": [
+        "reasoning_error": [
             {"choices": [{"delta": {"reasoning": "Plan the level, then write it."}}]},
             {
                 "error": {"code": 502, "message": "private provider body"},
@@ -454,10 +395,12 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
     assert session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
     expected_tokens = sum(events[-1]["usage"]["total_tokens"] for events in responses)
     assert result["usage"]["total_tokens"] == expected_tokens
-    assert result["harness"]["budget"]["used_tokens"] == expected_tokens
     assert len(result["harness"]["turns"]) == len(requests) == 3
     assert result["failure"] is None
-    assert result["harness"]["recoveries"] == [{"kind": recovery, "phase": "building", "turn": 2}]
+    expected = {"kind": "submission_reminder", "phase": "building", "turn": 2}
+    if recovery != "submission_reminder":
+        expected = {**expected, "kind": "provider_retry", "failure_code": "provider_stream_error"}
+    assert result["harness"]["recoveries"] == [expected]
     if recovery != "submission_reminder":
         # The retry resends the unchanged conversation; partial reasoning is discarded.
         assert requests[1] == requests[2]
@@ -468,14 +411,15 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
 @pytest.mark.parametrize(
     "partial,code,build_turns,expected_requests",
     [
-        (None, None, 32, 2),
-        (None, 503, 32, 2),
+        (None, None, 32, 4),
+        (None, 503, 32, 4),
         (None, 503, 1, 1),
-        ("tool", 503, 32, 1),
-        (None, 400, 32, 1),
-        # One retry per phase, even when each attempt only streamed reasoning.
-        ("reasoning", 502, 32, 2),
+        # Discarded partial output is never executed or replayed, so it can be retried.
+        ("tool", 503, 32, 4),
+        ("reasoning", 502, 32, 4),
         ("reasoning", 502, 1, 1),
+        # A rejected request would only be rejected again.
+        (None, 400, 32, 1),
         ("reasoning", 400, 32, 1),
     ],
 )
@@ -484,9 +428,12 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
 ):
     requests = 0
 
+    bodies = []
+
     async def handler(request):
         nonlocal requests
         requests += 1
+        bodies.append(await request.json())
         prefix = ""
         if partial == "tool":
             payload = tool_response({"command": "write", "path": "bad.py", "content": "bad"}, "bad")
@@ -511,26 +458,37 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
     assert result["failure"]["summary"] == "Provider failed during response"
     assert session.dispatcher.tool_usage["calls"] == 0
     assert session.workspace.ls() == []
+    assert all(body == bodies[0] for body in bodies)  # The same conversation each time.
     if not partial:
         assert result["usage"]["total_tokens"] is None
-        assert result["harness"]["budget"]["estimated"] is True
-        assert session.budget_tokens > 0
 
 
-@pytest.mark.parametrize("recovery", ["text", "provider_error", "length"])
-async def test_recovery_cannot_bypass_total_token_budget(sessions, monkeypatch, recovery):
-    requests = 0
+async def test_reasoning_that_fills_the_output_steps_the_effort_down(sessions, monkeypatch):
+    """The Claude Opus 5.5 failure: at max effort, a turn spent all 64,000 tokens reasoning."""
+    model = "anthropic/claude-opus-5.5"
+    monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1_000_000)
+    efforts = []
 
     async def handler(request):
-        nonlocal requests
-        requests += 1
-        payload = {"usage": {"prompt_tokens": 49999, "completion_tokens": 0, "total_tokens": 49999}}
-        if recovery == "text":
-            payload["choices"] = [{"delta": {"content": "Done"}, "finish_reason": "stop"}]
-        elif recovery == "provider_error":
-            payload["error"] = {"code": 503}
+        data = await request.json()
+        efforts.append(data["reasoning"]["effort"])
+        if len(efforts) == 1:
+            payload = {
+                "choices": [{"delta": {"reasoning": "thinking " * 50}, "finish_reason": "length"}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 64_000,
+                    "total_tokens": 64_100,
+                },
+            }
+        elif len(efforts) == 2:
+            payload = tool_response(
+                {"command": "write", "path": "main.py", "content": "print(1)\n"}, "w"
+            )
         else:
-            payload["choices"] = [{"delta": {"reasoning": "unfinished"}, "finish_reason": "length"}]
+            payload = tool_response(
+                {"command": "done", "runtime": "python", "entry": "main.py"}, "d"
+            )
         return web.Response(
             text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
             content_type="text/event-stream",
@@ -540,12 +498,17 @@ async def test_recovery_cannot_bypass_total_token_budget(sessions, monkeypatch, 
     app.router.add_post("/chat/completions", handler)
     async with TestServer(app) as server, aiohttp.ClientSession() as client:
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
-        session = sessions(client, total_tokens=50000)
+        session = sessions(client, model=model, effort="max")
         await session.build()
-    assert requests == 1
-    assert session.result()["failure"]["category"] == "token_budget"
-    assert session.budget_tokens == 49999
-    assert session.attempts == []
+    assert session.generation == "submitted", session.error
+    assert efforts == ["max", "xhigh", "xhigh"]
+    recovery = session.recoveries[0]
+    assert recovery["failure_code"] == "output_truncated"
+    assert recovery["reasoning_effort"] == {"from": "max", "to": "xhigh"}
+    assert session.result()["harness"]["reasoning_effort"] == {
+        "configured": "max",
+        "final": "xhigh",
+    }
 
 
 async def test_cancelled_http_stream_saves_diagnostics_without_invented_usage(
@@ -587,4 +550,3 @@ async def test_cancelled_http_stream_saves_diagnostics_without_invented_usage(
     assert result["failure"]["diagnostics"]["failure_code"] == "stream_cancelled"
     assert result["harness"]["turns"][0]["stream"]["bytes"]["content"] == 7
     assert result["usage"]["total_tokens"] is None
-    assert result["harness"]["budget"]["estimated"] is True

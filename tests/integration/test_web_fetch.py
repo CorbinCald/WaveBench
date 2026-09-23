@@ -270,19 +270,22 @@ async def test_dispatch_budget_repair_replay_and_structured_continuation(source_
     call = {"id": "read-1", "name": "web_fetch", "arguments": {"url": source_server["url"]}}
     disabled = Dispatcher(None, None, tmp_path, Limits())
     assert module.WEB_FETCH_SCHEMA not in disabled.tools
-    assert "disabled" in (await disabled.batch([call]))[0]["error"]
+    assert "web_fetch is not enabled" in (await disabled.batch([call]))[0]["error"]
     dispatcher = Dispatcher(
         None,
         None,
         tmp_path,
-        Limits(web_fetch_calls=3, output_chars=1500),
+        Limits(web_fetch_calls=3, output_chars=3000),
         web_search=BraveSearch("secret-brave"),
     )
     assert module.WEB_FETCH_SCHEMA in dispatcher.tools
     first = (await dispatcher.batch([call]))[0]
     assert first["ok"] and first["truncated"]
-    assert first["next_start"] == len(first["content"]) > 0
-    assert len(json.dumps(first, ensure_ascii=False)) <= 1500
+    assert first["next_start"] == len(first["content"]) == 1000
+    # Page text reaches the model verbatim, with its source and how to continue.
+    assert first["text"].startswith(f"Source: {source_server['url']}")
+    assert first["content"] in first["text"] and len(first["text"]) <= 3000
+    assert "Continue with start=1000.]" in first["text"]
     assert (await dispatcher.batch([call]))[0] == first
     dispatcher.reopen()
     second = (
@@ -298,10 +301,14 @@ async def test_dispatch_budget_repair_replay_and_structured_continuation(source_
     )[0]
     assert second["ok"] and second["start"] == len(first["content"])
     assert first["content"] + second["content"] == source_server["text"][: second["next_start"]]
+    # Invalid arguments are rejected without using one of the model's page reads.
     bad = {**call, "id": "read-3", "arguments": {"url": source_server["url"], "headers": {}}}
-    assert not (await dispatcher.batch([bad]))[0]["ok"]
-    assert "budget" in (await dispatcher.batch([{**call, "id": "read-4"}]))[0]["error"]
-    assert dispatcher.web_fetch_usage == {"calls": 3, "failures": 1}
+    assert (await dispatcher.batch([bad]))[0]["text"] == (
+        "Error: web_fetch does not accept headers\n(20 searches and 1 page reads left)"
+    )
+    assert (await dispatcher.batch([{**call, "id": "read-4"}]))[0]["ok"]
+    assert "call limit reached" in (await dispatcher.batch([{**call, "id": "read-5"}]))[0]["error"]
+    assert dispatcher.web_fetch_usage == {"calls": 3, "failures": 0}
     assert dispatcher.web_search_usage == {"calls": 0, "failures": 0}
     assert len(source_server["requests"]) == 1
     assert "secret-brave" not in "".join(p.read_text() for p in tmp_path.glob("*.json"))

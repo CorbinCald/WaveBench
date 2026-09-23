@@ -53,9 +53,14 @@ def failure_record(
         or "stream byte budget" in text
     ):
         category, code, summary = "stream_limit", code or "stream_raw_limit", "Stream limit reached"
-    elif (
-        "token budget" in text or "context budget" in text or "context cannot be compacted" in text
-    ):
+    elif "context budget" in text or "context window" in text:
+        category, code, summary = (
+            "context_window",
+            "context_window_exhausted",
+            "Context window exhausted",
+        )
+    elif "token budget" in text or "context cannot be compacted" in text:
+        # Harness version 1 had a cumulative token budget; its results keep this label.
         category, code, summary = (
             "token_budget",
             code or "token_budget_exhausted",

@@ -50,8 +50,8 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
         rows = [
             f"Subagents: {state} · Harness agents",
             "Each model may delegate self-contained tasks to parallel subagents of",
-            "the same model. They share its workspace, tools, token budget, and",
-            "phase time; only their reports and changed files return to the lead.",
+            "the same model. They share its workspace, tools, and phase time;",
+            "only their reports and changed files return to the lead.",
             "",
         ]
         fields = [

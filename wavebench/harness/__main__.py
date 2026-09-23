@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .commands import Dispatcher, parse_command
+from .commands import VERBS, Dispatcher, parse_command
 from .config import Limits
 from .runtime import Runtime
 from .workspace import Workspace
@@ -23,30 +23,36 @@ async def dispatch_cli(args) -> int:
     try:
         if args.json:
             data = json.load(sys.stdin)
-            commands = data if isinstance(data, list) else [data]
+            calls = []
+            for item in data if isinstance(data, list) else [data]:
+                if not isinstance(item, dict):
+                    calls.append(
+                        {"name": None, "arguments": {}, "error": "each command must be an object"}
+                    )
+                    continue
+                item = dict(item)
+                verb = item.pop("command", None) or item.pop("tool", None)
+                calls.append({"name": VERBS.get(verb, verb), "arguments": item})
         elif args.command and args.command[0] == "parallel":
-            commands = []
+            calls = []
             for text in args.command[1:]:
                 try:
-                    commands.append(parse_command(text))
+                    calls.append(parse_command(text))
                 except ValueError as exc:
-                    commands.append({"invalid": str(exc)})
+                    calls.append({"name": None, "arguments": {}, "error": str(exc)})
         else:
             import shlex
 
-            command = parse_command(shlex.join(args.command))
-            if command["command"] == "write":
-                command["content"] = sys.stdin.read(8 * 1024 * 1024 + 1)
-            elif command["command"] in {"edit", "done"}:
+            call = parse_command(shlex.join(args.command))
+            if call["name"] == "write_file":
+                call["arguments"]["content"] = sys.stdin.read(8 * 1024 * 1024 + 1)
+            elif call["name"] in {"edit_file", "submit"}:
                 data = json.load(sys.stdin)
                 if not isinstance(data, dict):
                     raise ValueError("stdin must be a JSON object")
-                command.update(data)
-            commands = [command]
-        calls = [
-            {"id": f"cli-{index}", "arguments": command}
-            for index, command in enumerate(commands, 1)
-        ]
+                call["arguments"].update(data)
+            calls = [call]
+        calls = [{"id": f"cli-{index}", **call} for index, call in enumerate(calls, 1)]
         results = await dispatcher.batch(calls)
         print(
             json.dumps(
@@ -73,7 +79,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         nargs="*",
-        help="ls, read PATH [START:END], write PATH (stdin), edit PATH (JSON old/new stdin), delete PATH [--recursive], lint, parallel COMMAND..., done (JSON launch stdin)",
+        help="ls [PATH], read PATH [START:END], write PATH (stdin), edit PATH (JSON old_text/new_text on stdin), delete PATH, lint, parallel COMMAND..., submit (JSON runtime/entry on stdin)",
     )
     args, extra = parser.parse_known_args()
     args.command.extend(extra)

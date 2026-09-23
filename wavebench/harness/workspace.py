@@ -25,6 +25,20 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")[:60] or "project"
 
 
+def near_miss(content: str, old: str) -> str:
+    """A short hint for an edit whose old text is absent, without echoing the file."""
+    if "\\n" in old and old.replace("\\n", "\n") in content:
+        return "old_text contains escaped \\n sequences; use real line breaks."
+    if " ".join(old.split()) in " ".join(content.split()):
+        return "It matches if whitespace is ignored; copy the file's exact indentation and line breaks."
+    first = next((line.strip() for line in old.splitlines() if line.strip()), "")
+    if first:
+        for number, line in enumerate(content.splitlines(), 1):
+            if line.strip() == first:
+                return f"Its first line matches line {number}, but the following text differs; read the file for its current content."
+    return "Read the file for its current content."
+
+
 class Workspace:
     def __init__(self, root: Path | str):
         if sys.platform != "linux":
@@ -119,6 +133,43 @@ class Workspace:
                 entries.append({"name": name, "type": kind, "bytes": info.st_size})
             return entries
 
+    def tree(self, path: str = ".", limit: int = 1000) -> dict:
+        """Every file below path with its size and line count, depth first."""
+        files: list[dict] = []
+
+        def walk(fd: int, prefix: str, depth: int) -> None:
+            if depth > 128:
+                raise ValueError("workspace directory depth budget exceeded")
+            for name in sorted(os.listdir(fd)):
+                if len(files) > limit:
+                    return
+                if name == ".wb" and depth == 0 and not prefix:
+                    continue
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                relative = f"{prefix}{name}"
+                if stat.S_ISDIR(info.st_mode):
+                    child = os.open(name, DIRECTORY, dir_fd=fd)
+                    try:
+                        walk(child, relative + "/", depth + 1)
+                    finally:
+                        os.close(child)
+                elif stat.S_ISREG(info.st_mode):
+                    lines = None
+                    if info.st_size <= 2 * 1024 * 1024:
+                        file = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                        with os.fdopen(file, "rb") as stream:
+                            data = stream.read()
+                        lines = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+                    files.append({"path": relative, "bytes": info.st_size, "lines": lines})
+                else:
+                    files.append({"path": relative, "bytes": info.st_size, "lines": None})
+
+        parts = self.parts(path)
+        base = "/".join(parts) + "/" if parts else ""
+        with self.directory(parts) as fd:
+            walk(fd, base, len(parts))
+        return {"files": files[:limit], "truncated": len(files) > limit}
+
     def _size(
         self, fd: int, *, include_runtime: bool = False, limit: int | None = None, depth: int = 0
     ) -> int:
@@ -193,13 +244,27 @@ class Workspace:
                         pass
         return {"path": path, "bytes": len(data)}
 
-    def edit(self, path: str, old: str, new: str) -> dict:
+    def edit(self, path: str, old: str, new: str, replace_all: bool = False) -> dict:
         if not isinstance(old, str) or not old or not isinstance(new, str):
-            raise ValueError("edit requires nonempty old and string new")
+            raise ValueError("edit requires nonempty old text and string new text")
         content = self.read(path)
-        if content.count(old) != 1:
-            raise ValueError("edit must match exactly once; file unchanged")
-        return self.write(path, content.replace(old, new, 1))
+        count = content.count(old)
+        if count == 0:
+            raise ValueError(
+                f"old_text was not found in {path}; file unchanged. {near_miss(content, old)}"
+            )
+        if count > 1 and not replace_all:
+            lines = []
+            start = content.find(old)
+            while start >= 0 and len(lines) < 8:
+                lines.append(str(content.count("\n", 0, start) + 1))
+                start = content.find(old, start + 1)
+            raise ValueError(
+                f"old_text occurs {count} times in {path} (lines {', '.join(lines)}); file "
+                "unchanged. Include more surrounding lines to make it unique, or set replace_all."
+            )
+        result = self.write(path, content.replace(old, new))
+        return {**result, "replacements": count}
 
     def delete(self, path: str, recursive: bool = False) -> dict:
         def remove(parent: int, name: str) -> None:

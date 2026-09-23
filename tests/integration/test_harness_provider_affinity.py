@@ -16,6 +16,8 @@ from wavebench.harness.session import HarnessSession
 from wavebench.harness.transport import TurnError, call_conversation
 from wavebench.harness.workspace import allocate_run
 
+from ..harness_calls import tool_call
+
 MODEL = "google/gemini-3.8-flash"
 SIGNATURE = {
     "index": 0,
@@ -38,14 +40,7 @@ def tool(provider, command, call_id):
         "choices": [
             {
                 "delta": {
-                    "tool_calls": [
-                        {
-                            "index": 0,
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": "wb", "arguments": json.dumps(command)},
-                        }
-                    ],
+                    "tool_calls": [tool_call(call_id, command)],
                     "reasoning_details": [{**SIGNATURE, "id": call_id}],
                 },
                 "finish_reason": "tool_calls",
@@ -132,7 +127,7 @@ async def test_gemini_keeps_provider_and_signatures_through_http_and_stream_retr
         await session.build()
     assert session.generation == "submitted"
     assert len(requests) == 5 and len(session.turns) == 4
-    assert session.budget_tokens == 430
+    assert session.usage()["total_tokens"] == 430
     assert session.dispatcher.tool_usage == {"calls": 3, "failures": 0}
     assert session.result()["harness"]["gemini_provider"] == provider
     assert requests[0]["provider"] == {"require_parameters": True}
@@ -180,7 +175,7 @@ async def test_provider_mismatch_does_not_execute_tools_or_change_binding(
     assert session.gemini_provider == "Google"
     assert session.dispatcher.tool_usage["calls"] == 1
     assert not (session.workspace.root / "wrong.py").exists()
-    assert session.budget_tokens == 220
+    assert session.usage()["total_tokens"] == 220
     assert session.result()["failure"]["diagnostics"]["pinned_provider"] == "Google"
 
 
@@ -201,7 +196,7 @@ async def test_unknown_initial_gemini_provider_cannot_start_tool_history(
         await session.build()
     assert session.result()["failure"]["code"] == "provider_identity_missing"
     assert session.dispatcher.tool_usage["calls"] == 0
-    assert session.budget_tokens == 110
+    assert session.usage()["total_tokens"] == 110
     assert "private prompt" not in json.dumps(session.result()["failure"])
 
 

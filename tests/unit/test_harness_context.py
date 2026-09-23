@@ -23,6 +23,15 @@ def test_smaller_model_window_and_output_headroom():
     assert compaction_reason(100_000, 105_000, 128_000, 16_384) is None
 
 
+def test_large_output_allowance_does_not_force_early_compaction():
+    """Requests clamp output to the window, so a 64k allowance needs only useful headroom."""
+    assert compaction_reason(70_000, 72_000, 128_000, 64_000) is None
+    assert (
+        compaction_reason(108_000, 111_000, 128_000, 64_000)
+        == "model context window needs headroom"
+    )
+
+
 def transcript():
     return [
         {"role": "system", "content": "instructions"},

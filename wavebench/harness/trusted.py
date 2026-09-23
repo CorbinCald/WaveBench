@@ -10,6 +10,7 @@ import ast
 import http.server
 import json
 import os
+import re
 import resource
 import runpy
 import socket
@@ -29,18 +30,71 @@ def limits() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
 
 
+SCRIPT_TAG = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
+SCRIPT_TYPE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE)
+CLASSIC_TYPES = {"", "text/javascript", "application/javascript", "text/ecmascript"}
+JSON_TYPES = {"importmap", "application/json", "application/ld+json"}
+
+
+def node_check(source: str, kind: str) -> str | None:
+    """Syntax-check source through stdin; node --check skips ES-module .js files."""
+    result = subprocess.run(
+        ["/usr/bin/node", "--check", f"--input-type={kind}", "-"],
+        input=source,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    return None if result.returncode == 0 else result.stderr or "syntax check failed"
+
+
+def script_error(source: str, module: bool | None) -> str | None:
+    """None when the script parses; module=None accepts either an ES module or a script."""
+    if module is not None:
+        return node_check(source, "module" if module else "commonjs")
+    as_module = node_check(source, "module")
+    if as_module is None:
+        return None
+    as_script = node_check(source, "commonjs")
+    if as_script is None:
+        return None
+    return as_module if re.search(r"^\s*(?:import|export)\b", source, re.MULTILINE) else as_script
+
+
+def syntax_report(path: str, stderr: str, first_line: int = 1) -> str:
+    """path:line: error, plus Node's source and caret lines, without its stack trace."""
+    lines = stderr.splitlines()
+    error = next(
+        (line for line in lines if re.match(r"^\w*Error\b", line)), lines[-1] if lines else ""
+    )
+    location = re.match(r"^\[stdin\]:(\d+)", lines[0]) if lines else None
+    if not location:
+        return f"{path}: {error}"
+    report = f"{path}:{int(location.group(1)) + first_line - 1}: {error}"
+    snippet = [line for line in lines[1:3] if line.strip()]
+    return "\n".join([report, *("    " + line for line in snippet)])
+
+
 def lint() -> int:
     errors = 0
     checked = 0
+    scripts = 0
+
+    def problem(message: str) -> None:
+        nonlocal errors
+        print(message, flush=True)
+        errors += 1
+
     for directory, dirs, files in os.walk("/workspace", followlinks=False):
-        dirs[:] = [d for d in dirs if d not in {".wb", ".git", "__pycache__"}]
+        dirs[:] = sorted(d for d in dirs if d not in {".wb", ".git", "__pycache__", "node_modules"})
         for name in [*dirs, *files]:
             path = Path(directory, name)
             if path.is_symlink():
-                print(f"{path.relative_to('/workspace')}: symlinks are unsupported", flush=True)
-                errors += 1
-        for name in files:
+                problem(f"{path.relative_to('/workspace')}: symlinks are unsupported")
+        for name in sorted(files):
             path = Path(directory, name)
+            relative = str(path.relative_to("/workspace"))
             if path.is_symlink() or path.suffix not in {
                 ".py",
                 ".js",
@@ -58,21 +112,37 @@ def lint() -> int:
                 source = path.read_text(encoding="utf-8")
                 if path.suffix == ".py":
                     # compile catches syntax errors (including return outside function).
-                    compile(source, str(path.relative_to("/workspace")), "exec", ast.PyCF_ONLY_AST)
-                    compile(source, str(path.relative_to("/workspace")), "exec")
+                    compile(source, relative, "exec", ast.PyCF_ONLY_AST)
+                    compile(source, relative, "exec")
                 elif path.suffix in {".js", ".mjs", ".cjs"}:
-                    result = subprocess.run(
-                        ["/usr/bin/node", "--check", str(path)], timeout=10, check=False
-                    )
-                    errors += result.returncode != 0
+                    module = {".mjs": True, ".cjs": False}.get(path.suffix)
+                    if error := script_error(source, module):
+                        problem(syntax_report(relative, error))
                 elif path.suffix == ".json":
                     json.loads(source)
                 else:
                     HTMLParser().feed(source)
+                    for match in SCRIPT_TAG.finditer(source):
+                        attributes, body = match.group(1), match.group(2)
+                        if re.search(r"\bsrc\s*=", attributes, re.IGNORECASE) or not body.strip():
+                            continue
+                        kind = SCRIPT_TYPE.search(attributes)
+                        kind = kind.group(1).lower() if kind else ""
+                        first_line = source.count("\n", 0, match.start(2)) + 1
+                        if kind in JSON_TYPES:
+                            scripts += 1
+                            try:
+                                json.loads(body)
+                            except ValueError as exc:
+                                problem(f"{relative}:{first_line}: inline {kind} JSON: {exc}")
+                        elif kind == "module" or kind in CLASSIC_TYPES:
+                            scripts += 1
+                            if error := script_error(body, kind == "module"):
+                                problem(syntax_report(relative, error, first_line))
             except Exception as exc:
-                print(f"{path.relative_to('/workspace')}: {exc}", flush=True)
-                errors += 1
-    print(f"Checked {checked} files; {errors} error(s).", flush=True)
+                problem(f"{relative}: {exc}")
+    inline = f" and {scripts} inline script(s)" if scripts else ""
+    print(f"Checked {checked} files{inline}; {errors} error(s).", flush=True)
     return 1 if errors else 0
 
 

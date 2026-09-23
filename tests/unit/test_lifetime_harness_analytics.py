@@ -105,7 +105,6 @@ def test_weights_follow_work_and_include_unsuccessful_runs():
     assert total.totals["turns"].value == 9  # compaction is not added again
     assert total.totals["web_search"].value == 6
     assert total.totals["web_fetch"].measurement(3).value == 0
-    assert total.near_budget == 1
     assert data == original
 
 
@@ -136,16 +135,14 @@ def test_missing_and_partial_accounting_stays_unknown_or_lower_bound():
     assert old.totals["tools"].measurement(1).value is None
     assert old.totals["web_search"].measurement(1).value is None
     assert old.cost_per_pass.value is None
-    assert old.budget.mean is None
     assert old.latency() == (None, None)
     assert old.repair_known == 0
 
 
-def test_success_timing_repair_failure_categories_and_estimated_budgets():
+def test_success_timing_repair_and_failure_categories():
     repaired = result(repair="submitted", time_s=30)
     failed = result(status="failed", repair="abandoned", time_s=1000)
     failed["failure"] = {"category": "token_budget", "summary": "Token budget exhausted"}
-    failed["harness"]["budget"].update(used_tokens=9_500, remaining_tokens=500, estimated=True)
     failed["retries"] = [{"status": 429, "wait_s": 2}]
     cancelled = result(status="cancelled", time_s=2000)
     cancelled["failure"] = failed["failure"]  # cancellation takes precedence
@@ -156,15 +153,12 @@ def test_success_timing_repair_failure_categories_and_estimated_budgets():
     assert stats.first_pass == 1
     assert (stats.repairs, stats.recovered, stats.repair_known) == (2, 1, 4)
     assert stats.failures == {"Token budget": 1}
-    assert stats.budget.mean == pytest.approx((0.11 * 3 + 0.95) / 4)
-    assert stats.budget.estimated is True
-    assert stats.near_budget == 1
     assert stats.totals["retries"].value == 1
     _, many = aggregate_harness(history(*[{"Model": result(time_s=i)} for i in range(1, 101)]))
     assert many.latency() == (50.5, 95)
 
 
-def test_legacy_budgets_turns_and_top_level_cost_are_supported():
+def test_legacy_turns_and_top_level_cost_are_supported():
     saved = result()
     del saved["usage"]["api_turns"]
     del saved["usage"]["total_tokens"]
@@ -174,8 +168,6 @@ def test_legacy_budgets_turns_and_top_level_cost_are_supported():
     saved["cost"] = 0  # stored cost wins, including explicit free calls
     _, stats = aggregate_harness(history({"Model": saved}))
     assert stats.totals["turns"].value == 1
-    assert stats.budget.mean == 0.11
-    assert stats.budget.estimated is False
     assert stats.totals["total_tokens"].value == 1_100
     assert stats.cost_per_pass.value == 0
 
@@ -188,12 +180,10 @@ def test_invalid_measurements_do_not_poison_large_aggregates(value):
     saved["usage"]["prompt_tokens_details"]["cached_tokens"] = value
     saved["harness"]["tool_usage"]["failures"] = value
     saved["harness"]["timing"]["api_s"] = value
-    saved["harness"]["budget"]["limit_tokens"] = value
     _, stats = aggregate_harness(history({"Model": saved}))
     assert stats.speed.value is None
     assert stats.cache.value is None
     assert stats.tool_failures.value is None
-    assert stats.budget.mean is None
     assert stats.totals["completion_tokens"].measurement(1).value is None
     assert stats.cost_per_pass.value is None
 
