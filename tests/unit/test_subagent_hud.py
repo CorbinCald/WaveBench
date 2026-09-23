@@ -148,6 +148,73 @@ async def test_live_frame_renders_the_hud_within_the_terminal_height(delegating,
         assert "2/3" in frame
 
 
+def test_waiting_agents_are_counted_apart_from_running(clock):
+    tracker = ProgressTracker(1, {}, model_names=["lead"])
+    tracker.update_harness("lead", {"api_turns": 2}, 4.0)
+    tracker.update_harness_tools(
+        "lead",
+        {"calls": 5, "failures": 0},
+        subagents={"enabled": True, "spawned": 6, "active": 6, "cap": 12, "parallel": 4},
+    )
+    tracker.set_phase("lead", "delegating")
+    for number in range(1, 7):
+        tracker.update_subagent("lead", number, label=f"0{number}-part", status="waiting")
+    for number, status in enumerate(("thinking", "streaming", "tools", "linting"), 1):
+        tracker.update_subagent("lead", number, status=status, turn=1, max_turns=16)
+    rows = [plain(row) for row in tracker._format_subagent_rows("lead", 112)]
+    assert rows[0].startswith("    ↳ agents 4 running · 2 waiting · 0 done · cap 6/12")
+    assert "turn" not in rows[5] and "turn" not in rows[6]  # No request made yet.
+    assert "4/6" in plain(tracker._format_harness_row("lead", 112)).split()
+
+    # A queued agent's time restarts when it gains a slot, like its recorded time_s.
+    clock["now"] += 7.0
+    assert plain(tracker._format_subagent_rows("lead", 112)[6]).endswith("7.0s")
+    tracker.update_subagent("lead", 1, status="completed", finished=clock["now"])
+    tracker.update_subagent("lead", 5, status="thinking", turn=1)
+    clock["now"] += 2.0
+    rows = [plain(row) for row in tracker._format_subagent_rows("lead", 112)]
+    assert rows[0].startswith("    ↳ agents 4 running · 1 waiting · 1 done")
+    assert rows[1].endswith("7.0s") and rows[5].endswith("2.0s") and rows[6].endswith("9.0s")
+
+
+async def test_delegating_models_never_hide_other_models(clock, monkeypatch):
+    names = ["gpt6Astra", "claudeOpus5.5", "grok4.7", "gemini3.8Flash", "mimoV2.6Pro"]
+    tracker = ProgressTracker(len(names), {}, model_names=names)
+    for name, spawned in zip(names, (8, 3, 0, 0, 0), strict=True):
+        tracker.update_harness(name, {"api_turns": 3}, 6.0)
+        tracker.update_harness_tools(
+            name,
+            {"calls": 7, "failures": 0},
+            subagents={"enabled": True, "spawned": spawned, "active": spawned, "cap": 12},
+        )
+        tracker.set_phase(name, "delegating" if spawned else "building")
+        for number in range(1, spawned + 1):
+            tracker.update_subagent(name, number, label=f"0{number}-part", status="streaming")
+    frames = []
+
+    def capture(frame):
+        frames.append(plain(frame))
+        tracker._running = False
+
+    monkeypatch.setattr(tracker, "_flush_frame", capture)
+    # Six chrome lines plus five model rows leave the rest for the two HUDs.
+    for lines, heads, agents in ((40, 2, 11), (18, 2, 3), (13, 2, 0), (12, 1, 0), (11, 0, 0)):
+        monkeypatch.setattr(
+            module.shutil,
+            "get_terminal_size",
+            lambda *args, lines=lines: os.terminal_size((120, lines)),
+        )
+        frames.clear()
+        tracker._running = True
+        await tracker._animate()
+        frame = frames[0].splitlines()
+        assert len(frame) <= lines
+        assert all(any(f" {name} " in line for line in frame) for name in names), lines
+        assert not any(re.search(r"\+\d+ more…", line) for line in frame)
+        assert sum("↳ agents" in line for line in frame) == heads, lines
+        assert sum("-part " in line for line in frame) == agents, lines
+
+
 async def test_hud_rows_do_not_starve_other_models(delegating, monkeypatch):
     delegating._model_names = ["lead", "other"]
     delegating._total = 2

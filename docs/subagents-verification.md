@@ -60,6 +60,27 @@ numbers against the 10-request limit, output tokens, tool counts, and elapsed
 time. The block disappeared when the lead's next request began; the final table
 showed the AGENTS column with 3. The run passed at $0.080.
 
+## Queued agents and several delegating models
+
+A benchmark on 2026-09-22 with five models, subagents at 4 parallel and a cap
+of 12, and web search on ran with subagents switched off, so no HUD appeared.
+Rendering that configuration showed three faults the single-model check had
+missed: agents waiting for a slot were counted as running (`8 running`, `8/8`
+with four slots), the first delegating models' agent rows hid the models after
+them on a 24-line terminal (`+3 more…`), and the AGENTS column cut model names
+such as `claudeOpus5.5` to `claudeOp…` at 120 columns.
+
+Verified on 2026-09-22 through the real CLI in a PTY with isolated settings and
+a scripted offline model in place of the provider call (every other layer
+real): three models, 2 parallel slots, cap 6, one lead spawning five agents and
+one spawning three while the third built alone. At 110 × 22 the AGENTS column
+read `2/5` with `2 running · 3 waiting · 0 done`, waiting agents showed their
+queue time and restarted their clocks on gaining a slot, and all three models
+stayed visible in all 271 HUD frames. At 124 × 16 the two HUDs shared the spare
+rows (head, one agent, and `+N more agents…` each) with the solo model still
+visible in all 357 HUD frames, and no frame exceeded the terminal height. Both
+runs passed and lifetime analytics recorded `agents 8`.
+
 ## Adoption without a delegation hint
 
 A benchmark run on 2026-09-21 with four models and subagents enabled (cap 12)

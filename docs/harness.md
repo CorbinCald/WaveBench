@@ -397,21 +397,26 @@ wall time, which overlaps the lead's tool time. Their streamed output moves the
 live TK/S rate, and OUT TK settles
 as each subagent request completes. The live and final tables add an
 **AGENTS** column (**AGT** in narrow terminals) with the number of spawned
-agents; while agents run it shows `running/spawned`, such as `2/3`, and the
-phase shows `delegating`.
+agents; while agents run it shows agents holding a parallel slot over agents
+spawned, such as `2/5` while three more wait, and the phase shows `delegating`.
+When web search, page reads, and agents would truncate a model name on a wide
+terminal, the columns narrow their divider padding before shortening the name.
 
 While a model is delegating, a heads-up display appears beneath its row and
 disappears when the lead's next request begins:
 
 ```text
-⠹ gemini3.8Flash   delegating   5,382   ~179   $0.048   18   0.0%   18   2/3   0.0%   37.7s
-    ↳ agents 2 running · 1 done · cap 3/3 · lead turn 3/32 · ~37.1s/15m · 358k tk left
-    01-home-page     done ✓     turn 6/10     803 tk             5 tools   15.7s
-    02-about-page    streaming  turn 5/10     132 tk   ~59 tk/s  4 tools   15.7s
-    03-contact-page  streaming  turn 6/10   1,141 tk    ~6 tk/s  5 tools   15.7s
+⠼ alphaLead   delegating   600   ~123   $0.002   5   —   5   2/5   0.0%   13.9s
+    ↳ agents 2 running · 1 waiting · 2 done · cap 5/6 · lead turn 1/32 · ~13.6s/30m · 997k tk left
+    01-part-1 done ✓     turn 2/16      240 tk            1 tool     5.5s
+    02-part-2 done ✓     turn 2/16      240 tk            1 tool     6.6s
+    03-part-3 streaming  turn 1/16      448 tk   ~64 tk/s 0 tools    5.8s
+    04-part-4 streaming  turn 1/16      354 tk   ~60 tk/s 0 tools    4.8s
+    05-part-5 waiting                     0 tk            0 tools   11.3s
 ```
 
-The head line counts running, done, and failed agents in the current batch,
+The head line counts running agents, agents waiting for one of the
+`harness.subagent_parallel` slots, and done and failed agents in the current batch,
 shows spawned agents against the cap, the lead's turn within its phase limit,
 its estimated active time against the phase time limit, and the remaining
 total-token budget. Each agent row shows its label, phase (`waiting` for a
@@ -419,9 +424,12 @@ slot, `thinking`, `streaming`, `tools`, `linting`, `done ✓`, `failed ✗`,
 `turn limit`, `time limit`, `no budget`, or `cancelled`), request number
 against its turn limit, output tokens with the current request's streaming
 estimate, an interval-average output rate while it generates, completed tool
-calls, and elapsed time. Narrow terminals drop the rate, tools, turn, and token
-cells in that order; short terminals show as many agent rows as fit and then a
-`+N more agents…` line, so a delegating model is never hidden by its agents.
+calls, and elapsed time: a waiting agent's time since it was spawned, then its
+active time from when it gains a slot, matching its recorded `time_s`. Narrow
+terminals drop the rate, tools, turn, and token cells in that order. Every
+model's own row is placed first and the heads-up displays share the remaining
+terminal rows, smaller ones whole and the rest evenly; each shows as many agent
+rows as fit and then a `+N more agents…` line, so agents never hide a model.
 Lifetime analytics
 add an `agents` total. `harness.subagents` in each result records the setting,
 counts, aggregate subagent usage, and one record per run; each agent's

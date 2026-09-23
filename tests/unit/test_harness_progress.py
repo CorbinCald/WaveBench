@@ -437,6 +437,51 @@ def test_model_names_fit_beside_searches_and_page_reads(finished):
         assert len(header) == len(row) == 112
 
 
+@pytest.mark.parametrize("finished", [False, True])
+def test_model_names_fit_beside_searches_page_reads_and_agents(finished):
+    names = ["gpt6Astra", "claudeOpus5.5", "grok4.7", "gemini3.8Flash", "mimoV2.6Pro"]
+    results = {}
+    tracker = ProgressTracker(len(names), results, model_names=None if finished else names)
+    usage = {"api_turns": 5, "completion_tokens": 5961, "cost": 0.25}
+    tools = {"calls": 21, "failures": 2}
+    search = {"enabled": True, "calls": 7}
+    fetch = {"enabled": True, "calls": 14}
+    agents = {"enabled": True, "spawned": 3}
+    for name in names:
+        if finished:
+            results[name] = {
+                "status": "success",
+                "time_s": 50,
+                "usage": usage,
+                "harness": {
+                    "tool_usage": tools,
+                    "web_search": search,
+                    "web_fetch": fetch,
+                    "subagents": agents,
+                },
+            }
+        else:
+            tracker.update_harness(name, usage, 50)
+            tracker.update_harness_tools(
+                name, tools, web_search=search, web_fetch=fetch, subagents=agents
+            )
+            tracker.set_phase(name, "building")
+
+    header = plain(tracker._format_harness_header(112))
+    assert "AGT" in header and "READS" in header and "TIME" in header
+    columns = tracker._harness_columns(112)
+    gap = tracker._harness_column_gap(112)
+    for name in names:
+        row = plain(tracker._format_harness_row(name, 112, results.get(name)))
+        assert row[2:].startswith(name + " ")
+        assert len(header) == len(row) == 112
+        offset = 2
+        for key, width in columns:
+            # Every heading starts where its left-aligned value does.
+            assert header[offset] != " " and row[offset] != " ", (key, header, row)
+            offset += width + gap
+
+
 def test_disabled_search_and_older_results_do_not_add_a_column(tracker):
     tracker.update_harness_tools(
         "model",
