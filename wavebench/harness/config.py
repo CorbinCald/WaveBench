@@ -13,7 +13,7 @@ RETIRED_SETTINGS = frozenset(
 class Limits:
     build_turns: int = 50
     repair_turns: int = 20
-    turn_tokens: int = 64_000
+    turn_tokens: int = 128_000
     build_seconds: int = 1800
     repair_seconds: int = 300
     process_seconds: int = 60

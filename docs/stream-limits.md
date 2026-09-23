@@ -26,9 +26,10 @@ Settings use byte counts, so 1 MiB is `1048576`. Each minimum must be no greater
 than its corresponding maximum. For raw and output bytes, the effective allowance
 is `min(maximum, max(minimum, resolved_max_tokens * bytes_per_token))`. The resolved
 output allowance includes model/context limits and any affordable-token adjustment
-from a rejected HTTP request. With 64,000 resolved output tokens, defaults allow
-65,536,000 raw bytes and 4,096,000 generated UTF-8 bytes. Raising one limit never
-disables the other limits. Existing session/phase deadlines can expire sooner.
+from a rejected HTTP request. With 128,000 resolved output tokens (the default
+`harness.turn_tokens`), defaults allow 131,072,000 raw bytes and 8,192,000
+generated UTF-8 bytes. Raising one limit never disables the other limits.
+Existing session/phase deadlines can expire sooner.
 
 The default stream and active build limits are both 1,800 seconds (30 minutes).
 Each response is still bounded by the remaining active phase time; the repair
