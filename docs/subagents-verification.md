@@ -81,6 +81,33 @@ rows (head, one agent, and `+N more agents…` each) with the solo model still
 visible in all 357 HUD frames, and no frame exceeded the terminal height. Both
 runs passed and lifetime analytics recorded `agents 8`.
 
+## One agent line per model
+
+On 2026-09-22 the per-agent heads-up display was replaced with one line beneath
+each delegating model, after the multi-row display proved crowded in a live
+four-model run. Verified through the real CLI in a 124 × 24 PTY in the `pear`
+theme with isolated settings and a scripted offline model in place of the
+provider call: four models, two parallel slots, cap 6, one lead spawning three
+agents and one spawning one while two built alone, with one agent's stream
+paused for 13 seconds. Across 488 live frames every model stayed visible, no
+frame exceeded the terminal, and each agent kept one column for the whole run
+(`gameplay-engine`, `scene-render`, and `visual-ui` at columns 10, 40, and 70)
+through waiting, running, idle, done, and after both the delegation and the
+model finished. The lone agent showed its tokens and rate, the paused agent
+showed `idle 12s`, and all four models passed.
+
+Rendered frames received independent reviews from `google/gemini-3.8-flash`.
+The first design-intent review found that variable-width items shifted their
+neighbours as states changed and that collapsing a finished delegation to a
+count hid which agents ran; fixed-width slots and retained names addressed
+both. A second found the line vanished when the delegating model finished; it
+now lasts the run, with live delegations taking spare rows first. A blind
+review found the waiting `○` and idle `◌` hard to tell apart; idle now uses a
+yellow `●`, matching the app's existing attention glyph. Blind reviews also
+noted that agents do not align to the table's columns, which is the chosen
+one-line direction. The final design-intent review was rejected by the review
+helper as incomplete twice and was not repeated.
+
 ## Adoption without a delegation hint
 
 A benchmark run on 2026-09-21 with four models and subagents enabled (cap 12)

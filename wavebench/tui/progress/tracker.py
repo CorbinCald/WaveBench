@@ -18,7 +18,7 @@ import shutil
 import sys
 import textwrap
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 try:
     import termios
@@ -81,6 +81,17 @@ class ProgressTracker:
     HARNESS_SAMPLE_INTERVAL = 0.25
     # Subagent phases that hold one of the lead's parallel slots.
     SUBAGENT_RUNNING = frozenset({"thinking", "streaming", "tools", "linting"})
+    # A stream that stops producing output this long is shown as idle.
+    SUBAGENT_IDLE_SECONDS = 10.0
+    # How an agent ended, sized to the fixed slot that otherwise holds its bar.
+    SUBAGENT_ENDINGS: ClassVar[dict[str, str]] = {
+        "turn_limit": "no turns",
+        "time_limit": "timed out",
+        "budget_exhausted": "no budget",
+        "cancelled": "cancelled",
+        "failed": "failed",
+    }
+    SUBAGENT_SLOT = 9
 
     def __init__(
         self,
@@ -254,7 +265,6 @@ class ProgressTracker:
             self.unregister(model_name)
             self.finish_parsing(model_name)
             self._harness_samples.pop(model_name, None)
-            self._subagents.pop(model_name, None)
 
     def update_harness(
         self, model_name: str, usage: dict, api_seconds: float, *, budget: dict | None = None
@@ -268,7 +278,6 @@ class ProgressTracker:
             "web_search": previous.get("web_search", {}),
             "web_fetch": previous.get("web_fetch", {}),
             "subagents": previous.get("subagents", {}),
-            "phase": previous.get("phase", {}),
             "budget": budget if budget is not None else previous.get("budget", {}),
         }
 
@@ -276,21 +285,8 @@ class ProgressTracker:
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         metrics["budget"] = budget.copy()
 
-    def update_harness_phase(
-        self, model_name: str, *, turn: int, max_turns: int, active_s: float, max_s: float
-    ) -> None:
-        """Record the lead's phase turn and active-time position for the delegation HUD."""
-        metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
-        metrics["phase"] = {
-            "turn": turn,
-            "max_turns": max_turns,
-            "active_s": active_s,
-            "max_s": max_s,
-            "updated": time.monotonic(),
-        }
-
     def update_subagent(self, model_name: str, number: int, **fields: Any) -> None:
-        """Publish one subagent's live state; the batch clears at the lead's next turn."""
+        """Publish one subagent's live state; its model's agent line lasts for the run."""
         agents = self._subagents.setdefault(model_name, {})
         now = time.monotonic()
         state = agents.setdefault(
@@ -302,26 +298,24 @@ class ProgressTracker:
                 "max_turns": 0,
                 "output_tokens": 0,
                 "settled_tokens": 0,
-                "tool_calls": 0,
-                "tool_failures": 0,
-                "error": None,
-                "started": now,
-                "finished": None,
+                "active": now,
                 "sample_time": now,
                 "sample_tokens": 0,
                 "rate": None,
             },
         )
-        if state["status"] == "waiting" and fields.get("status") in self.SUBAGENT_RUNNING:
-            # Time a queued agent from when it gains a slot, like its recorded time_s.
-            state["started"] = now
+        if fields.get("status", state["status"]) != state["status"] or (
+            fields.get("output_tokens", 0) > state["output_tokens"]
+        ):
+            # New output or a phase change is activity; a silent stream turns idle.
+            state["active"] = now
         if "turn" in fields and fields["turn"] != state["turn"]:
             # A new request streams from zero; never count the settled turn as a burst.
             state.update(sample_time=now, sample_tokens=0, rate=None)
         state.update(fields)
 
     def _subagent_counts(self, model_name: str) -> dict[str, int]:
-        """Agents in the current batch by state; waiting agents have no slot yet."""
+        """A model's agents by state; waiting agents have no slot yet."""
         counts = {"running": 0, "waiting": 0, "done": 0, "failed": 0}
         for state in self._subagents.get(model_name, {}).values():
             status = state["status"]
@@ -379,8 +373,6 @@ class ProgressTracker:
         active = self._active[model_name]
         self._wave_completed_chars += active["chars"]
         active.update(chars=0, last_chars=0, last_rate_time=0.0, smoothed_rate=0.0)
-        # The lead has read its agents' reports; their rows leave the display.
-        self._subagents.pop(model_name, None)
         metrics = self._harness.setdefault(model_name, {"usage": {}, "api_s": 0.0})
         now = time.monotonic()
         metrics.update(
@@ -899,107 +891,118 @@ class ProgressTracker:
             state.update(sample_time=now, sample_tokens=total)
         return state["rate"]
 
-    def _format_subagent_row(self, state: dict, inner_w: int, label_w: int) -> str:
+    @staticmethod
+    def _subagent_name(state: dict) -> str:
+        head, _, rest = state["label"].partition("-")
+        return rest if head.isdigit() and rest else state["label"]
+
+    def _subagent_chip(
+        self, number: int, state: dict, tick: int, name_w: int, *, slot: bool
+    ) -> str:
+        """One agent at a fixed width: state glyph, name, and a slot for its bar or outcome.
+
+        Every state fills the same width, so neighbours never shift as agents start,
+        stall, or finish.
+        """
         status = state["status"]
-        labels = {
-            "completed": "done ✓",
-            "failed": "failed ✗",
-            "turn_limit": "turn limit",
-            "time_limit": "time limit",
-            "budget_exhausted": "no budget",
-            "cancelled": "cancelled",
-        }
-        colors = {
-            "streaming": _styles.ACCENT,
-            "completed": S.GRN,
-            "failed": S.RED,
-            "cancelled": S.DIM,
-        }
-        color = colors.get(status, S.YEL if status in labels else S.DIM)
-        end = state["finished"] or time.monotonic()
-        tokens = state["settled_tokens"] + state["output_tokens"]
-        rate = self._subagent_rate(state)
-        turn = (
-            f"turn {state['turn']}/{state['max_turns']}"
-            if state["max_turns"] and state["turn"]
-            else ""
-        )
-        tools = state["tool_calls"]
-        # Status and elapsed time always fit; the label shrinks on narrow terminals.
-        label_w = max(4, min(label_w, inner_w - 4 - 1 - 10 - 1 - 6))
-        prefix = f"    {S.BOLD}{_truncate(state['label'], label_w):<{label_w}}{S.RST} "
-        cells = {
-            "status": f"{color}{_truncate(labels.get(status, status), 10):<10}{S.RST}",
-            "turn": f"{S.DIM}{turn:<10}{S.RST}",
-            "tokens": f"{S.DIM}{tokens:>7,} tk{S.RST}",
-            "rate": f"{_styles.ACCENT}{f'~{rate:,.0f} tk/s' if rate is not None else '':>10}{S.RST}",
-            "tools": f"{S.DIM}{f'{tools} tool' + ('s' if tools != 1 else ''):<8}{S.RST}",
-            "time": f"{S.DIM}{format_duration(end - state['started']):>6}{S.RST}",
-        }
-        # Drop the least essential cells first: rate, tools, turn, then tokens.
-        for drop in (None, "rate", "tools", "turn", "tokens"):
-            cells.pop(drop, None)
-            row = prefix + " ".join(cells.values())
-            if _vlen(row) <= inner_w:
-                return row
-        return _truncate(row, inner_w)
+        name = f"{_truncate(self._subagent_name(state), name_w):<{name_w}}"
+        used = 0
+        if state["max_turns"]:
+            # Requests used of the agent's limit, counting the one in progress.
+            used = math.ceil(6 * min(state["turn"], state["max_turns"]) / state["max_turns"])
+        bar = f"{S.DIM}{'▰' * used}{'▱' * (6 - used)}{S.RST}"
+        pad = " " * (self.SUBAGENT_SLOT - 6)
+        if status == "waiting":
+            glyph, name, tail = f"{S.DIM}○", f"{S.DIM}{name}{S.RST}", bar + pad
+        elif status == "completed":
+            glyph, name, tail = f"{S.GRN}✓", f"{S.DIM}{name}{S.RST}", bar + pad
+        elif status not in self.SUBAGENT_RUNNING:
+            ending = self.SUBAGENT_ENDINGS.get(status, status)[: self.SUBAGENT_SLOT]
+            glyph, tail = f"{S.RED}✗", f"{S.DIM}{ending}{S.RST}"
+            tail += " " * (self.SUBAGENT_SLOT - len(ending))
+        elif (
+            status == "streaming"
+            and (idle := time.monotonic() - state["active"]) >= self.SUBAGENT_IDLE_SECONDS
+        ):
+            label = f"idle {idle:.0f}s" if idle < 100 else f"idle {idle // 60:.0f}m"
+            glyph, tail = f"{S.YEL}●", f"{S.YEL}{label}{S.RST}"
+            tail += " " * (self.SUBAGENT_SLOT - len(label))
+        else:
+            color = _styles.ACCENT if status == "streaming" else S.DIM
+            glyph = f"{color}{_SPIN[(tick + number) % len(_SPIN)]}"
+            # A theme-tinted track keeps a running bar legible as one shape.
+            track = _styles.PHASE_GRADIENT[0] if _styles.PHASE_GRADIENT else S.DIM
+            tail = f"{_styles.ACCENT}{'▰' * used}{S.RST}{track}{'▱' * (6 - used)}{S.RST}{pad}"
+        return f"{glyph}{S.RST} {name}" + (f" {tail}" if slot else "")
 
-    def _subagent_row_budgets(self, names: list[str], spare: int) -> dict[str, int]:
-        """Share spare rows among delegation HUDs: small ones whole, the rest evenly."""
-        needs = {
-            name: 1 + len(self._subagents[name]) for name in names if self._subagents.get(name)
-        }
-        budgets = {}
-        for position, name in enumerate(sorted(needs, key=needs.__getitem__)):
-            budgets[name] = min(needs[name], max(0, spare) // (len(needs) - position))
-            spare -= budgets[name]
-        return budgets
+    def _format_subagent_line(self, name: str, inner_w: int, tick: int = 0) -> str | None:
+        """A delegating model's agents on one line beneath its row, fitted to the width.
 
-    def _format_subagent_rows(
-        self, name: str, inner_w: int, max_rows: int | None = None
-    ) -> list[str]:
-        """The delegation HUD: batch counts, lead phase position, and one row per agent."""
+        Agents keep their order and fixed-width slots for the whole run. As width
+        shrinks, names shorten, finished and then waiting agents fold into counts, and
+        the slots drop; the narrowest form is one glyph per agent, grouped by state,
+        with as many counts as fit. A lone running agent adds its output and rate.
+        """
         agents = self._subagents.get(name)
-        if not agents or (max_rows is not None and max_rows < 1):
-            return []
-        states = [agents[number] for number in sorted(agents)]
-        metrics = self._harness.get(name, {})
-        pool = metrics.get("subagents") or {}
+        if not agents:
+            return None
+        prefix = f"{S.DIM}  ╰{S.RST} "
+        width = inner_w - 4
         counts = self._subagent_counts(name)
-        parts = [f"{counts['running']} running"]
-        if counts["waiting"]:
-            parts.append(f"{counts['waiting']} waiting")
-        parts.append(f"{counts['done']} done")
-        if counts["failed"]:
-            parts.append(f"{counts['failed']} failed")
-        if pool.get("cap"):
-            parts.append(f"cap {pool.get('spawned', len(states))}/{pool['cap']}")
-        phase = metrics.get("phase") or {}
-        if phase:
-            active = phase["active_s"] + max(0.0, time.monotonic() - phase["updated"])
-            limit = phase["max_s"]
-            limit_s = f"{limit / 60:.0f}m" if limit >= 60 and limit % 60 == 0 else f"{limit:g}s"
-            parts.append(
-                f"lead turn {phase['turn']}/{phase['max_turns']} · "
-                f"~{format_duration(active)}/{limit_s}"
-            )
-        budget = self._harness_metrics(name)["budget"]
-        if budget.get("limit_tokens"):
-            remaining = budget.get("remaining_tokens", 0)
-            parts.append(
-                f"{'~' if budget.get('estimated') else ''}"
-                f"{self._compact_harness_number(remaining, 4)} tk left"
-            )
-        head = _truncate("↳ agents " + " · ".join(parts), max(1, inner_w - 4))
-        rows = [f"{S.DIM}    {head}{S.RST}"]
-        label_w = max(4, min(16, max(_vlen(state["label"]) for state in states)))
-        rows.extend(self._format_subagent_row(state, inner_w, label_w) for state in states)
-        if max_rows is not None and len(rows) > max_rows:
-            shown = rows[: max(1, max_rows - 1)]
-            hidden = len(states) - (len(shown) - 1)
-            shown.append(f"{S.DIM}      +{hidden} more agent{'s' if hidden != 1 else ''}…{S.RST}")
-            rows = shown[:max_rows]
-        return rows
+        live = counts["running"] + counts["waiting"] > 0
+        for fold_done, fold_waiting, name_w, slot in (
+            (False, False, 20, True),
+            (False, False, 12, True),
+            (True, False, 12, True),
+            (True, True, 12, True),
+            (True, True, 12, False),
+        ):
+            shown = [
+                (number, state)
+                for number, state in sorted(agents.items())
+                if not (fold_done and state["status"] == "completed")
+                and not (fold_waiting and state["status"] == "waiting")
+            ]
+            name_w = min(name_w, max((len(self._subagent_name(s)) for _, s in shown), default=0))
+            chips = []
+            if fold_done and counts["done"]:
+                done = f"{counts['done']} done"
+                if not live:
+                    done = f"{counts['done']} agent{'s' if counts['done'] != 1 else ''} done"
+                chips.append(f"{S.GRN}✓{S.RST} {S.DIM}{done}{S.RST}")
+            chips += [self._subagent_chip(n, s, tick, name_w, slot=slot) for n, s in shown]
+            if fold_waiting and counts["waiting"]:
+                chips.append(f"{S.DIM}○ {counts['waiting']} waiting{S.RST}")
+            line = ("   " if slot else "  ").join(chips).rstrip()
+            if _vlen(line) > width:
+                continue
+            if counts["running"] == 1:
+                state = next(s for s in agents.values() if s["status"] in self.SUBAGENT_RUNNING)
+                tokens = state["settled_tokens"] + state["output_tokens"]
+                rate = self._subagent_rate(state)
+                parts = [f"{self._compact_harness_number(tokens, 5)} tk"] if tokens else []
+                if rate:
+                    parts.append(f"~{rate:,.0f} tk/s")
+                detail = f"   {S.DIM}{' · '.join(parts)}{S.RST}" if parts else ""
+                if detail and _vlen(line + detail) <= width:
+                    line += detail
+            return prefix + line
+        # Narrowest: one glyph per agent, grouped by state like a progress strip.
+        marks = [f"{S.GRN}✓"] * counts["done"] + [f"{S.RED}✗"] * counts["failed"]
+        marks += [
+            f"{_styles.ACCENT}{_SPIN[(tick + number) % len(_SPIN)]}"
+            for number, state in sorted(agents.items())
+            if state["status"] in self.SUBAGENT_RUNNING
+        ]
+        marks += [f"{S.DIM}○"] * counts["waiting"]
+        for keys in (("done", "running", "waiting", "failed"), ("running", "waiting"), ()):
+            summary = " · ".join(f"{counts[key]} {key}" for key in keys if counts[key])
+            if len(marks) + 2 + len(summary) <= width:
+                gap = "  " if summary else ""
+                return prefix + f"{''.join(marks)}{S.RST}{gap}{S.DIM}{summary}{S.RST}"
+        if len(marks) > width:
+            marks = [*marks[: max(0, width - 1)], f"{S.DIM}…"]
+        return prefix + f"{''.join(marks)}{S.RST}"
 
     def finish_parsing(self, model_name: str) -> None:
         """Remove a model from the parsing state."""
@@ -1489,11 +1492,17 @@ class ProgressTracker:
 
                     model_rows.append((name, row.splitlines()))
 
-                # Every model's own rows come first; delegation HUDs share the rest.
-                hud_rows = self._subagent_row_budgets(
-                    [name for name, _ in model_rows if name not in self._results],
-                    max_model_rows - sum(len(rows) for _, rows in model_rows),
-                )
+                # Every model's own rows come first; agent lines take the rows left,
+                # live delegations before finished ones.
+                spare = max_model_rows - sum(len(rows) for _, rows in model_rows)
+                delegated = [name for name, _ in model_rows if self._subagents.get(name)]
+                live = {
+                    name
+                    for name in delegated
+                    if self._subagent_counts(name)["running"]
+                    or self._subagent_counts(name)["waiting"]
+                }
+                agent_lines = set(sorted(delegated, key=lambda n: n not in live)[: max(0, spare)])
                 visible = 0
                 hidden = 0
                 for position, (name, rows) in enumerate(model_rows):
@@ -1502,10 +1511,8 @@ class ProgressTracker:
                     if hidden or visible >= row_budget:
                         hidden += 1
                         continue
-                    rows = [
-                        *rows,
-                        *self._format_subagent_rows(name, inner_w, hud_rows.get(name, 0)),
-                    ]
+                    if name in agent_lines:
+                        rows = [*rows, self._format_subagent_line(name, inner_w, idx)]
                     if visible + len(rows) > row_budget:
                         hidden += 1
                         continue
