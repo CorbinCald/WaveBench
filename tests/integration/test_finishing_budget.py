@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -441,3 +443,116 @@ def test_reserve_includes_repeated_input_warning_response_and_tool_result():
     assert finish_reserve(80_000, 1024, 2000) == (
         2 * (80_000 + 512) + 2 * 1024 + input_growth(1024, 2000)
     )
+
+
+def fake_clock(monkeypatch, durations):
+    """Advance the controller's active-time clock by each model response's duration."""
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: clock.now, time=time.time)
+    )
+
+    def respond(requests):
+        clock.now += durations[len(requests) - 1]
+
+    return respond
+
+
+async def test_slow_responses_get_a_time_warning_before_the_phase_deadline(
+    session_factory, monkeypatch
+):
+    # MiMo V2.6 Pro: 303, 360 and 704 second responses used the 1,800 second build
+    # phase without a warning, and its streaming fourth response was discarded.
+    session = session_factory(total_tokens=1_000_000)
+    session.workspace.write("main.py", "print(42)\n")
+    elapse = fake_clock(monkeypatch, [303, 360, 704, 40])
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(json.loads(json.dumps(messages)))
+        elapse(requests)
+        if len(requests) < 4:
+            commands = [{"command": "write", "path": f"part{len(requests)}.py", "content": "X=1\n"}]
+        else:
+            commands = [{"command": "done", "runtime": "python", "entry": "main.py"}]
+        return response(messages, tools, commands, len(requests))
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.build()
+    assert session.generation == "submitted", session.error
+    assert "at most 32 model requests and 1800 active seconds" in requests[0][0]["content"]
+    assert all("[WaveBench budget" not in json.dumps(r) for r in requests[:3])
+    warning = requests[3][-1]["content"]
+    assert warning.startswith("[WaveBench budget warning]")
+    assert (
+        "About 433 active seconds remain in this phase; recent responses took up to "
+        "704 seconds, and a response still streaming at the limit is discarded." in warning
+    )
+    assert "The full finishing sequence no longer fits the estimate" in warning
+    [record] = warnings(session)
+    assert record["triggers"] == ["time"]
+    assert record["seconds_left"] == 433 and record["time_reserve_seconds"] == 1438
+    assert record["time_affordable"] is False
+
+
+async def test_time_running_low_after_a_token_warning_gets_one_reminder_per_phase(
+    session_factory, monkeypatch
+):
+    session = session_factory()
+    session.workspace.write("main.py", "print(42)\n")
+    elapse = fake_clock(monkeypatch, [500, 500, 20, 20])
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(json.loads(json.dumps(messages)))
+        elapse(requests)
+        if len(requests) < 4:
+            commands = [{"command": "read", "path": "main.py"}]
+        else:
+            commands = [{"command": "done", "runtime": "python", "entry": "main.py"}]
+        return response(messages, tools, commands, len(requests))
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.build()
+    assert session.generation == "submitted", session.error
+    assert [r["triggers"] for r in warnings(session)] == [["tokens"]]
+    assert requests[0][-1]["content"].startswith("[WaveBench budget warning]")
+    assert requests[1][-1]["role"] == "tool"
+    assert requests[2][-1]["content"].startswith(
+        "[WaveBench budget reminder] Active time is running low. 30 model requests remain "
+        "in this phase. About 800 active seconds remain in this phase"
+    )
+    assert "The finishing warning still applies" in requests[2][-1]["content"]
+    assert requests[3][-1]["role"] == "tool"
+    assert json.dumps(requests[3]).count("[WaveBench budget reminder]") == 1
+    notices = [r for r in session.budget_decisions if r["kind"] == "budget_notice"]
+    assert [(r["reason"], r["outcome"]) for r in notices] == [("time", "delivered")]
+
+
+async def test_final_request_repeats_the_submission_instruction(session_factory, monkeypatch):
+    # Gemini 3.8 Flash kept re-reading files after its warning until the turn limit.
+    session = session_factory(total_tokens=1_000_000, build_turns=3)
+    session.workspace.write("main.py", "print(42)\n")
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(json.loads(json.dumps(messages)))
+        final = (messages[-1].get("content") or "").startswith("[WaveBench budget reminder]")
+        commands = (
+            [{"command": "done", "runtime": "python", "entry": "main.py"}]
+            if final
+            else [{"command": "read", "path": "main.py"}]
+        )
+        return response(messages, tools, commands, len(requests))
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.build()
+    assert session.generation == "submitted", session.error
+    assert len(requests) == 3
+    assert [r["triggers"] for r in warnings(session)] == [["turns"]]
+    assert requests[1][-1]["content"].startswith("[WaveBench budget warning]")
+    assert requests[2][-1]["content"].startswith(
+        "[WaveBench budget reminder] This is the final model request in this phase; "
+        "no response follows its tool results."
+    )
+    assert "Call wb done alone with runtime and entry now" in requests[2][-1]["content"]

@@ -656,8 +656,11 @@ async def test_active_deadline_names_the_phase_and_time_limit(factory, monkeypat
     original = module.call_conversation
 
     async def model(*args, **kwargs):
-        last = args[3][-1]
-        if not repair or (last.get("role") == "user" and "run 1 failed" in last.get("content", "")):
+        # A low-time reminder may follow the repair request in a one-second phase.
+        repairing = any(
+            m.get("role") == "user" and "run 1 failed" in (m.get("content") or "") for m in args[3]
+        )
+        if not repair or repairing:
             await asyncio.sleep(2)
         return await original(*args, **kwargs)
 
@@ -740,7 +743,13 @@ async def test_compaction_then_build_and_repair_preserves_history_budget_and_two
     assert requests[0]["reasoning_effort"] == "high" and requests[0]["strict_reasoning"]
     assert requests[0]["cache_reuse"] is False
     resumed = conversations[session.model_id][0]
-    assert resumed[:2] == before[:2] and resumed[-2:] == before[-2:]
+    assert resumed[:2] == before[:2] and resumed[-3:-1] == before[-2:]
+    # Compaction restates the remaining limits after the protected interaction.
+    assert resumed[-1]["role"] == "user"
+    assert resumed[-1]["content"].startswith(
+        "[WaveBench budget status] Earlier conversation was summarized. "
+        "32 model requests remain in this phase."
+    )
     assert session.cache_policy.key == key
     assert session.budget_tokens == 5500 + 6 * 15
     result = session.result()

@@ -352,3 +352,4 @@ async def test_signature_rejection_is_specific_private_and_never_retried(
     if stream:
         assert caught.value.usage["total_tokens"] == 20
         assert caught.value.diagnostics["provider_error"]["retryable_empty_response"] is False
+        assert caught.value.diagnostics["provider_error"]["retryable_after_reasoning"] is False

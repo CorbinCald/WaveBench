@@ -155,12 +155,15 @@ async def test_budget_compaction_pays_cached_input_and_allows_real_tools(
             finish = "stop"
         elif len(calls) == 2:
             assert messages[:2] == before[:2]
-            # A small remaining budget may inject the finishing warning after
-            # compaction. The protected interaction must still be unchanged.
-            resumed = messages
-            if (messages[-1].get("content") or "").startswith("[WaveBench budget warning]"):
-                assert messages[-1]["role"] == "user"
-                resumed = messages[:-1]
+            # Compaction restates the controller's limits, or a small remaining
+            # budget sends the finishing warning, which already states them.
+            # The protected interaction must still be unchanged.
+            notice = messages[-1].get("content") or ""
+            assert messages[-1]["role"] == "user"
+            assert notice.startswith(("[WaveBench budget warning]", "[WaveBench budget status]"))
+            if notice.startswith("[WaveBench budget status]"):
+                assert "Earlier conversation was summarized. 6 model requests remain" in notice
+            resumed = messages[:-1]
             assert resumed[-2:] == before[-2:]
             message = tool_message("write-current", "write", path="main.py", content="print(42)\n")
             finish = "tool_calls"
@@ -317,6 +320,77 @@ async def test_affordable_compaction_keeps_finishing_work_possible_after_warning
     assert session.finishing
     assert session.compactions[0]["reserve_outcome"] == "preserved"
     assert session.messages[:2] == before[:2] and session.messages[-2:] == before[-2:]
+
+
+LEAKED_SUMMARY = (
+    ' to=wb  (jsonџьынџь待? no) \n{"command":"lint"}”】【\n\n'
+    ' to=wb  (json)\n{"command":"lint"}\n\n'
+    "## Handoff\nmain.py prints 42 and lint passed. Outstanding: submit with done."
+)
+
+
+async def test_compaction_restates_finishing_warning_and_drops_leaked_tool_calls(
+    session, monkeypatch
+):
+    # The Gemini 3.8 Flash failure: the one-time finishing warning was summarized
+    # away, and the compactor leaked tool-call syntax into the handoff.
+    history(session)
+    warning = {"role": "user", "content": "[WaveBench budget warning] Finish now."}
+    session.messages.insert(-2, warning)
+    session.finishing = True
+    session._finishing_warning = {"kind": "warning", "status": "received_response"}
+    session.budget_tokens = 715_000
+    session.turns.append(
+        {
+            "phase": "building",
+            "usage": {"prompt_tokens": 714_900, "completion_tokens": 100, "total_tokens": 715_000},
+        }
+    )
+    seen = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        seen.append(copy.deepcopy(messages))
+        if model_id == COMPACTION_MODEL:
+            return Turn(
+                {"role": "assistant", "content": LEAKED_SUMMARY},
+                {"prompt_tokens": 80_000, "completion_tokens": 100, "total_tokens": 80_100},
+                COMPACTION_MODEL,
+                "offline",
+                "stop",
+                {},
+            )
+        return Turn(
+            tool_message("submit", "done", runtime="python", entry="main.py"),
+            {"prompt_tokens": 3000, "completion_tokens": 20, "total_tokens": 3020},
+            model_id,
+            "Google",
+            "tool_calls",
+            {},
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.conversation()
+    assert session.descriptor["entry"] == "main.py"
+    resumed = seen[1]
+    summary = resumed[2]["content"]
+    assert "to=wb" not in summary and '{"command":"lint"}' not in summary
+    assert summary.endswith("Outstanding: submit with done.")
+    assert warning not in resumed
+    reminder = resumed[-1]["content"]
+    assert reminder.startswith(
+        "[WaveBench budget reminder] Earlier conversation was summarized. "
+        "6 model requests remain in this phase. About 1,800 active seconds remain"
+    )
+    assert "The finishing warning still applies" in reminder and "wb done alone" in reminder
+    record = session.compactions[0]
+    assert record["status"] == "completed"
+    assert record["leaked_tool_call_blocks_removed"] == 2
+    saved = json.loads((session.metadata / "compaction-001.json").read_text())
+    assert saved["response"]["content"] == LEAKED_SUMMARY
+    notices = [r for r in session.budget_decisions if r["kind"] == "budget_notice"]
+    assert [(r["reason"], r["outcome"], r["finishing"]) for r in notices] == [
+        ("compaction", "delivered", True)
+    ]
 
 
 async def test_provider_compaction_overrun_is_charged_without_increasing_budget(
