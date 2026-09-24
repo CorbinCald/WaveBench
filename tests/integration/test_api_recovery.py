@@ -39,6 +39,27 @@ async def test_hard_error_is_not_reissued_without_reasoning(monkeypatch, status)
     assert len(requests) == 1
 
 
+async def test_in_flight_credit_hold_is_retried_after_retry_after(monkeypatch):
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            body = {"error": {"code": 402, "metadata": {"reason": "in_flight_budget_exhausted"}}}
+            return web.json_response(body, status=402, headers={"Retry-After": "0"})
+        return web.json_response({"choices": [{"message": {"content": "settled"}}]})
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")).rstrip("/"))
+        result = await api.call_model_async(
+            session, "test-key", "test/model", "hello", reasoning_effort=None
+        )
+    assert result == "settled" and requests == 2
+
+
 async def test_catalog_failure_does_not_disable_later_resolution(monkeypatch):
     requests = 0
 

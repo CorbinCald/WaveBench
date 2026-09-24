@@ -66,6 +66,8 @@ def failure_record(
             code or "token_budget_exhausted",
             "Token budget exhausted",
         )
+    elif code == "credits_unavailable":
+        category, summary = "account", "OpenRouter credits unavailable"
     elif code in {
         "unsupported_tools",
         "reasoning_rejected",

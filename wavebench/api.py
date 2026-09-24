@@ -219,12 +219,24 @@ def _retry_wait_seconds(retry_after_header: str | None, attempt: int) -> float:
     return min(_MAX_RETRY_WAIT_S, 2.0 ** (attempt - 1))
 
 
+def _retryable(status: int, headers, body: str = "") -> bool:
+    """Transient statuses, plus OpenRouter's in-flight budget 402.
+
+    Running requests hold their worst-case cost until shortly after they finish,
+    so parallel models can briefly fill a low balance's in-flight budget. That 402
+    carries Retry-After and clears on its own; other 402s need more credits.
+    """
+    return status in _RETRYABLE_STATUSES or (
+        status == 402 and ("Retry-After" in headers or "in_flight_budget_exhausted" in body)
+    )
+
+
 @asynccontextmanager
 async def _request_with_retries(session, endpoint, headers, data, on_retry=None):
     """Retry rejected HTTP requests only; never replay a response-body failure."""
     for attempt in range(1, _MAX_RETRIES + 2):
         async with session.post(f"{API_URL}/{endpoint}", headers=headers, json=data) as response:
-            if response.status not in _RETRYABLE_STATUSES or attempt > _MAX_RETRIES:
+            if not _retryable(response.status, response.headers) or attempt > _MAX_RETRIES:
                 yield response
                 return
             await response.read()
@@ -741,7 +753,7 @@ async def call_model_streaming(
             wait_s = 0.0
             should_retry = False
             try:
-                if resp.status in _RETRYABLE_STATUSES and attempt <= _MAX_RETRIES:
+                if _retryable(resp.status, resp.headers) and attempt <= _MAX_RETRIES:
                     last_status = resp.status
                     last_err = await resp.text()
                     wait_s = _retry_wait_seconds(resp.headers.get("Retry-After"), attempt)

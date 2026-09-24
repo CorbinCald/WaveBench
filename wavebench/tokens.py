@@ -23,9 +23,36 @@ def count_tokens(value) -> int:
     return len(encoder().encode(text, disallowed_special=()))
 
 
+# Encrypted reasoning and signatures are opaque base64 that o200k splits at about
+# 1.5 bytes per token, while providers count that state near its original reasoning
+# size (xAI: ~4.7 bytes per token). Estimate it by length instead.
+OPAQUE_FIELDS = ("data", "signature")
+OPAQUE_BYTES_PER_TOKEN = 4
+
+
 def prompt_tokens(messages: list[dict], tools: list[dict]) -> int:
-    # Counting JSON also reserves space for roles, call IDs, schemas and signatures.
-    return count_tokens({"messages": messages, "tools": tools})
+    # Counting JSON also reserves space for roles, call IDs and schemas.
+    opaque = 0
+    view = []
+    for message in messages:
+        details = message.get("reasoning_details")
+        if isinstance(details, list):
+            cleared = []
+            for detail in details:
+                if isinstance(detail, dict):
+                    hidden = {
+                        key: ""
+                        for key in OPAQUE_FIELDS
+                        if isinstance(detail.get(key), str) and detail[key]
+                    }
+                    opaque += sum(
+                        math.ceil(len(detail[key]) / OPAQUE_BYTES_PER_TOKEN) for key in hidden
+                    )
+                    detail = {**detail, **hidden}
+                cleared.append(detail)
+            message = {**message, "reasoning_details": cleared}
+        view.append(message)
+    return count_tokens({"messages": view, "tools": tools}) + opaque
 
 
 def context_usage(usage: dict, cache_policy: str) -> dict:
