@@ -19,6 +19,21 @@ DIRECTORY = (
 )
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_PROJECT_BYTES = 128 * 1024 * 1024
+# write() stages content here, then renames it over the target.
+WRITE_TEMP = re.compile(r"\.write-[0-9a-f]{32}")
+
+
+def listdir(fd: int) -> list[str]:
+    """Names in a directory, read through a private open file description.
+
+    os.listdir(fd) reads through a dup, and every dup of the workspace root shares
+    one read position, so concurrent listings would split the entries between them.
+    """
+    own = os.open(".", DIRECTORY, dir_fd=fd)
+    try:
+        return os.listdir(own)
+    finally:
+        os.close(own)
 
 
 def safe_name(value: str) -> str:
@@ -123,10 +138,13 @@ class Workspace:
     def ls(self, path: str = ".") -> list[dict]:
         with self.directory(self.parts(path)) as fd:
             entries = []
-            for name in sorted(os.listdir(fd)):
-                if name == ".wb":
+            for name in sorted(listdir(fd)):
+                if name == ".wb" or WRITE_TEMP.fullmatch(name):
                     continue
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                try:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue  # A concurrent write or delete replaced it after listdir.
                 kind = "directory" if stat.S_ISDIR(info.st_mode) else "file"
                 if stat.S_ISLNK(info.st_mode):
                     kind = "blocked symlink"
@@ -140,29 +158,36 @@ class Workspace:
         def walk(fd: int, prefix: str, depth: int) -> None:
             if depth > 128:
                 raise ValueError("workspace directory depth budget exceeded")
-            for name in sorted(os.listdir(fd)):
+            for name in sorted(listdir(fd)):
                 if len(files) > limit:
                     return
-                if name == ".wb" and depth == 0 and not prefix:
+                if (name == ".wb" and depth == 0 and not prefix) or WRITE_TEMP.fullmatch(name):
                     continue
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 relative = f"{prefix}{name}"
-                if stat.S_ISDIR(info.st_mode):
-                    child = os.open(name, DIRECTORY, dir_fd=fd)
-                    try:
-                        walk(child, relative + "/", depth + 1)
-                    finally:
-                        os.close(child)
-                elif stat.S_ISREG(info.st_mode):
-                    lines = None
-                    if info.st_size <= 2 * 1024 * 1024:
-                        file = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-                        with os.fdopen(file, "rb") as stream:
-                            data = stream.read()
-                        lines = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
-                    files.append({"path": relative, "bytes": info.st_size, "lines": lines})
-                else:
-                    files.append({"path": relative, "bytes": info.st_size, "lines": None})
+                try:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode):
+                        child = os.open(name, DIRECTORY, dir_fd=fd)
+                        try:
+                            walk(child, relative + "/", depth + 1)
+                        finally:
+                            os.close(child)
+                    elif stat.S_ISREG(info.st_mode):
+                        lines = None
+                        if info.st_size <= 2 * 1024 * 1024:
+                            file = os.open(
+                                name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
+                            )
+                            with os.fdopen(file, "rb") as stream:
+                                data = stream.read()
+                            lines = data.count(b"\n") + (
+                                0 if not data or data.endswith(b"\n") else 1
+                            )
+                        files.append({"path": relative, "bytes": info.st_size, "lines": lines})
+                    else:
+                        files.append({"path": relative, "bytes": info.st_size, "lines": None})
+                except FileNotFoundError:
+                    continue  # A concurrent write or delete replaced it after listdir.
 
         parts = self.parts(path)
         base = "/".join(parts) + "/" if parts else ""
@@ -176,7 +201,7 @@ class Workspace:
         if depth > 128:
             raise ValueError("workspace directory depth budget exceeded")
         total = 0
-        for name in os.listdir(fd):
+        for name in listdir(fd):
             if name == ".wb" and not include_runtime:
                 continue
             try:

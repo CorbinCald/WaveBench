@@ -123,6 +123,29 @@ def call(call_id, name, **arguments):
     return {"id": call_id, "name": name, "arguments": arguments}
 
 
+def test_listing_while_another_call_rewrites_a_file(project):
+    """Parallel tool calls and subagents list files while a write renames its staged copy."""
+    workspace, _ = project
+    workspace.write("lib/value.py", "VALUE = 0\n")
+    stop = threading.Event()
+
+    def rewrite():
+        version = 0
+        while not stop.is_set():
+            version += 1
+            workspace.write("lib/value.py", f"VALUE = {version}\n")
+
+    writer = threading.Thread(target=rewrite)
+    writer.start()
+    try:
+        for _ in range(500):
+            assert [f["path"] for f in workspace.tree()["files"]] == ["lib/value.py"]
+            assert [entry["name"] for entry in workspace.ls("lib")] == ["value.py"]
+    finally:
+        stop.set()
+        writer.join()
+
+
 async def test_parallel_overlap_conflicts_and_every_result(project, monkeypatch):
     ws, metadata = project
     times = {}
