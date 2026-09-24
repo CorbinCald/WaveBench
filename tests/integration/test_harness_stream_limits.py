@@ -12,6 +12,7 @@ from aiohttp import web
 
 from wavebench import api
 from wavebench.harness.config import Limits
+from wavebench.harness.failure import failure_record
 from wavebench.harness.transport import StreamPolicy, StreamReader, TurnError, call_conversation
 from wavebench.tokens import count_tokens
 
@@ -212,6 +213,86 @@ async def test_rejected_response_body_is_bounded_and_not_exposed(monkeypatch):
     assert "private prompt" not in str(error.value)
     assert "sk-secret-local" not in str(error.value)
     assert len(str(error.value)) < 100
+
+
+def payment_required(reason, limit_source, headers=None):
+    # OpenRouter's documented 402 shape; the message is free text and stays private.
+    body = {
+        "error": {
+            "code": 402,
+            "message": "This request would exceed your available credits. sk-secret-local",
+            "metadata": {
+                "reason": reason,
+                "limit_source": limit_source,
+                "remedy_hint": "Retry after your in-flight requests settle.",
+            },
+        }
+    }
+    return web.json_response(body, status=402, headers=headers)
+
+
+COMPLETE = event({"content": "complete"}, finish_reason="stop") + b"data: [DONE]\n\n"
+
+
+async def test_in_flight_credit_hold_is_retried_once_it_settles(monkeypatch):
+    """Parallel models' worst-case holds can briefly fill a low balance's in-flight budget."""
+    sent = []
+    retries = []
+
+    async def handler(request):
+        sent.append((await request.json())["max_tokens"])
+        if len(sent) == 1:
+            return payment_required(
+                "in_flight_budget_exhausted", "openrouter_in_flight_budget", {"Retry-After": "0"}
+            )
+        return web.Response(body=COMPLETE, content_type="text/event-stream")
+
+    async with server(monkeypatch, handler) as client:
+        turn = await conversation(client, on_retry=lambda *args: retries.append(args))
+    assert turn.message["content"] == "complete"
+    assert sent == [64_000, 64_000]
+    assert [retry[0] for retry in retries] == [402]
+
+
+async def test_request_heavier_than_the_credit_budget_steps_down_then_reports_account(
+    monkeypatch,
+):
+    sent = []
+
+    async def handler(request):
+        sent.append((await request.json())["max_tokens"])
+        return payment_required("weight_exceeds_budget", "openrouter_credits")
+
+    async with server(monkeypatch, handler) as client:
+        with pytest.raises(TurnError) as error:
+            await conversation(client)
+    assert sent == [64_000, api.MAX_OUTPUT_TOKENS_FALLBACK]
+    assert error.value.failure_code == "credits_unavailable"
+    assert error.value.diagnostics == {
+        "http_status": 402,
+        "reason": "weight_exceeds_budget",
+        "limit_source": "openrouter_credits",
+    }
+    assert "sk-secret-local" not in str(error.value)
+    record = failure_record(error.value, phase="building")
+    assert record["category"] == "account"
+    assert record["summary"] == "OpenRouter credits unavailable"
+
+
+async def test_exhausted_credits_are_not_resent_and_free_text_reasons_are_dropped(monkeypatch):
+    sent = 0
+
+    async def handler(request):
+        nonlocal sent
+        sent += 1
+        return payment_required("Insufficient credits sk-secret-local", "openrouter_credits")
+
+    async with server(monkeypatch, handler) as client:
+        with pytest.raises(TurnError) as error:
+            await conversation(client)
+    assert sent == 1
+    assert error.value.diagnostics == {"http_status": 402, "limit_source": "openrouter_credits"}
+    assert "sk-secret-local" not in str(error.value)
 
 
 async def test_malformed_event_in_same_read_preserves_partial_output_estimate(monkeypatch):

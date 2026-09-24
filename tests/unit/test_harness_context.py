@@ -1,5 +1,7 @@
+import base64
 import copy
 import json
+import random
 
 import pytest
 
@@ -60,6 +62,31 @@ def transcript():
         {"role": "tool", "tool_call_id": "b", "content": "lint passed"},
         {"role": "user", "content": "Run 1 failed; repair it"},
     ]
+
+
+def test_encrypted_reasoning_counts_near_provider_size_not_as_text():
+    """xAI returned 296,631 bytes of encrypted reasoning for 63,632 reasoning tokens.
+
+    Tokenized as text it read as ~202k tokens and forced a needless compaction.
+    """
+    blob = base64.b64encode(random.Random(0).randbytes(222_474)).decode()
+    signature = base64.b64encode(random.Random(1).randbytes(3_000)).decode()
+    messages = [
+        {"role": "user", "content": "Build the level."},
+        {
+            "role": "assistant",
+            "content": "Writing the game.",
+            "reasoning_details": [
+                {"type": "reasoning.text", "text": "Plan the course.", "signature": signature},
+                {"type": "reasoning.encrypted", "data": blob},
+            ],
+        },
+    ]
+    before = copy.deepcopy(messages)
+    tokens = prompt_tokens(messages, [])
+    assert 63_632 < tokens < 80_000
+    assert compaction_reason(tokens, tokens, 500_000, 64_000) is None
+    assert messages == before
 
 
 def test_first_user_latest_full_agent_and_parallel_tool_results_preserved_exactly():

@@ -461,7 +461,8 @@ class HarnessSession:
         )
 
     def notice(self, kind: str, text: str, notes: list[str]) -> None:
-        notes.append(text)
+        if text:
+            notes.append(text)
         self.notices.append({"kind": kind, "phase": self.phase_name, "turn": len(self.turns) + 1})
 
     def limit_notices(
@@ -478,26 +479,22 @@ class HarnessSession:
         short = seconds_left - max(self.request_seconds[-3:], default=0.0) <= finish_seconds(
             self.request_seconds, max_seconds, self.limits.lint_seconds
         )
+        finish = not self.finishing and (turns_left <= FINISH_TURNS or short)
+        finish_now = " Finish now: make only essential fixes, run lint, and call submit."
         if compacted:
             self.notice(
                 "compaction",
                 f"[WaveBench] Earlier conversation was summarized above. {remaining}."
-                + (
-                    " Finish now: make only essential fixes, run lint, and call submit."
-                    if self.finishing
-                    else ""
-                ),
+                + (finish_now if self.finishing or finish else ""),
                 notes,
             )
-        if not self.finishing and (turns_left <= FINISH_TURNS or short):
+        if finish:
             self.finishing = True
             self.dispatcher.close_research("the phase is finishing")
             if turns_left > 1:
+                # A compaction notice this turn already states the limits and says to finish.
                 self.notice(
-                    "finishing",
-                    f"[WaveBench] {remaining}. Finish now: make only essential fixes, run lint, "
-                    "and call submit.",
-                    notes,
+                    "finishing", "" if compacted else f"[WaveBench] {remaining}.{finish_now}", notes
                 )
         elif self.dispatcher.research_available("web_search") or self.dispatcher.research_available(
             "web_fetch"

@@ -100,6 +100,18 @@ async def test_finishing_and_final_request_notices_arrive_in_order(factory, monk
     assert session.result()["harness"]["notices"] == session.notices
 
 
+async def test_compaction_on_the_finishing_turn_states_the_limits_once(factory):
+    session = factory(build_turns=5)
+    found = session.limit_notices("building", 2, 5, 1800, compacted=True)
+    assert found == [
+        "[WaveBench] Earlier conversation was summarized above. 3 requests and about 1,800 "
+        "seconds remain in this phase. Finish now: make only essential fixes, run lint, and "
+        "call submit."
+    ]
+    assert [n["kind"] for n in session.notices] == ["compaction", "finishing"]
+    assert session.finishing
+
+
 async def test_the_request_limit_ends_the_phase_with_its_name(factory, monkeypatch):
     session = factory(build_turns=4)
 

@@ -25,6 +25,19 @@ TRANSIENT_PROVIDER_CODES = frozenset(
 REASONING_MESSAGE_KEYS = frozenset({"role", "reasoning", "reasoning_details"})
 
 
+def payment_reason(body) -> dict:
+    """OpenRouter's 402 reason codes; identifiers only, never the provider's message."""
+    error = body.get("error") if isinstance(body, dict) else None
+    metadata = error.get("metadata") if isinstance(error, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: metadata[key]
+        for key in ("reason", "limit_source")
+        if isinstance(metadata.get(key), str) and re.fullmatch(r"[a-z_]{1,64}", metadata[key])
+    }
+
+
 def thought_signature_error(error) -> bool:
     """Recognize the provider's error without retaining its private response body."""
     if not isinstance(error, dict):
@@ -962,7 +975,8 @@ async def call_conversation(
                             "pinned_provider": gemini_provider,
                         },
                     )
-                retryable = response.status in api._RETRYABLE_STATUSES
+                waits = api._retryable(response.status, response.headers, error)
+                retryable = waits
                 if (
                     response.status == 400
                     and "reasoning" in error.lower()
@@ -973,23 +987,30 @@ async def call_conversation(
                 token_limit = (
                     api._credit_token_limit_from_error(error) if response.status == 402 else None
                 )
+                if token_limit is None and "weight_exceeds_budget" in error:
+                    # The hold scales with max_tokens; step down to the fallback allowance.
+                    token_limit = max(api.MAX_OUTPUT_TOKENS_FALLBACK, resolved // 2)
                 if token_limit and token_limit < resolved:
                     resolved = token_limit
                     retryable = True
                 if not retryable or request_index == api._MAX_RETRIES:
                     code, label = "http_error", f"HTTP {response.status}"
+                    diagnostics = {"http_status": response.status}
                     if "tool" in error.lower() and response.status in {400, 404, 422}:
                         code, label = "unsupported_tools", "unsupported tool calling"
                     elif "reasoning" in error.lower() and response.status == 400:
                         code, label = "reasoning_rejected", "reasoning configuration rejected"
+                    elif response.status == 402:
+                        code, label = "credits_unavailable", "HTTP 402 credits unavailable"
+                        diagnostics.update(payment_reason(error_body))
                     raise TurnError(
                         f"{label}; provider rejected the request",
                         failure_code=code,
-                        diagnostics={"http_status": response.status},
+                        diagnostics=diagnostics,
                     )
                 wait = (
                     api._retry_wait_seconds(response.headers.get("Retry-After"), request_index + 1)
-                    if response.status in api._RETRYABLE_STATUSES
+                    if waits
                     else 0
                 )
                 adjustments.update(max_tokens=resolved, reasoning=reasoning[reasoning_index])

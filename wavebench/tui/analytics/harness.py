@@ -83,6 +83,7 @@ FAILURE_LABELS = {
     "stream_limit": "Stream limit",
     "request_timeout": "Request timeout",
     "model_protocol": "Model / protocol",
+    "account": "Account / credits",
     "project_runtime": "Project runtime",
     "environment": "Environment",
     "unknown": "Unknown",
