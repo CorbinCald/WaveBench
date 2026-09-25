@@ -15,6 +15,13 @@ ruff check .
 ruff format --check .
 ```
 
+CI runs the default suite in parallel processes, so tests must not share state:
+write only under `tmp_path`, change environment variables or the working
+directory only through `monkeypatch`, bind servers to port 0, and never depend on
+test order. Mark any test that asserts on elapsed wall-clock time
+`@pytest.mark.serial`; CI runs those alone after the parallel pass. See "Writing
+tests" in `docs/CONTRIBUTING.md`.
+
 The default suite excludes paid API tests. Exercise interactive changes through
 the real terminal UI, using isolated temporary settings and outputs. Keep raw
 verification recordings in temporary files; concise, sanitized verification

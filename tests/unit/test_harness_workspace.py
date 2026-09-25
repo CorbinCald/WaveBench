@@ -146,6 +146,7 @@ def test_listing_while_another_call_rewrites_a_file(project):
         writer.join()
 
 
+@pytest.mark.serial  # asserts write start times 50 ms apart
 async def test_parallel_overlap_conflicts_and_every_result(project, monkeypatch):
     ws, metadata = project
     times = {}
@@ -410,6 +411,7 @@ async def test_batch_limit_returns_skipped_result_for_every_call(project):
     assert len(ws.ls()) == 2
 
 
+@pytest.mark.serial  # asserts two 100 ms writes overlap in time
 async def test_disjoint_file_io_overlaps_after_quota_admission(project, monkeypatch):
     ws, metadata = project
     intervals = []
