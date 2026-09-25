@@ -38,8 +38,8 @@ python -m pytest tests/characterization # contract tests for refactor seams
 python -m pytest -k streaming          # substring filter
 python -m pytest -x --lf               # stop on first failure; re-run last-failed
 python -m pytest --cov=wavebench       # coverage report (HTML in htmlcov/)
-python -m pytest -n 4 -m "not slow and not serial"  # CI's parallel pass (pytest-xdist)
-python -m pytest -m "serial and not slow"           # CI's serial pass: wall-clock tests
+python -m pytest -n 4 --dist worksteal -m "not slow and not serial"  # CI's parallel pass (pytest-xdist)
+python -m pytest -m "serial and not slow"                           # CI's serial pass: wall-clock tests
 ```
 
 The full suite normally takes tens of seconds on Linux. If your shell's default
