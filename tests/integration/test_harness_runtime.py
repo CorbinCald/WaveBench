@@ -27,7 +27,9 @@ async def runtime(tmp_path):
         pytest.skip("Linux and bwrap required for real sandbox subprocess tests")
     run = allocate_run(tmp_path, "runtime", "offline")
     ws, metadata = allocate_project(run, 1, "model")
-    rt = Runtime(ws, metadata, Limits(process_seconds=1, startup_seconds=1, lint_seconds=1))
+    # 1 s process and startup deadlines keep the deadline tests quick. Lint keeps its default
+    # budget: these tests check its output, and under parallel load it can take over 1 s.
+    rt = Runtime(ws, metadata, Limits(process_seconds=1, startup_seconds=1))
     await rt.preflight()
     yield rt
     await rt.close()
