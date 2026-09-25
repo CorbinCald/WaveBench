@@ -18,6 +18,9 @@ from wavebench.web_search import BraveSearch
 
 from ..harness_calls import native
 
+# Phase time limits are asserted against real elapsed seconds.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 async def factory(tmp_path, monkeypatch):

@@ -46,6 +46,13 @@ jobs:
           wb --help
           symphony --help
       # "not slow" keeps the live OpenRouter test (real API credits) out of CI.
-      - run: python -m pytest -m "not slow"
+      # -n 4 matches the runner's 4 vCPUs; "-n auto" can count physical cores instead.
+      - name: Tests (parallel)
+        run: python -m pytest -m "not slow and not serial" -n 4 --durations=20
+        env:
+          WAVEBENCH_REQUIRE_SANDBOX_TESTS: "1"
+      # Tests that assert on wall-clock time run alone, after the parallel pass.
+      - name: Tests (serial)
+        run: python -m pytest -m "serial and not slow" --durations=10
         env:
           WAVEBENCH_REQUIRE_SANDBOX_TESTS: "1"

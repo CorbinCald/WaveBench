@@ -15,6 +15,9 @@ from wavebench.harness.workspace import allocate_run
 
 from ..harness_calls import native
 
+# Phase time limits are asserted against real elapsed seconds.
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 async def factory(tmp_path, monkeypatch):

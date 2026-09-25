@@ -38,6 +38,8 @@ python -m pytest tests/characterization # contract tests for refactor seams
 python -m pytest -k streaming          # substring filter
 python -m pytest -x --lf               # stop on first failure; re-run last-failed
 python -m pytest --cov=wavebench       # coverage report (HTML in htmlcov/)
+python -m pytest -n 4 -m "not slow and not serial"  # CI's parallel pass (pytest-xdist)
+python -m pytest -m "serial and not slow"           # CI's serial pass: wall-clock tests
 ```
 
 The full suite normally takes tens of seconds on Linux. If your shell's default
@@ -135,6 +137,14 @@ together and where to look when changing specific behavior.
 - **Characterization tests** (`tests/characterization/`) — contract tests for
   public behavior at refactor seams (`core`, progress, menus). Prefer asserting
   state transitions and import compatibility over byte-for-byte ANSI output.
+- **Parallel safety** — CI runs tests in four processes with pytest-xdist, in no
+  fixed order. Write files only under `tmp_path`, change environment variables
+  and the working directory only through `monkeypatch` (or the fixtures below),
+  bind servers to port 0, and don't rely on another test having run first.
+- **Wall-clock tests** — mark any test that asserts on elapsed time, such as a
+  deadline, a timeout, or two operations overlapping, with `@pytest.mark.serial`
+  (a whole file: `pytestmark = pytest.mark.serial`). CI runs these alone after
+  the parallel pass, so CPU contention can't push them past their margins.
 
 Helpful fixtures in `tests/conftest.py`:
 

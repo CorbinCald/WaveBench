@@ -16,6 +16,9 @@ from wavebench.harness.failure import failure_record
 from wavebench.harness.transport import StreamPolicy, StreamReader, TurnError, call_conversation
 from wavebench.tokens import count_tokens
 
+# Deadlines and elapsed times are asserted with sub-second margins.
+pytestmark = pytest.mark.serial
+
 
 def event(delta=None, **fields):
     return (
