@@ -9,13 +9,34 @@ jobs:
   test:
     # Pinned so image upgrades are deliberate; ubuntu-latest moves to 26.04 in Oct-Nov 2026.
     runs-on: ubuntu-24.04
-    # Jobs take 2-4 minutes; a hung step fails here instead of at GitHub's 6-hour limit.
+    # Jobs take about a minute; a hung step, or a hung background apt install, fails here
+    # instead of at GitHub's 6-hour limit.
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12", "3.14"]
     steps:
+      # Only the tests need the sandbox packages, so apt installs them in the background
+      # while Python is set up; "Finish installing sandbox packages" waits for it.
+      - name: Start installing sandbox packages
+        run: |
+          # Skip the image's apt hooks. They refresh AppStream, command-not-found, PackageKit
+          # and login-message data that CI never reads, and needrestart's php-fpm restart
+          # stalled the apt step for 90 s whenever a library that php-fpm loads was upgraded.
+          cat > "$RUNNER_TEMP/apt-no-hooks.conf" <<'EOF'
+          #clear APT::Update::Pre-Invoke;
+          #clear APT::Update::Post-Invoke-Success;
+          #clear DPkg::Post-Invoke;
+          EOF
+          {
+            status=0
+            sudo apt-get -c "$RUNNER_TEMP/apt-no-hooks.conf" update &&
+              sudo apt-get -c "$RUNNER_TEMP/apt-no-hooks.conf" install -y --no-install-recommends \
+                bubblewrap nodejs apparmor-profiles || status=$?
+            echo "Finished after ${SECONDS}s in the background."
+            echo "$status" > "$RUNNER_TEMP/sandbox-packages.status"
+          } < /dev/null > "$RUNNER_TEMP/sandbox-packages.log" 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -31,19 +52,6 @@ jobs:
         run: uv pip install --system -e '.[dev]'
       - name: Prepare tokenizer vocabulary before offline tests
         run: python -c 'import tiktoken; tiktoken.get_encoding("o200k_base")'
-      - name: Install sandbox packages
-        run: |
-          sudo apt-get update
-          # Keep apt's needrestart hook from restarting preinstalled services CI never uses;
-          # a php8.3-fpm restart stalled this step for 90 s whenever a library it loads upgraded.
-          sudo env NEEDRESTART_SUSPEND=1 apt-get install -y --no-install-recommends \
-            bubblewrap nodejs apparmor-profiles
-      - name: Enable the packaged Bubblewrap AppArmor profile
-        run: |
-          if [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
-            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-          fi
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - run: ruff check .
       - run: ruff format --check .
       - name: Check installed launchers
@@ -51,10 +59,23 @@ jobs:
           wavebench --help
           wb --help
           symphony --help
+      - name: Finish installing sandbox packages
+        run: |
+          until [ -s "$RUNNER_TEMP/sandbox-packages.status" ]; do sleep 0.2; done
+          cat "$RUNNER_TEMP/sandbox-packages.log"
+          exit "$(cat "$RUNNER_TEMP/sandbox-packages.status")"
+      - name: Enable the packaged Bubblewrap AppArmor profile
+        run: |
+          if [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
+            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       # "not slow" keeps the live OpenRouter test (real API credits) out of CI.
       # -n 4 matches the runner's 4 vCPUs; "-n auto" can count physical cores instead.
+      # worksteal hands a worker's queued tests to idle workers, so slow tests don't
+      # leave one worker running alone at the end.
       - name: Tests (parallel)
-        run: python -m pytest -m "not slow and not serial" -n 4 --durations=20
+        run: python -m pytest -m "not slow and not serial" -n 4 --dist worksteal --durations=20
         env:
           WAVEBENCH_REQUIRE_SANDBOX_TESTS: "1"
       # Tests that assert on wall-clock time run alone, after the parallel pass.
