@@ -7,8 +7,8 @@ permissions:
   contents: read
 jobs:
   test:
-    # Pinned so image upgrades are deliberate; ubuntu-latest moves to 26.04 in Oct-Nov 2026.
-    runs-on: ubuntu-24.04
+    # Pinned so image upgrades are deliberate.
+    runs-on: ubuntu-26.04
     # Jobs take about a minute; a hung step, or a hung background apt install, fails here
     # instead of at GitHub's 6-hour limit.
     timeout-minutes: 10
@@ -19,6 +19,8 @@ jobs:
     steps:
       # Only the tests need the sandbox packages, so apt installs them in the background
       # while Python is set up; "Finish installing sandbox packages" waits for it.
+      # Ubuntu 26.04's apparmor package already ships and loads the Bubblewrap profile
+      # that the sandbox tests need (see docs/harness.md).
       - name: Start installing sandbox packages
         run: |
           # Skip the image's apt hooks. They refresh AppStream, command-not-found, PackageKit
@@ -33,7 +35,7 @@ jobs:
             status=0
             sudo apt-get -c "$RUNNER_TEMP/apt-no-hooks.conf" update &&
               sudo apt-get -c "$RUNNER_TEMP/apt-no-hooks.conf" install -y --no-install-recommends \
-                bubblewrap nodejs apparmor-profiles || status=$?
+                bubblewrap nodejs || status=$?
             echo "Finished after ${SECONDS}s in the background."
             echo "$status" > "$RUNNER_TEMP/sandbox-packages.status"
           } < /dev/null > "$RUNNER_TEMP/sandbox-packages.log" 2>&1 &
@@ -64,12 +66,6 @@ jobs:
           until [ -s "$RUNNER_TEMP/sandbox-packages.status" ]; do sleep 0.2; done
           cat "$RUNNER_TEMP/sandbox-packages.log"
           exit "$(cat "$RUNNER_TEMP/sandbox-packages.status")"
-      - name: Enable the packaged Bubblewrap AppArmor profile
-        run: |
-          if [ -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict ]; then
-            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-          fi
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       # "not slow" keeps the live OpenRouter test (real API credits) out of CI.
       # -n 4 matches the runner's 4 vCPUs; "-n auto" can count physical cores instead.
       # worksteal hands a worker's queued tests to idle workers, so slow tests don't

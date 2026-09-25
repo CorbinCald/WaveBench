@@ -17,7 +17,8 @@ jobs:
   assign-wavebench-project:
     name: Assign synced Linear issue to the configured project
     if: vars.LINEAR_SYNC_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.event.issue.state == 'open')
-    runs-on: ubuntu-latest
+    # Pinned to the same image as CI.
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     env:
       LINEAR_TEAM_KEY: ${{ secrets.LINEAR_TEAM_KEY }}

@@ -166,8 +166,14 @@ fabricated second attempt.
 
 Ubuntu's AppArmor policy may require enabling the distribution's Bubblewrap
 profile. A preflight error such as `bwrap: loopback: Failed RTM_NEWADDR: Operation
-not permitted` can indicate this restriction. On Ubuntu 24.04, an administrator
-can install and load the packaged profile:
+not permitted` can indicate this restriction. On Ubuntu 26.04, the `apparmor`
+package already ships and loads this profile, so the packages are enough:
+
+```bash
+sudo apt-get install bubblewrap nodejs python3-pip
+```
+
+On Ubuntu 24.04, an administrator can install and load the packaged profile:
 
 ```bash
 sudo apt-get install bubblewrap nodejs python3-pip apparmor-profiles
@@ -175,7 +181,8 @@ sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /e
 sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 ```
 
-Our Ubuntu CI loads this profile before requiring the real sandbox tests.
+Our CI runs on Ubuntu 26.04 with its default AppArmor policy and requires the
+real sandbox tests.
 The profile allows Bubblewrap's namespace setup and removes capabilities from
 its children. See [AppArmor's profile](https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/extras/bwrap-userns-restrict)
 and [Ubuntu's namespace policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/).
