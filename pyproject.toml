@@ -21,7 +21,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov",
     "pytest-xdist>=3.8",
-    "ruff==0.16.6",
+    "ruff==0.16.9",
     "pre-commit",
 ]
 
