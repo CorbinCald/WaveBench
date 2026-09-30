@@ -3,6 +3,11 @@
 September 22, 2026. Harness version 2 replaces the cumulative token budget and the
 single multiplexed `wb` tool with request/time limits and small plain-text tools.
 
+September 30 update: the automatic effort reduction described below was removed.
+Response retries now preserve the selected effort; persistent reasoning-only
+truncation fails with **Output allowance exhausted**. The evidence below records
+the earlier behavior; see the current [recovery policy](harness.md).
+
 ## What the recent runs showed
 
 94 model results from September 10–22 passed 56 times (60%). Most failures came

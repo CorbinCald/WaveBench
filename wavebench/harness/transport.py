@@ -244,28 +244,6 @@ def recovery(exc: BaseException) -> tuple[str, str | None] | None:
     return None
 
 
-def reasoning_only(exc: BaseException) -> bool:
-    """A truncated response that produced nothing but reasoning."""
-    sizes = (getattr(exc, "diagnostics", None) or {}).get("bytes") or {}
-    return (
-        getattr(exc, "failure_code", None) == "output_truncated"
-        and sizes.get("reasoning", 0) > 0
-        and not sizes.get("content")
-        and not sizes.get("tool_arguments")
-    )
-
-
-def lower_effort(model_id: str, effort: str | None) -> str | None:
-    """The next reasoning effort below the one this model actually receives, if any."""
-    supported = api._supported_efforts(model_id)
-    if not supported or effort not in api._EFFORT_ORDER:
-        return None
-    order = api._EFFORT_ORDER
-    current = order.index(api._map_effort(effort, supported))
-    below = [level for level in supported if level in order and order.index(level) < current]
-    return max(below, key=order.index) if below else None
-
-
 @dataclass(frozen=True)
 class StreamPolicy:
     """Effective byte guards for one resolved output allowance, not token usage."""
