@@ -46,8 +46,6 @@ from .transport import (
     GEMINI_PROVIDER_ROUTES,
     TurnError,
     capability,
-    lower_effort,
-    reasoning_only,
     recovery,
 )
 from .workspace import allocate_project
@@ -788,15 +786,7 @@ class HarnessSession:
                         "turn": len(self.turns),
                         "failure_code": exc.failure_code,
                     }
-                    lower = (
-                        lower_effort(self.model_id, self.reasoning_effort)
-                        if reasoning_only(exc)
-                        else None
-                    )
-                    if lower:
-                        # Reasoning alone filled the output allowance; ask for less of it.
-                        record["reasoning_effort"] = {"from": self.reasoning_effort, "to": lower}
-                        self.reasoning_effort = lower
+                    # Recovery preserves the selected effort; exhaustion fails after retries.
                     if note:
                         self.messages.append({"role": "user", "content": note})
                     self.recoveries.append(record)

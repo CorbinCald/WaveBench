@@ -732,10 +732,11 @@ responses, and each subagent two; every retry is a model request recorded in
 - **Truncated output, invalid JSON tool arguments, or too many tool calls** add
   a short `[WaveBench]` note asking for smaller steps, for example writing a very
   large file with several `write_file` calls using `append`.
-- **A response that spent its whole output allowance on reasoning** also lowers
-  the session's reasoning effort one level for later requests, for example
-  `max` to `xhigh`, since repeating the same request would fail the same way.
-  `harness.reasoning_effort` records the configured and final effort.
+- **Reasoning effort stays fixed during response retries**, including when a
+  response spends its whole output allowance on reasoning. Persistent truncation
+  fails with **Output allowance exhausted** after the retry allowance is used;
+  the phase's request/time limits can stop it sooner. `harness.reasoning_effort`
+  records the configured and final effort; recovery never lowers it.
 
 If a model sends a text reply without calling `submit`, the controller gives it
 one reminder per phase. Only an actual, valid `submit` call submits the project.

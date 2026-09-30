@@ -14,6 +14,7 @@ from wavebench.harness.config import Limits
 from wavebench.harness.session import HarnessSession
 from wavebench.harness.workspace import allocate_run
 from wavebench.tokens import prompt_tokens
+from wavebench.tui.progress import ProgressTracker
 
 from ..harness_calls import tool_call
 
@@ -463,25 +464,30 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
         assert result["usage"]["total_tokens"] is None
 
 
-async def test_reasoning_that_fills_the_output_steps_the_effort_down(sessions, monkeypatch):
-    """The Claude Opus 5.5 failure: at max effort, a turn spent all 64,000 tokens reasoning."""
-    model = "anthropic/claude-opus-5.5"
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5"])
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_reasoning_exhaustion_preserves_effort_and_fails_after_retries(
+    sessions, monkeypatch, model, persistent
+):
+    """Reasoning-only exhaustion must never turn a max-effort benchmark into a lower one."""
     monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1_000_000)
     efforts = []
 
     async def handler(request):
         data = await request.json()
         efforts.append(data["reasoning"]["effort"])
-        if len(efforts) == 1:
+        if len(efforts) <= 3 or persistent:
+            outgoing = data["max_tokens"]
             payload = {
                 "choices": [{"delta": {"reasoning": "thinking " * 50}, "finish_reason": "length"}],
                 "usage": {
                     "prompt_tokens": 100,
-                    "completion_tokens": 64_000,
-                    "total_tokens": 64_100,
+                    "completion_tokens": outgoing,
+                    "total_tokens": 100 + outgoing,
+                    "completion_tokens_details": {"reasoning_tokens": outgoing},
                 },
             }
-        elif len(efforts) == 2:
+        elif len(efforts) == 4:
             payload = tool_response(
                 {"command": "write", "path": "main.py", "content": "print(1)\n"}, "w"
             )
@@ -500,15 +506,32 @@ async def test_reasoning_that_fills_the_output_steps_the_effort_down(sessions, m
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
         session = sessions(client, model=model, effort="max")
         await session.build()
-    assert session.generation == "submitted", session.error
-    assert efforts == ["max", "xhigh", "xhigh"]
-    recovery = session.recoveries[0]
-    assert recovery["failure_code"] == "output_truncated"
-    assert recovery["reasoning_effort"] == {"from": "max", "to": "xhigh"}
-    assert session.result()["harness"]["reasoning_effort"] == {
+    result = json.loads((session.metadata / "result.json").read_text())
+    assert efforts == ["max"] * (4 if persistent else 5)
+    assert len(result["harness"]["recoveries"]) == 3
+    assert all(
+        recovery["failure_code"] == "output_truncated"
+        for recovery in result["harness"]["recoveries"]
+    )
+    assert result["harness"]["reasoning_effort"] == {
         "configured": "max",
-        "final": "xhigh",
+        "final": "max",
     }
+    assert all(turn["reasoning_effort"] == "max" for turn in result["harness"]["turns"])
+    if persistent:
+        assert result["status"] == "failed" and session.generation == "failed"
+        assert result["failure"]["code"] == "output_truncated"
+        assert result["failure"]["summary"] == "Output allowance exhausted"
+        assert session.workspace.ls() == []
+        assert session.dispatcher.tool_usage["calls"] == 0
+        assert result["harness"]["attempts"] == []
+        tracker = ProgressTracker(1, {"Fixture": result}, model_names=["Fixture"])
+        rendered = tracker._format_result_row("Fixture", result, 1, 112)
+        assert "failed" in rendered and "Output allowance exhausted" in rendered
+    else:
+        assert session.generation == "submitted", session.error
+        assert session.workspace.read("main.py") == "print(1)\n"
+        assert result["failure"] is None
 
 
 async def test_cancelled_http_stream_saves_diagnostics_without_invented_usage(
