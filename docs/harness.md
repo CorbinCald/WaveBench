@@ -722,16 +722,28 @@ If a failed or interrupted call omits usage, known subtotals remain visible with
 unknown cost is never shown as zero. Locally rejected requests that never reach
 the API do not add turns. HTTP retries and tool calls do not add extra turns.
 A failed response is never partly used: none of its tool calls run, and nothing
-from it enters the history. Each build or repair phase retries up to three failed
-responses, and each subagent two; every retry is a model request recorded in
-`harness.recoveries` and counts toward the phase's limits:
+from it enters the history. Transport retries and model-response corrections
+have separate allowances. Every retry is a model request recorded in
+`harness.recoveries` and counts toward the existing request/time limits:
 
 - **Provider and stream failures** (a mid-stream provider error, an interrupted
   or malformed stream, an idle stream, or no response headers) resend the
-  unchanged conversation. An in-stream 4xx error other than 408/429 is not retried.
+  unchanged conversation. Each build or repair phase allows three consecutive
+  transport retries; each subagent allows two. A successful response resets this
+  allowance. Retries wait 1, 2, then 4 seconds (subagents: 1, 2); a numeric
+  `Retry-After` header overrides the delay, bounded to 0.5–30 seconds, matching
+  the HTTP retry policy. Backoff releases the API slot and consumes the existing
+  phase time allowance; a deadline or cancellation during the wait stops the
+  retry. Retry attempts and scheduled waits appear in `harness.recoveries`, and
+  elapsed stream-retry waits in `harness.timing.retry_s` (including subagents),
+  separately from `api_s`. The terminal shows when a model is retrying.
+  An in-stream 4xx error other than 408/429 is not retried. Rejected HTTP requests
+  retain their own bounded retries; exhausting them does not start stream retries.
 - **Truncated output, invalid JSON tool arguments, or too many tool calls** add
   a short `[WaveBench]` note asking for smaller steps, for example writing a very
-  large file with several `write_file` calls using `append`.
+  large file with several `write_file` calls using `append`. These corrections
+  have a separate total cap of three per build/repair phase and two per subagent,
+  which does not reset after success and is not spent on transport failures.
 - **Reasoning effort stays fixed during response retries**, including when a
   response spends its whole output allowance on reasoning. Persistent truncation
   fails with **Output allowance exhausted** after the retry allowance is used;

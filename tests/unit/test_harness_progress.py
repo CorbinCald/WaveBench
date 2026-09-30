@@ -254,14 +254,15 @@ async def test_short_terminal_reserves_room_for_hidden_models(tracker, monkeypat
 
 
 @pytest.mark.parametrize("width", [52, 72, 102, 112])
-def test_single_row_preserves_metrics_during_retries(tracker, width):
-    tracker.note_retry("model", 429, 1, 3, 2)
+@pytest.mark.parametrize("status,wait_s", [(429, 2), ("↻", 30)])
+def test_single_row_preserves_metrics_during_retries(tracker, width, status, wait_s):
+    tracker.note_retry("model", status, 1, 3, wait_s)
     row = plain(tracker._format_harness_row("model", width))
-    assert "429" in row
+    assert str(status) in row
     if width >= 72:
         assert "1/3" in row
     if width >= 100:
-        assert "2s" in row
+        assert f"{wait_s}s" in row
     assert "200" in row and "$0.015" in row
     assert "50.0%" in row or "50%" in row
     assert "25.0%" in row or "25%" in row

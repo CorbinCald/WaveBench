@@ -54,6 +54,20 @@ async def sessions(tmp_path, monkeypatch):
         await session.close()
 
 
+@pytest.fixture
+def recovery_waits(monkeypatch):
+    """Capture scheduled delays; deadline/cancellation cases exercise the real wait."""
+    waits = []
+
+    async def wait(wait_s, remaining_s):
+        assert 0 < wait_s < remaining_s
+        waits.append(wait_s)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(module, "wait_for_recovery", wait)
+    return waits
+
+
 async def test_stream_failure_diagnostics_and_usage_reach_saved_results(sessions, monkeypatch):
     requests = 0
 
@@ -245,6 +259,7 @@ async def test_bad_response_retries_once_without_executing_any_failed_calls(
         assert session.dispatcher.tool_usage == {"calls": 2, "failures": 0}
 
 
+@pytest.mark.serial
 @pytest.mark.parametrize("phase_expires_first", [False, True])
 async def test_header_wait_failure_is_saved_retried_and_bounded_by_the_phase(
     sessions, monkeypatch, phase_expires_first
@@ -272,7 +287,7 @@ async def test_header_wait_failure_is_saved_retried_and_bounded_by_the_phase(
         finally:
             release.set()
     result = json.loads((session.metadata / "result.json").read_text())
-    # Either way the phase's time limit ends the run; a header timeout is retried once first.
+    # The backoff consumes the remaining phase time instead of sending a late request.
     assert result["failure"]["code"] == "time_or_turn_limit"
     turns = result["harness"]["turns"]
     assert all(turn["stream"]["stage"] == "response_headers" for turn in turns)
@@ -282,17 +297,19 @@ async def test_header_wait_failure_is_saved_retried_and_bounded_by_the_phase(
         assert requests == 1 and turns[0]["stream"]["failure_code"] == "request_cancelled"
         assert result["harness"]["recoveries"] == []
     else:
-        assert requests == 2
+        assert requests == 1
         assert turns[0]["failure"]["summary"] == "No response headers received"
         assert turns[0]["stream"]["policy"] == {"response_headers_seconds": 2}
-        assert result["harness"]["recoveries"] == [
-            {
-                "kind": "provider_retry",
-                "phase": "building",
-                "turn": 1,
-                "failure_code": "response_headers_timeout",
-            }
-        ]
+        recovery = result["harness"]["recoveries"][0]
+        assert recovery == {
+            "kind": "provider_retry",
+            "phase": "building",
+            "turn": 1,
+            "failure_code": "response_headers_timeout",
+            "attempt": 1,
+            "wait_s": recovery["wait_s"],
+        }
+        assert 0 < recovery["wait_s"] < 1
     assert result["retries"] == [] and session.dispatcher.tool_usage["calls"] == 0
 
 
@@ -339,7 +356,7 @@ def tool_response(command, call_id):
 
 @pytest.mark.parametrize("recovery", ["submission_reminder", "empty_error", "reasoning_error"])
 async def test_recovery_preserves_project_and_accounts_for_every_request(
-    sessions, monkeypatch, recovery
+    sessions, monkeypatch, recovery, recovery_waits
 ):
     requests = []
     write = tool_response(
@@ -400,7 +417,13 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
     assert result["failure"] is None
     expected = {"kind": "submission_reminder", "phase": "building", "turn": 2}
     if recovery != "submission_reminder":
-        expected = {**expected, "kind": "provider_retry", "failure_code": "provider_stream_error"}
+        expected = {
+            **expected,
+            "kind": "provider_retry",
+            "failure_code": "provider_stream_error",
+            "attempt": 1,
+            "wait_s": 1,
+        }
     assert result["harness"]["recoveries"] == [expected]
     if recovery != "submission_reminder":
         # The retry resends the unchanged conversation; partial reasoning is discarded.
@@ -425,7 +448,7 @@ async def test_recovery_preserves_project_and_accounts_for_every_request(
     ],
 )
 async def test_provider_retry_is_bounded_and_never_replays_partial_output(
-    sessions, monkeypatch, partial, code, build_turns, expected_requests
+    sessions, monkeypatch, partial, code, build_turns, expected_requests, recovery_waits
 ):
     requests = 0
 
@@ -455,6 +478,7 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
         await session.build()
     result = session.result()
     assert requests == expected_requests == len(session.turns)
+    assert recovery_waits == [1, 2, 4][: expected_requests - 1]
     assert result["failure"]["code"] == "provider_stream_error"
     assert result["failure"]["summary"] == "Provider failed during response"
     assert session.dispatcher.tool_usage["calls"] == 0
@@ -462,6 +486,178 @@ async def test_provider_retry_is_bounded_and_never_replays_partial_output(
     assert all(body == bodies[0] for body in bodies)  # The same conversation each time.
     if not partial:
         assert result["usage"]["total_tokens"] is None
+
+
+@pytest.mark.parametrize("repair", [False, True])
+@pytest.mark.parametrize("exhaust_corrections", [False, True])
+async def test_transport_retries_reset_after_success_and_have_separate_correction_budget(
+    sessions, monkeypatch, recovery_waits, repair, exhaust_corrections
+):
+    """Sol's disconnects followed by good turns must not exhaust later 429 recovery."""
+    model = "openai/gpt-6.1-sol"
+    monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1_000_000)
+    steps = [
+        "disconnect",
+        "disconnect",
+        "disconnect",
+        "write",
+        "list",
+        "429",
+        "429",
+        "429",
+        "length",
+        "list",
+        "length",
+        "list",
+        "length",
+        "list",
+        "length" if exhaust_corrections else "submit",
+    ]
+    requests = []
+
+    async def handler(request):
+        data = await request.json()
+        step = steps[len(requests)]
+        requests.append(data)
+        assert data["reasoning"] == {"effort": "max"}
+        if step == "disconnect":
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(b'data: {"choices":[{"delta":{"reasoning":"discard me"}}]}\n\n')
+            request.transport.close()
+            return response
+        if step == "429":
+            payload = {"error": {"code": 429, "message": "private provider body"}}
+        elif step == "length":
+            payload = tool_response(
+                {"command": "write", "path": "rejected.py", "content": "not complete"}, "bad"
+            )
+            payload["choices"][0]["finish_reason"] = "length"
+        else:
+            command = {
+                "write": {"command": "write", "path": "main.py", "content": "print(42)\n"},
+                "list": {"command": "ls"},
+                "submit": {"command": "done", "runtime": "python", "entry": "main.py"},
+            }[step]
+            payload = tool_response(command, f"ok-{len(requests)}")
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client, model=model, effort="max")
+        if exhaust_corrections:
+            with pytest.raises(module.TurnError) as failure:
+                await session.conversation(repair=repair)
+            assert failure.value.failure_code == "output_truncated"
+        else:
+            await session.conversation(repair=repair)
+    assert len(requests) == len(session.turns) == len(steps)
+    assert recovery_waits == [1, 2, 4, 1, 2, 4]
+    providers = [r for r in session.recoveries if r["kind"] == "provider_retry"]
+    assert [r["attempt"] for r in providers] == [1, 2, 3, 1, 2, 3]
+    assert [r["failure_code"] for r in providers] == ["stream_disconnected"] * 3 + [
+        "provider_stream_error"
+    ] * 3
+    corrections = [r for r in session.recoveries if r["kind"] == "response_retry"]
+    assert len(corrections) == 3
+    assert {r["phase"] for r in session.recoveries} == {"repairing" if repair else "building"}
+    assert session.workspace.read("main.py") == "print(42)\n"
+    assert not (session.workspace.root / "rejected.py").exists()
+    assert (session.descriptor is None) == exhaust_corrections
+    history = json.dumps(session.messages)
+    assert "discard me" not in history and "private provider body" not in history
+    # Corrections add instructions; transport retries preserve the request verbatim.
+    assert requests[0] == requests[1] == requests[2] == requests[3]
+    assert requests[5] == requests[6] == requests[7] == requests[8]
+
+
+@pytest.mark.parametrize("retry_after,expected", [("12", 12), ("99999", 30), ("invalid", 1)])
+async def test_streamed_429_honors_bounded_retry_after(
+    sessions, monkeypatch, recovery_waits, retry_after, expected
+):
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        payload = (
+            {"error": {"code": 429}}
+            if requests == 1
+            else tool_response({"command": "done", "runtime": "python", "entry": "main.py"}, "ok")
+        )
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+            headers={"Retry-After": retry_after},
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client)
+        session.workspace.write("main.py", "print(42)\n")
+        await session.build()
+    assert session.generation == "submitted", session.error
+    assert requests == 2 and recovery_waits == [expected]
+    assert session.recoveries[0]["wait_s"] == expected
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_stream_backoff_respects_deadline_cancellation_and_releases_api_slot(
+    sessions, monkeypatch, cancel
+):
+    waiting = asyncio.Event()
+    requests = 0
+    original_wait = module.wait_for_recovery
+
+    async def observe_wait(wait_s, remaining_s):
+        waiting.set()
+        await original_wait(wait_s, remaining_s)
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        return web.Response(
+            text='data: {"error":{"code":429}}\n\n',
+            content_type="text/event-stream",
+            headers={"Retry-After": "30"},
+        )
+
+    monkeypatch.setattr(module, "wait_for_recovery", observe_wait)
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client, build_seconds=1)
+        task = asyncio.create_task(session.build())
+        try:
+            await asyncio.wait_for(waiting.wait(), 5)
+            await asyncio.wait_for(session.api_slots.acquire(), 1)
+            session.api_slots.release()
+            if cancel:
+                task.cancel()
+            await asyncio.wait_for(task, 3)
+        finally:
+            if not task.done():
+                task.cancel()
+                await task
+    result = json.loads((session.metadata / "result.json").read_text())
+    assert requests == len(session.turns) == 1
+    assert session.generation == ("cancelled" if cancel else "budget_exhausted")
+    assert result["failure"]["code"] == ("cancelled" if cancel else "time_or_turn_limit")
+    timing = result["harness"]["timing"]
+    assert 0 < timing["retry_s"] < 2
+    assert timing["generation_s"] == pytest.approx(timing["api_s"] + timing["retry_s"])
+    if not cancel:
+        assert 1 <= timing["generation_s"] < 2
+    assert 0 < session.recoveries[0]["wait_s"] <= 1
 
 
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5"])
