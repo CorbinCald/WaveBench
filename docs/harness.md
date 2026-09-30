@@ -602,9 +602,13 @@ Context estimates use provider usage where available. Local counting uses
 `tiktoken`'s `o200k_base` as an estimate; it is not an exact tokenizer for every
 vendor. The next input estimate reuses the last measured prompt count for the
 unchanged prefix and counts only appended content locally, calibrated to that
-provider's observed ratio. Ten percent extra is reserved on unmeasured content,
+provider's observed ratio, bounded to 1–2×. This bound applies only to the
+calibration of unmeasured content; the provider's measured prefix count is never
+capped. It prevents overhead on a short prompt from being multiplied across all
+later history. Ten percent extra is reserved on unmeasured content,
 plus 1,024 tokens for context admission. Compaction retains the calibration but
-resets the measured prefix. Google's separately billed explicit-cache creation
+resets the measured prefix; a summary must reduce both the locally counted tokens
+and the estimated context to be accepted. Google's separately billed explicit-cache creation
 input is excluded from the context measurement while remaining in total usage. Provider context/output caps and reasoning adjustments
 are recorded per turn. Missing usage and cost are persisted as unknown, never
 invented as zero. HTTP retries are bounded separately and never replay completed

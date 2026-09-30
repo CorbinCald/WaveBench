@@ -611,9 +611,13 @@ class HarnessSession:
                     record["leaked_tool_call_blocks_removed"] = leaked
             replacement = plan.apply(summary)
             replacement_estimate = self.prompt_estimate.after_compaction()
-            after = replacement_estimate.estimate(prompt_tokens(replacement, self.tools))
+            local_after = prompt_tokens(replacement, self.tools)
+            after = replacement_estimate.estimate(local_after)
             record["after_tokens"] = after
-            if after >= before:
+            # Resetting the measured prefix can itself lower the estimate. A
+            # longer summary must not look effective merely because calibration
+            # no longer carries the old provider overhead.
+            if after >= before or local_after >= prompt_tokens(self.messages, self.tools):
                 record.update(
                     status="ineffective", skip_reason="summary did not reduce the context"
                 )

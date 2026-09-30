@@ -209,3 +209,28 @@ def test_compacted_estimate_keeps_vendor_calibration_but_discards_prefix():
     replacement = estimate.after_compaction()
     assert replacement.estimate(1000) == 1500
     assert replacement.bound(1000) == 1650
+
+
+def test_short_prompt_overhead_does_not_multiply_later_history():
+    # Sol Pro run d6953799: a 1,434-token local prompt was reported as 29,069.
+    # Extrapolating that 20x ratio put the next input at 983,329 tokens, although
+    # the provider reported 102,083, cutting its 128k output allowance to 65,647.
+    estimate = PromptEstimate()
+    estimate.observe(1434, {"prompt_tokens": 29_069})
+    assert estimate.bound(1434) == 29_069
+    assert 102_083 <= estimate.bound(44_229) < 240_000
+
+    # Compaction must not carry the amplified ratio into a fresh conversation.
+    replacement = estimate.after_compaction()
+    assert replacement.bound(44_229) < 240_000
+
+    # Subsequent provider measurements still replace the estimated prefix.
+    estimate.observe(44_229, {"prompt_tokens": 102_083})
+    assert estimate.bound(44_229) == 102_083
+
+
+def test_large_measured_context_is_not_capped_with_the_calibration_ratio():
+    estimate = PromptEstimate()
+    estimate.observe(100_000, {"prompt_tokens": 950_000})
+    assert estimate.estimate(100_000) == 950_000
+    assert estimate.bound(100_001) > 950_000

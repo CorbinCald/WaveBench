@@ -151,6 +151,58 @@ async def test_finishing_requests_keep_full_output_and_reasoning(
     assert session.notices[0]["kind"] == "finishing" and session.recoveries == []
 
 
+async def test_provider_prompt_overhead_keeps_output_allowance_and_avoids_compaction(
+    sessions, monkeypatch
+):
+    """A short prompt with high reported usage must not inflate the next file's context."""
+    model = "openai/gpt-6.1-sol-pro"
+    monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1_050_000)
+    monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, model, 128_000)
+    requests = []
+    content = "# " + "code " * 13_000 + "\nprint(42)\n"
+
+    async def handler(request):
+        data = await request.json()
+        requests.append(data)
+        first = len(requests) == 1
+        command = (
+            {"command": "write", "path": "main.py", "content": content}
+            if first
+            else {"command": "done", "runtime": "python", "entry": "main.py"}
+        )
+        payload = tool_response(command, f"complete-{len(requests)}")
+        payload["model"] = model
+        if first:
+            payload["choices"][0]["delta"]["reasoning_details"] = [
+                {"type": "reasoning.encrypted", "data": "a" * 120_000, "index": 0}
+            ]
+        incoming, outgoing = (29_069, 26_735) if first else (102_083, 35_938)
+        payload["usage"] = {
+            "prompt_tokens": incoming,
+            "completion_tokens": outgoing,
+            "total_tokens": incoming + outgoing,
+        }
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client, model=model, effort="max", turn_tokens=128_000)
+        await session.build()
+    assert session.generation == "submitted", session.error
+    assert len(requests) == 2
+    assert all(request["max_tokens"] == 128_000 for request in requests)
+    assert all(request["reasoning"] == {"effort": "max"} for request in requests)
+    assert not session.compactions
+    assert session.workspace.read("main.py") == content
+    assert session.turns[1]["input_tokens_bound"] < 240_000
+    assert session.usage()["prompt_tokens"] == 131_152
+
+
 @pytest.mark.parametrize(
     "failure,reported",
     [

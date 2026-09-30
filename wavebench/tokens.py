@@ -29,6 +29,12 @@ def count_tokens(value) -> int:
 OPAQUE_FIELDS = ("data", "signature")
 OPAQUE_BYTES_PER_TOKEN = 4
 
+# A short prompt can include provider overhead that does not scale with later
+# text. Bound this heuristic, not the provider's measured prefix, so one such
+# report cannot multiply all appended content or survive compaction as a huge
+# tokenizer ratio. The separate 10% reserve still applies to unmeasured content.
+MAX_CALIBRATION_RATIO = 2.0
+
 
 def prompt_tokens(messages: list[dict], tools: list[dict]) -> int:
     # Counting JSON also reserves space for roles, call IDs and schemas.
@@ -85,7 +91,7 @@ class PromptEstimate:
         measured = usage.get("prompt_tokens")
         if type(measured) is int and measured >= 0:
             self.measured, self.local = measured, local
-            self.ratio = max(1.0, measured / max(1, local))
+            self.ratio = min(MAX_CALIBRATION_RATIO, max(1.0, measured / max(1, local)))
 
     def estimate(self, local: int) -> int:
         if self.measured is None:

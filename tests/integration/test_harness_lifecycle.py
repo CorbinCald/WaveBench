@@ -910,6 +910,9 @@ async def test_ineffective_compaction_keeps_history_and_is_not_retried(factory, 
     await session.build()
     assert session.generation == "submitted", session.error
     assert len(compactions) == 1 and session.compactions[0]["status"] == "ineffective"
+    # Discarding the measured prefix lowers the estimate even though the summary
+    # is longer. Local token counts must still reject that false improvement.
+    assert session.compactions[0]["after_tokens"] < session.compactions[0]["before_tokens"]
     assert session.messages[: len(before)] == before
 
 
