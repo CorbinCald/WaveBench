@@ -196,12 +196,14 @@ class TurnError(RuntimeError):
         request_sent: bool = True,
         failure_code: str | None = None,
         diagnostics: dict | None = None,
+        retry_after: str | None = None,
     ):
         super().__init__(message)
         self.usage = usage or {}
         self.request_sent = request_sent
         self.failure_code = failure_code
         self.diagnostics = diagnostics or {}
+        self.retry_after = retry_after
 
 
 # Stream failures after which the unchanged conversation can simply be sent
@@ -242,6 +244,55 @@ def recovery(exc: BaseException) -> tuple[str, str | None] | None:
             return None  # The provider rejected the request itself; resending cannot help.
         return "provider_retry", None
     return None
+
+
+@dataclass(frozen=True)
+class RecoveryPlan:
+    kind: str
+    notice: str | None
+    attempt: int
+    wait_s: float = 0.0
+
+
+class RecoveryBudget:
+    """Independent consecutive transport retries and phase-wide response corrections."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.provider_retries = 0
+        self.response_retries = 0
+
+    def succeeded(self) -> None:
+        self.provider_retries = 0
+
+    def next(self, exc: BaseException) -> RecoveryPlan | None:
+        plan = recovery(exc)
+        if plan is None:
+            return None
+        kind, notice = plan
+        if kind == "provider_retry":
+            if self.provider_retries >= self.limit:
+                return None
+            self.provider_retries += 1
+            return RecoveryPlan(
+                kind,
+                notice,
+                self.provider_retries,
+                api._retry_wait_seconds(exc.retry_after, self.provider_retries),
+            )
+        if self.response_retries >= self.limit:
+            return None
+        self.response_retries += 1
+        return RecoveryPlan(kind, notice, self.response_retries)
+
+
+async def wait_for_recovery(wait_s: float, remaining_s: float) -> None:
+    """Back off without holding an API slot or extending the enclosing time limit."""
+    if remaining_s <= 0:
+        raise asyncio.TimeoutError
+    await asyncio.sleep(min(wait_s, remaining_s))
+    if wait_s >= remaining_s:
+        raise asyncio.TimeoutError
 
 
 @dataclass(frozen=True)
@@ -1064,6 +1115,7 @@ async def call_conversation(
                     reader.failure_code = exc.failure_code or "malformed_stream"
                     exc.failure_code = reader.failure_code
                     exc.diagnostics = reader.diagnostics()
+                    exc.retry_after = response.headers.get("Retry-After")
                     raise
                 except (aiohttp.ClientError, UnicodeError) as exc:
                     reader.failure_code = (
@@ -1078,6 +1130,7 @@ async def call_conversation(
                         assembly.usage,
                         failure_code=reader.failure_code,
                         diagnostics=reader.diagnostics(),
+                        retry_after=response.headers.get("Retry-After"),
                     ) from exc
                 finally:
                     # One network read can contain valid output followed by a

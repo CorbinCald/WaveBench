@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from wavebench.harness import session as module
+from wavebench.harness import subagents as agents_module
 from wavebench.harness.commands import TOOL_SCHEMA
 from wavebench.harness.config import Limits
 from wavebench.harness.session import HarnessSession
@@ -402,6 +403,110 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
             "failure_code": "output_truncated",
         }
     ]
+
+
+@pytest.mark.parametrize("ending", ["complete", "correction_limit", "provider_limit"])
+async def test_subagent_recovers_from_separate_outages_without_spending_corrections(
+    factory, monkeypatch, ending
+):
+    steps = ["length", "disconnect", "disconnect", "write", "429", "429", "length", "list"]
+    steps += {
+        "complete": ["report"],
+        "correction_limit": ["length"],
+        "provider_limit": ["429", "429", "429"],
+    }[ending]
+    seen = 0
+    waits = []
+
+    async def wait(wait_s, remaining_s):
+        assert 0 < wait_s < remaining_s
+        waits.append(wait_s)
+        await asyncio.sleep(0)
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal seen
+        if role(messages)[0] == "lead":
+            if not any(m["role"] == "tool" for m in messages):
+                return calls(0, spawn("writer", "Write main.py and report."))
+            report = results(messages, 1)[0]
+            assert report["status"] == ("completed" if ending == "complete" else "failed")
+            return calls(1, DONE)
+        step = steps[seen]
+        seen += 1
+        assert kwargs["reasoning_effort"] == "max"
+        if step in {"length", "disconnect", "429"}:
+            raise TurnError(
+                "fixture failure",
+                dict(USAGE),
+                failure_code={
+                    "length": "output_truncated",
+                    "disconnect": "stream_disconnected",
+                    "429": "provider_stream_error",
+                }[step],
+                diagnostics={"provider_error": {"code": 429}} if step == "429" else {},
+            )
+        if step == "write":
+            return calls(seen, write("main.py", "print(42)\n"))
+        if step == "list":
+            return calls(seen, {"command": "ls"})
+        return text("main.py is ready.")
+
+    monkeypatch.setattr(agents_module, "wait_for_recovery", wait)
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(reasoning_effort="max")
+    await session.build()
+    assert session.generation == "submitted", session.error
+    assert seen == len(steps)
+    assert waits == [1, 2, 1, 2] + ([1, 2] if ending == "provider_limit" else [])
+    assert sum(r["kind"] == "response_retry" for r in session.recoveries) == 2
+    run = session.subagents.runs[0]
+    assert len(run.turns) == len(steps)
+    assert session.workspace.read("main.py") == "print(42)\n"
+    if ending != "complete":
+        assert run.failure["code"] == (
+            "output_truncated" if ending == "correction_limit" else "provider_stream_error"
+        )
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("parent_expires_first", [False, True])
+async def test_subagent_backoff_stops_at_its_own_or_parent_deadline(
+    factory, monkeypatch, parent_expires_first
+):
+    requests = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal requests
+        if role(messages)[0] == "lead":
+            if not any(m["role"] == "tool" for m in messages):
+                return calls(0, spawn("reviewer", "Review main.py."))
+            assert results(messages, 1)[0]["status"] == "time_limit"
+            return calls(1, DONE)
+        requests += 1
+        raise TurnError(
+            "throttled",
+            dict(USAGE),
+            failure_code="provider_stream_error",
+            diagnostics={"provider_error": {"code": 429}},
+            retry_after="30",
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(
+        limits=Limits(
+            build_seconds=1 if parent_expires_first else 30,
+            subagent_seconds=30 if parent_expires_first else 1,
+        )
+    )
+    session.workspace.write("main.py", "print(42)\n")
+    await asyncio.wait_for(session.build(), 5)
+    assert requests == 1
+    assert session.generation == ("budget_exhausted" if parent_expires_first else "submitted")
+    run = session.subagents.runs[0]
+    assert run.status == ("cancelled" if parent_expires_first else "time_limit")
+    assert 0 < run.retry_seconds < 2
+    assert run.api_seconds < run.retry_seconds
+    assert session.retry_seconds == run.retry_seconds
 
 
 async def test_a_failed_subagent_keeps_the_lead_working(factory, monkeypatch):

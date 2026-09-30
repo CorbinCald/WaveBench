@@ -44,9 +44,10 @@ from .runtime import Runtime, SetupError
 from .subagents import SubagentPool, lead_instructions
 from .transport import (
     GEMINI_PROVIDER_ROUTES,
+    RecoveryBudget,
     TurnError,
     capability,
-    recovery,
+    wait_for_recovery,
 )
 from .workspace import allocate_project
 
@@ -54,7 +55,8 @@ from .workspace import allocate_project
 # time runs short: max(20% of the phase, twice the slowest recent response plus lint).
 FINISH_TURNS = 3
 FINISH_TIME_FRACTION = 0.2
-# Retries of failed responses per phase; each still counts as a request.
+# Separate limits for consecutive transport retries and response corrections.
+# Every retry still counts as a model request.
 MAX_RECOVERIES = 3
 
 
@@ -237,6 +239,7 @@ class HarnessSession:
         self._compaction_floor = 0
         self.compaction_seconds = 0.0
         self.api_seconds = 0.0
+        self.retry_seconds = 0.0
         self.tool_seconds = 0.0
         self.build_seconds = 0.0
         self.repair_seconds = 0.0
@@ -432,6 +435,7 @@ class HarnessSession:
                 "timing": {
                     "generation_s": self.build_seconds,
                     "api_s": self.api_seconds,
+                    "retry_s": self.retry_seconds,
                     "tool_s": self.tool_seconds,
                     "queued_s": self.queue_seconds,
                     "repair_s": self.repair_seconds,
@@ -755,7 +759,7 @@ class HarnessSession:
         max_turns = limits.repair_turns if repair else limits.build_turns
         max_seconds = limits.repair_seconds if repair else limits.build_seconds
         self.active = 0.0
-        recoveries = 0
+        recoveries = RecoveryBudget(MAX_RECOVERIES)
         reminded = False
         self.finishing = False
         try:
@@ -775,23 +779,45 @@ class HarnessSession:
                 try:
                     turn = await self.request(phase, max(0.001, max_seconds - self.active))
                 except TurnError as exc:
-                    plan = recovery(exc)
-                    if plan is None or recoveries >= MAX_RECOVERIES or turn_index + 1 >= max_turns:
+                    plan = recoveries.next(exc) if turn_index + 1 < max_turns else None
+                    if plan is None:
                         raise
-                    recoveries += 1
-                    kind, note = plan
                     record = {
-                        "kind": kind,
+                        "kind": plan.kind,
                         "phase": phase,
                         "turn": len(self.turns),
                         "failure_code": exc.failure_code,
                     }
                     # Recovery preserves the selected effort; exhaustion fails after retries.
-                    if note:
-                        self.messages.append({"role": "user", "content": note})
+                    if plan.notice:
+                        self.messages.append({"role": "user", "content": plan.notice})
+                    remaining = max_seconds - self.active
+                    if plan.kind == "provider_retry":
+                        record.update(
+                            attempt=plan.attempt, wait_s=max(0, min(plan.wait_s, remaining))
+                        )
                     self.recoveries.append(record)
                     self.save()
+                    if plan.kind == "provider_retry":
+                        self.phase("retrying")
+                        if self.tracker and self.tracker.is_running:
+                            status = (exc.diagnostics.get("provider_error") or {}).get("code")
+                            self.tracker.note_retry(
+                                self.name,
+                                status if type(status) is int else "↻",
+                                plan.attempt,
+                                MAX_RECOVERIES,
+                                record["wait_s"],
+                            )
+                        started = time.monotonic()
+                        try:
+                            await wait_for_recovery(plan.wait_s, remaining)
+                        finally:
+                            elapsed = time.monotonic() - started
+                            self.active += elapsed
+                            self.retry_seconds += elapsed
                     continue
+                recoveries.succeeded()
                 self.messages.append(turn.message)
                 calls = turn.message.get("tool_calls") or []
                 if not calls:

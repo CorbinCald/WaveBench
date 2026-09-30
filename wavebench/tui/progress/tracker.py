@@ -79,7 +79,7 @@ class ProgressTracker:
     DEFAULT_AVG_TOKENS = 2000
     HARNESS_SAMPLE_INTERVAL = 0.25
     # Subagent phases that hold one of the lead's parallel slots.
-    SUBAGENT_RUNNING = frozenset({"thinking", "streaming", "tools", "linting"})
+    SUBAGENT_RUNNING = frozenset({"thinking", "streaming", "tools", "linting", "retrying"})
     # A stream that stops producing output this long is shown as idle.
     SUBAGENT_IDLE_SECONDS = 10.0
     # How an agent ended, sized to the fixed slot that otherwise holds its bar.
@@ -985,7 +985,7 @@ class ProgressTracker:
     def note_retry(
         self,
         model_name: str,
-        status: int,
+        status: int | str,
         attempt: int,
         max_attempts: int,
         wait_s: float,

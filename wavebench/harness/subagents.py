@@ -18,7 +18,7 @@ from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 from .commands import FILE_CHANGES, Dispatcher
 from .config import Limits
 from .failure import failure_record
-from .transport import GEMINI_PROVIDER_ROUTES, TurnError, recovery
+from .transport import GEMINI_PROVIDER_ROUTES, RecoveryBudget, TurnError, wait_for_recovery
 from .workspace import safe_name
 
 MAX_NAME_CHARS = 40
@@ -275,6 +275,7 @@ class SubagentRun:
         self.cache_policy = CachePolicy(session.model_id)
         self.gemini_provider: str | None = None
         self.api_seconds = 0.0
+        self.retry_seconds = 0.0
         self.tool_seconds = 0.0
         self.output_tokens = 0
         self.started: float | None = None
@@ -362,9 +363,11 @@ class SubagentRun:
         self.started, self.started_at = time.monotonic(), time.time()
         deadline = self.started + limits.subagent_seconds
         max_turns = limits.subagent_turns
-        recoveries = 0
+        recoveries = RecoveryBudget(MAX_RECOVERIES)
         try:
             for turn_index in range(max_turns):
+                if time.monotonic() >= deadline:
+                    raise asyncio.TimeoutError
                 final = turn_index + 1 == max_turns
                 if final:
                     self.messages.append({"role": "user", "content": FINAL_NOTICE})
@@ -374,6 +377,7 @@ class SubagentRun:
                 request_output = session.output_tokens()
                 started = time.monotonic()
                 turn = None
+                plan = None
                 record = {
                     "phase": "subagent",
                     "agent": self.number,
@@ -411,28 +415,43 @@ class SubagentRun:
                             stream=getattr(exc, "diagnostics", None) or self._stream_diagnostics,
                         )
                         self.account(record)
-                    plan = recovery(exc)
-                    if plan and recoveries < MAX_RECOVERIES and not final:
-                        recoveries += 1
-                        kind, note = plan
-                        if note:
-                            self.messages.append({"role": "user", "content": note})
-                        session.recoveries.append(
-                            {
-                                "kind": kind,
-                                "phase": "subagent",
-                                "agent": self.number,
-                                "turn": len(self.turns),
-                                "failure_code": exc.failure_code,
-                            }
+                    plan = recoveries.next(exc) if not final else None
+                    if plan is None:
+                        raise
+                    if plan.notice:
+                        self.messages.append({"role": "user", "content": plan.notice})
+                    recovery_record = {
+                        "kind": plan.kind,
+                        "phase": "subagent",
+                        "agent": self.number,
+                        "turn": len(self.turns),
+                        "failure_code": exc.failure_code,
+                    }
+                    if plan.kind == "provider_retry":
+                        recovery_record.update(
+                            attempt=plan.attempt,
+                            wait_s=max(0, min(plan.wait_s, deadline - time.monotonic())),
                         )
-                        continue
-                    raise
+                    session.recoveries.append(recovery_record)
                 finally:
                     elapsed = time.monotonic() - started
                     self.api_seconds += elapsed
                     session.api_seconds += elapsed
                     self.publish_usage()
+                if plan:
+                    if plan.kind == "provider_retry":
+                        self.publish(status="retrying")
+                        self.save()
+                        session.save()
+                        started = time.monotonic()
+                        try:
+                            await wait_for_recovery(plan.wait_s, deadline - started)
+                        finally:
+                            elapsed = time.monotonic() - started
+                            self.retry_seconds += elapsed
+                            session.retry_seconds += elapsed
+                    continue
+                recoveries.succeeded()
                 explicit_cache = (turn.adjustments.get("cache") or {}).get("breakpoints")
                 measured = context_usage(
                     turn.usage, self.cache_policy.family if explicit_cache else "automatic"
@@ -549,6 +568,7 @@ class SubagentRun:
             "timing": {
                 "time_s": self.elapsed,
                 "api_s": self.api_seconds,
+                "retry_s": self.retry_seconds,
                 "tool_s": self.tool_seconds,
             },
             "started_at": self.started_at,
