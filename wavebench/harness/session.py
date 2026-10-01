@@ -108,6 +108,10 @@ def system_prompt(
         + dependency_notice(auto_install),
         "Call independent tools together in one response. Write complete files, and use "
         "edit_file for small changes.",
+        "Build incrementally: start with one small write_file call that creates a runnable "
+        "entry point. Then develop all requested features and quality through subsequent "
+        "tool calls. Focus each response on the next concrete change, using tool results "
+        "to guide further reasoning.",
         limits_notice(limits or Limits()),
     ]
     if web_search:

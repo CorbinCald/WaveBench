@@ -221,8 +221,9 @@ RESEND_FAILURES = frozenset(
 RECOVERY_NOTICES = {
     "output_truncated": (
         "Your last response reached the output limit before it finished, so none of its tool "
-        "calls ran. Reply again with shorter reasoning and smaller steps: write a very large "
-        "file in several write_file calls with append set, or change it with edit_file."
+        "calls ran. On this retry, focus on the next concrete file change and make its tool "
+        "calls; continue the remaining work in later responses. Write large files in smaller "
+        "write_file calls with append set, or use edit_file."
     ),
     "invalid_tool_arguments": (
         "Your last response contained tool arguments that were not valid JSON, so none of its "
@@ -1038,7 +1039,11 @@ async def call_conversation(
                         diagnostics=diagnostics,
                     )
                 wait = (
-                    api._retry_wait_seconds(response.headers.get("Retry-After"), request_index + 1)
+                    api._retry_wait_seconds(
+                        response.headers.get("Retry-After"),
+                        request_index + 1,
+                        respect_retry_after=response.status == 402,
+                    )
                     if waits
                     else 0
                 )
