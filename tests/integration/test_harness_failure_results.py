@@ -660,6 +660,136 @@ async def test_streamed_429_honors_bounded_retry_after(
     assert session.recoveries[0]["wait_s"] == expected
 
 
+@pytest.mark.parametrize(
+    "status,retry_after,expected",
+    [(402, "120", 120), (429, "120", 30), (402, "NaN", 1), (402, "Infinity", 1)],
+)
+async def test_reasoning_exhaustion_then_credit_hold_recovers_at_max(
+    sessions, monkeypatch, status, retry_after, expected
+):
+    """An all-thinking turn can recover after settlement without changing the selected effort."""
+    model = "anthropic/claude-opus-5.5"
+    monkeypatch.setitem(api._MODEL_CONTEXT_CACHE, model, 1_000_000)
+    monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, model, 128_000)
+    requests, waits = [], []
+    original_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        if seconds:
+            waits.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    async def handler(request):
+        data = await request.json()
+        requests.append(data)
+        assert data["reasoning"] == {"effort": "max"}
+        assert data["max_tokens"] == 128_000
+        if len(requests) == 1:
+            assert "Build incrementally" in json.dumps(data["messages"][0]["content"])
+            payload = {
+                "choices": [
+                    {"delta": {"reasoning": "discarded reasoning"}, "finish_reason": "length"}
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 128_000,
+                    "completion_tokens_details": {"reasoning_tokens": 128_000},
+                },
+            }
+        elif len(requests) == 2:
+            assert "next concrete file change" in json.dumps(data["messages"])
+            return web.json_response(
+                {
+                    "error": {
+                        "code": status,
+                        "message": "private provider response",
+                        "metadata": {"limit_source": "openrouter_credits"},
+                    }
+                },
+                status=status,
+                headers={"Retry-After": retry_after},
+            )
+        else:
+            command = (
+                {"command": "write", "path": "main.py", "content": "print(42)\n"}
+                if len(requests) == 3
+                else {"command": "done", "runtime": "python", "entry": "main.py"}
+            )
+            payload = tool_response(command, f"ok-{len(requests)}")
+        return web.Response(
+            text=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n",
+            content_type="text/event-stream",
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client, model=model, effort="max")
+        await session.build()
+    assert session.generation == "submitted", session.error
+    assert session.workspace.read("main.py") == "print(42)\n"
+    assert waits == [expected]
+    assert requests[1] == requests[2]
+    assert len(session.turns) == 3 and session.dispatcher.tool_usage["calls"] == 2
+    assert session.retries == [
+        {"status": status, "attempt": 1, "wait_s": expected, "phase": "building", "turn": 2}
+    ]
+    result = json.loads((session.metadata / "result.json").read_text())
+    assert result["harness"]["reasoning_effort"] == {"configured": "max", "final": "max"}
+    assert result["harness"]["turns"][0]["failure"]["code"] == "output_truncated"
+    assert "discarded reasoning" not in json.dumps(session.messages)
+    assert "private provider response" not in json.dumps(result)
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_credit_settlement_wait_respects_phase_deadline_and_cancellation(
+    sessions, monkeypatch, cancel
+):
+    waiting = asyncio.Event()
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        return web.json_response(
+            {"error": {"code": 402}}, status=402, headers={"Retry-After": "120"}
+        )
+
+    app = web.Application()
+    app.router.add_post("/chat/completions", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as client:
+        monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
+        session = sessions(client, effort="max", build_seconds=1)
+        on_retry = session.on_retry
+
+        def observe_retry(*args):
+            on_retry(*args)
+            waiting.set()
+
+        monkeypatch.setattr(session, "on_retry", observe_retry)
+        task = asyncio.create_task(session.build())
+        try:
+            await asyncio.wait_for(waiting.wait(), 5)
+            if cancel:
+                task.cancel()
+            await asyncio.wait_for(task, 3)
+            await asyncio.wait_for(session.api_slots.acquire(), 1)
+            session.api_slots.release()
+        finally:
+            if not task.done():
+                task.cancel()
+                await task
+    assert requests == len(session.turns) == 1
+    assert session.retries[0]["wait_s"] == 120
+    assert session.generation == ("cancelled" if cancel else "budget_exhausted")
+    assert session.result()["failure"]["code"] == ("cancelled" if cancel else "time_or_turn_limit")
+    assert session.workspace.ls() == []
+
+
 @pytest.mark.serial
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_stream_backoff_respects_deadline_cancellation_and_releases_api_slot(

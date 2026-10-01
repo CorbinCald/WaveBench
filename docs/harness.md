@@ -563,6 +563,18 @@ model. There is no cumulative token budget: every request resends the
 conversation, so a token total mostly counted cached input and stopped models
 that worked in many small steps. Usage and cost are still recorded in full.
 
+The system prompt encourages an early runnable foundation, then incremental
+file changes that retain the user's full feature and quality requirements.
+Output-limit recovery asks for the next concrete file change. It keeps the
+selected reasoning effort, including `max`, and the configured output allowance.
+At `max`, thinking can still consume the entire response; incremental guidance
+improves the workflow but cannot guarantee a completed response.
+
+Transient HTTP 402 credit holds honor the full numeric `Retry-After` delay;
+other HTTP retries retain the 30-second wait cap. Settlement waits count toward
+the phase's active time and remain cancellable. This does not extend the phase
+deadline or retry allowance, or resolve an exhausted account balance.
+
 The system prompt states each phase's request and time limits. Short
 `[WaveBench]` notes keep them in view and are always delivered:
 

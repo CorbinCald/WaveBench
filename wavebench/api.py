@@ -18,6 +18,7 @@ Key entry points:
 import asyncio
 import codecs
 import json
+import math
 import os
 import re
 import time
@@ -203,17 +204,22 @@ _MAX_RETRY_WAIT_S: float = 30.0
 RetryCallback = Callable[[int, int, int, float], None]
 
 
-def _retry_wait_seconds(retry_after_header: str | None, attempt: int) -> float:
+def _retry_wait_seconds(
+    retry_after_header: str | None, attempt: int, *, respect_retry_after: bool = False
+) -> float:
     """Seconds to wait before retry *attempt* (1-based).
 
     Honors a numeric ``Retry-After`` (seconds) when present; otherwise
     falls back to exponential backoff (1s, 2s, 4s, …). Capped at
-    ``_MAX_RETRY_WAIT_S`` so a stuck upstream can't park a benchmark
-    indefinitely.
+    ``_MAX_RETRY_WAIT_S`` by default. Credit holds can require a longer
+    settlement window; callers honoring that delay must enforce a deadline.
     """
     if retry_after_header:
         try:
-            return min(_MAX_RETRY_WAIT_S, max(0.5, float(retry_after_header)))
+            seconds = float(retry_after_header)
+            if math.isfinite(seconds):
+                wait = max(0.5, seconds)
+                return wait if respect_retry_after else min(_MAX_RETRY_WAIT_S, wait)
         except ValueError:
             pass
     return min(_MAX_RETRY_WAIT_S, 2.0 ** (attempt - 1))
