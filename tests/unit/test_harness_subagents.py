@@ -312,6 +312,10 @@ async def test_orchestrator_wires_the_run_setting_and_cap_into_each_session(
         async def review(self):
             pass
 
+    async def fake_catalog(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(orchestrator_mod, "_load_model_context_lengths", fake_catalog)
     monkeypatch.setattr(orchestrator_mod, "get_directory_name", fake_get_directory_name)
     monkeypatch.setattr(session_mod, "HarnessSession", FakeSession)
     monkeypatch.setattr(session_mod, "HarnessBatch", FakeBatch)

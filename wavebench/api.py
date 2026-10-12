@@ -41,6 +41,7 @@ _MODEL_CONTEXT_CACHE: dict[str, int] = {}
 # window alone over-requests on models with a small output ceiling.
 _MODEL_MAX_COMPLETION_CACHE: dict[str, int] = {}
 _MODEL_TOOL_CACHE: dict[str, bool] = {}
+_MODEL_EFFORT_CACHE: dict[str, list[str]] = {}
 _MODEL_CONTEXTS_ATTEMPTED = False
 _MODEL_CONTEXT_LOCK = asyncio.Lock()
 
@@ -55,33 +56,67 @@ async def call_model_conversation(session, api_key, model_id, messages, tools, *
 async def _load_model_context_lengths(
     session: aiohttp.ClientSession,
     api_key: str,
+    *,
+    refresh: bool = False,
 ) -> None:
-    """Populate a cache of model_id -> context_length from OpenRouter."""
+    """Cache catalog limits and reasoning capabilities before sending requests.
+
+    Benchmark runs refresh once before building notices. Calls within the run
+    share the snapshot; standalone API callers load it on first use. A failed
+    refresh retains the last successful snapshot and allows a later retry.
+    """
     global _MODEL_CONTEXTS_ATTEMPTED
-    if _MODEL_CONTEXTS_ATTEMPTED:
+    if _MODEL_CONTEXTS_ATTEMPTED and not refresh:
         return
 
     async with _MODEL_CONTEXT_LOCK:
-        if _MODEL_CONTEXTS_ATTEMPTED:
+        if _MODEL_CONTEXTS_ATTEMPTED and not refresh:
             return
+        _MODEL_CONTEXTS_ATTEMPTED = False
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "X-Title": "Benchmark Script",
         }
         try:
-            async with session.get(f"{API_URL}/models", headers=headers) as resp:
+            async with session.get(
+                f"{API_URL}/models", headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 if resp.status != 200:
                     return
                 body = await resp.json()
-                for m in body.get("data", []):
+                if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                    return
+                efforts = {}
+                for m in body["data"]:
+                    if not isinstance(m, dict):
+                        continue
                     mid = m.get("id")
                     ctx = m.get("context_length")
-                    if not mid:
+                    if not isinstance(mid, str) or not mid:
                         continue
+                    reasoning = m.get("reasoning")
+                    levels = (
+                        reasoning.get("supported_efforts") if isinstance(reasoning, dict) else None
+                    )
+                    # Missing/empty/malformed ladders are unknown, not proof
+                    # that reasoning is unavailable. Keep the legacy fallback.
+                    if (
+                        isinstance(levels, list)
+                        and levels
+                        and all(
+                            isinstance(level, str) and level in _EFFORT_ORDER for level in levels
+                        )
+                    ):
+                        efforts[mid.lower()] = list(dict.fromkeys(levels))
                     if isinstance(m.get("supported_parameters"), list):
                         _MODEL_TOOL_CACHE[mid] = "tools" in m["supported_parameters"]
-                    max_out = (m.get("top_provider") or {}).get("max_completion_tokens")
+                    provider = m.get("top_provider")
+                    max_out = (
+                        provider.get("max_completion_tokens")
+                        if isinstance(provider, dict)
+                        else None
+                    )
                     try:
                         max_out_i = int(max_out)
                     except (TypeError, ValueError):
@@ -94,6 +129,8 @@ async def _load_model_context_lengths(
                         continue
                     if ctx_i > 0:
                         _MODEL_CONTEXT_CACHE[mid] = ctx_i
+                _MODEL_EFFORT_CACHE.clear()
+                _MODEL_EFFORT_CACHE.update(efforts)
         except Exception:
             # Fall back to legacy defaults if model metadata cannot be fetched.
             return
@@ -119,11 +156,8 @@ async def _resolve_max_tokens(
     model may still cap a single completion far lower, and requesting
     more than it allows is a 400 rather than a shorter answer.
     """
-    if model_id in _MODEL_CONTEXT_CACHE:
-        context_limit = _MODEL_CONTEXT_CACHE[model_id]
-    else:
-        await _load_model_context_lengths(session, api_key)
-        context_limit = _MODEL_CONTEXT_CACHE.get(model_id, fallback)
+    await _load_model_context_lengths(session, api_key)
+    context_limit = _MODEL_CONTEXT_CACHE.get(model_id, fallback)
 
     prompt_tokens_est = max(1, len(prompt) // 4)
     safety_buffer = 512
@@ -274,12 +308,12 @@ def load_api_key() -> str | None:
     return None
 
 
-# Ordered low → max.  Only used for distance math when clamping an
-# unsupported effort choice down to the closest level the model accepts.
-_EFFORT_ORDER: list[str] = ["low", "medium", "high", "xhigh", "max"]
+# Ordered none → max. Used for catalog validation and distance math when
+# mapping an unsupported effort to the closest level the model accepts.
+_EFFORT_ORDER: list[str] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
-# Per-model effort capabilities (as of 2026-07-25).  Patterns match as
-# substrings against the lower-cased OpenRouter model id; most-specific
+# Fallback capabilities when the catalog has no usable effort ladder.
+# Patterns match substrings against the lower-cased OpenRouter model id; most-specific
 # entries first so "opus-4.7" wins over a hypothetical generic "opus".
 _CLAUDE_EFFORT_CAPABILITIES: list[tuple] = [
     # Claude 5 family — full ladder through `max`.  Verified 2026-07-25 on
@@ -350,8 +384,13 @@ def _gpt_version(lower: str) -> tuple[int, int] | None:
 def _supported_efforts(model_id: str) -> list[str] | None:
     """Return the effort levels supported by *model_id*, or None if the
     model accepts no ``effort`` parameter at all (older Claude variants).
+
+    The live catalog takes precedence over the compatibility rules below.
+    Those rules apply only when usable reasoning metadata is unavailable.
     """
     lower = model_id.lower()
+    if lower in _MODEL_EFFORT_CACHE:
+        return _MODEL_EFFORT_CACHE[lower]
     is_anthropic = "anthropic/" in lower or "claude" in lower
     if is_anthropic:
         for pat, levels in _CLAUDE_EFFORT_CAPABILITIES:
@@ -471,10 +510,12 @@ def _reasoning_attempts(
     """
     lower = model_id.lower()
 
-    if "glm-4.7" in lower:
+    if "glm-4.7" in lower and lower not in _MODEL_EFFORT_CACHE:
         return []
 
     is_mercury = "inception/" in lower or "mercury" in lower
+    supported = _supported_efforts(model_id)
+    mapped = _map_effort(effort, supported) if supported else effort
 
     seen: list[dict[str, Any]] = []
 
@@ -488,7 +529,6 @@ def _reasoning_attempts(
         # through to the provider, producing more detailed chain-of-thought
         # inline in the content.  Don't try max_tokens or enabled — they're
         # no-ops for Mercury, and combining effort + max_tokens causes a 400.
-        mapped = _map_effort(effort, ["low", "medium", "high"])
         _add(
             {
                 "reasoning": {"effort": mapped},
@@ -497,13 +537,12 @@ def _reasoning_attempts(
         )
         return seen
 
-    supported = _supported_efforts(model_id)
     if supported is None:
         # Legacy Claude (Sonnet 4.5, Haiku series, Claude 3.x, …) — no
         # effort parameter; toggling reasoning on is the best we can do.
         _add({"reasoning": {"enabled": True}})
     else:
-        _add({"reasoning": {"effort": _map_effort(effort, supported)}})
+        _add({"reasoning": {"effort": mapped}})
 
     # 80% of the output budget, but capped: the providers that want this
     # form (Gemini / Qwen-style thinking budgets) top out around 32k, so
@@ -511,7 +550,7 @@ def _reasoning_attempts(
     budget = min(max(1024, int(max_tokens * 0.8)), _MAX_REASONING_BUDGET)
     _add({"reasoning": {"max_tokens": budget}})
     _add({"reasoning": {"enabled": True}})
-    _add({"reasoning_effort": effort})
+    _add({"reasoning_effort": mapped})
 
     return seen
 

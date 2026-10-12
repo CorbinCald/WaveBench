@@ -16,7 +16,12 @@ from typing import Any
 import aiohttp
 
 import wavebench.tui.styles as _styles
-from wavebench.api import _is_effort_naming_bridge, _map_effort, _supported_efforts
+from wavebench.api import (
+    _is_effort_naming_bridge,
+    _load_model_context_lengths,
+    _map_effort,
+    _supported_efforts,
+)
 from wavebench.modes import MODES, Mode
 from wavebench.modes.code import CodeMode
 from wavebench.modes.image import ImageMode, write_image_gallery
@@ -329,24 +334,6 @@ async def main_async(
     print(_box_bot(w, heavy=True))
     print()
 
-    # Build per-model effort-adjustment notices; these get scrolled as a
-    # news-ticker on the summary line once the tracker starts rendering.
-    effort_ticker_msgs: list = []
-    if reasoning_effort and not tts_mode and not image_mode:
-        for _name, model_id in targets:
-            supported = _supported_efforts(model_id)
-            short_id = model_id.split("/", 1)[-1]
-            if supported is None:
-                effort_ticker_msgs.append(
-                    f"{short_id}: effort {reasoning_effort} n/a → reasoning on"
-                )
-            else:
-                mapped = _map_effort(reasoning_effort, supported)
-                if mapped != reasoning_effort and not _is_effort_naming_bridge(
-                    model_id, reasoning_effort, mapped
-                ):
-                    effort_ticker_msgs.append(f"{short_id}: effort {reasoning_effort} → {mapped}")
-
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
     connector = aiohttp.TCPConnector(limit=0, keepalive_timeout=30)
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
@@ -372,6 +359,29 @@ async def main_async(
         timeout=timeout,
         connector=connector,
     ) as session:
+        if not tts_mode and not image_mode:
+            await _load_model_context_lengths(session, api_key, refresh=True)
+
+        # Build per-model effort-adjustment notices; these get scrolled as a
+        # news-ticker on the summary line once the tracker starts rendering.
+        effort_ticker_msgs: list = []
+        if reasoning_effort and not tts_mode and not image_mode:
+            for _name, model_id in targets:
+                supported = _supported_efforts(model_id)
+                short_id = model_id.split("/", 1)[-1]
+                if supported is None:
+                    effort_ticker_msgs.append(
+                        f"{short_id}: effort {reasoning_effort} n/a → reasoning on"
+                    )
+                else:
+                    mapped = _map_effort(reasoning_effort, supported)
+                    if mapped != reasoning_effort and not _is_effort_naming_bridge(
+                        model_id, reasoning_effort, mapped
+                    ):
+                        effort_ticker_msgs.append(
+                            f"{short_id}: effort {reasoning_effort} → {mapped}"
+                        )
+
         model_names = [name for name, _ in targets]
         model_id_map = {name: mid for name, mid in targets}
         tracker = ProgressTracker(
