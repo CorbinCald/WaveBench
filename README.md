@@ -156,7 +156,7 @@ The menu has four tabs:
 - **TTS** — Search, browse, and toggle speech-output models separately from the main model list. If no TTS models are selected, TTS mode falls back to the bundled OpenRouter TTS defaults.
 - **Image** — Select image-output models separately from text and speech models. If none are selected, image mode uses its bundled defaults.
 - **Settings** — Configure:
-  - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Unsupported values are mapped per model where possible.
+  - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Supported levels are checked against OpenRouter’s model catalog before each run and cached for its requests. Unsupported values are mapped to the nearest supported level (ties go upward); built-in compatibility rules are used if metadata is unavailable.
   - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`; Harness comparisons also support `speed`, `cache`, `tool_fail`, `cost_per_pass`, and `p95`. Missing measurements sort last.
   - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
   - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
