@@ -78,6 +78,7 @@ async def test_main_async_image_filters_models_generates_gallery_and_records_his
         reasoning_effort="high",
         auto_open="off",
         auto_install="off",
+        fast_providers=False,
         image_modalities=None,
     ) -> None:
         seen.append((mode.name, name, mid, reasoning_effort, auto_open, image_modalities))
@@ -187,6 +188,7 @@ async def test_main_async_image_uses_bundled_defaults_when_no_image_models_selec
         reasoning_effort="high",
         auto_open="off",
         auto_install="off",
+        fast_providers=False,
         image_modalities=None,
     ) -> None:
         seen_names.append(name)

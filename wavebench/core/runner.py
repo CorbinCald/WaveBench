@@ -86,6 +86,7 @@ async def run_model(
     auto_install: str = "off",
     image_modalities: list[str] | None = None,
     web_search=None,
+    fast_providers: bool = False,
 ) -> None:
     """Execute one model against *mode*; write output; record result.
 
@@ -119,6 +120,7 @@ async def run_model(
             auto_install=auto_install,
             auto_open=auto_open,
             reasoning_effort=reasoning_effort,
+            fast_providers=fast_providers,
             tracker=tracker,
             web_search=web_search,
         )
@@ -187,6 +189,7 @@ async def run_model(
                     framed_prompt,
                     modalities=image_modalities,
                     image_config=mode.image_config(),  # type: ignore[attr-defined]
+                    fast_providers=fast_providers,
                     on_retry=_on_retry,
                 )
             else:
@@ -196,6 +199,7 @@ async def run_model(
                     model_id,
                     framed_prompt,
                     reasoning_effort=reasoning_effort,
+                    fast_providers=fast_providers,
                     on_progress=_on_progress,
                     on_retry=_on_retry,
                 )

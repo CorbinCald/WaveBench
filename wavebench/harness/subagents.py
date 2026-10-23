@@ -327,6 +327,7 @@ class SubagentRun:
             cache_policy=self.cache_policy,
             gemini_provider=self.gemini_provider,
             reasoning_effort=session.reasoning_effort,
+            fast_providers=session.fast_providers,
             on_progress=(lambda chars: self.pool.note_progress(self.number, chars))
             if live
             else None,

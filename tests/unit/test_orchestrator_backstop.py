@@ -40,6 +40,7 @@ async def test_task_that_dies_before_recording_is_backstopped_as_failed(
         reasoning_effort="high",
         auto_open="off",
         auto_install="off",
+        fast_providers=False,
     ) -> None:
         await output_dir_task
         raise RuntimeError("exploded before recording a result")

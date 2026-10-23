@@ -865,6 +865,7 @@ async def call_conversation(
     input_tokens_bound: int | None = None,
     cache_policy: CachePolicy | None = None,
     gemini_provider: str | None = None,
+    fast_providers: bool = False,
     cache_reuse: bool = True,
     strict_reasoning: bool = False,
     stream_limits: Limits | None = None,
@@ -880,6 +881,8 @@ async def call_conversation(
     """
     limits = stream_limits or Limits()
     provider_routing = {"require_parameters": True}
+    if fast_providers:
+        provider_routing["sort"] = "throughput"
     if gemini_provider is not None:
         if gemini_provider not in GEMINI_PROVIDER_ROUTES:
             raise TurnError(

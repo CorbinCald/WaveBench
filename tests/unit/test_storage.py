@@ -56,6 +56,7 @@ def test_load_config_missing_file_returns_defaults(tmp_state_dir: Path) -> None:
     cfg = storage.load_config()
     assert cfg == {
         "reasoning_effort": "high",
+        "fast_providers": "off",
         "analytics_sort": "runs",
         "theme": "default",
         "auto_open": "incremental",

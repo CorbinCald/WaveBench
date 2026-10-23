@@ -56,6 +56,7 @@ async def test_main_async_tts_filters_selected_models_to_tts(
         reasoning_effort="high",
         auto_open="off",
         auto_install="off",
+        fast_providers=False,
     ) -> None:
         seen.append((mode.name, name, mid, reasoning_effort, auto_open))
         output_dir = await output_dir_task

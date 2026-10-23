@@ -267,6 +267,13 @@ def interactive_config_menu(
             "choices": REASONING_CHOICES,
         },
         {
+            "key": "fast_providers",
+            "label": "Fast providers (tokens/sec)",
+            "value": current_config.get("fast_providers", "off"),
+            "type": "cycle",
+            "choices": ["off", "on"],
+        },
+        {
             "key": "analytics_sort",
             "label": "Analytics sort",
             "value": current_config.get("analytics_sort", "runs"),
@@ -632,7 +639,7 @@ def interactive_config_menu(
                             else:  # after_all
                                 val_s = f"{S.HGRN}{val}{S.RST}"
                                 chk = f"{S.HGRN}✓{S.RST}"
-                        elif item.get("key") == "auto_install":
+                        elif item.get("key") in ("auto_install", "fast_providers"):
                             if val == "off":
                                 val_s = f"{S.DIM}{val}{S.RST}"
                                 chk = " "

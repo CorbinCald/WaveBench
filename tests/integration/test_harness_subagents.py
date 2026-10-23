@@ -156,6 +156,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
 
     async def model(client, key, model_id, messages, tools, **kwargs):
         nonlocal active, peak
+        assert kwargs["fast_providers"] is True
         kind, agent = role(messages)
         history = conversations.setdefault(kind + agent, [])
         history.append(json.loads(json.dumps(messages)))
@@ -217,6 +218,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
     session = factory(
         limits=Limits(subagent_parallel=2, subagent_cap=3, subagent_turns=4, review_seconds=1),
         tracker=tracker,
+        fast_providers=True,
     )
     await session.build()
     await session.execute()

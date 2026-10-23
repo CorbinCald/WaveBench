@@ -105,6 +105,7 @@ def load_config() -> dict[str, Any]:
     path = _config_path()
     defaults = {
         "reasoning_effort": "high",
+        "fast_providers": "off",
         "analytics_sort": "runs",
         "theme": "default",
         "auto_open": "incremental",
@@ -211,6 +212,7 @@ def record_run(
     model_results: dict[str, Any],
     costs: dict[str, float | None] | None = None,
     reasoning_effort: str | None = None,
+    fast_providers: bool | None = None,
 ) -> dict[str, Any]:
     """Append one benchmark run to the on-disk history and return the result.
 
@@ -230,6 +232,7 @@ def record_run(
         "output_dir": output_dir or "",
         "total_time_s": round(total_time, 2),
         **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
+        **({"fast_providers": fast_providers} if fast_providers is not None else {}),
         "models": {
             name: {
                 **info,

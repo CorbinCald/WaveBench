@@ -61,7 +61,7 @@ async def factory(tmp_path, monkeypatch):
     run = allocate_run(tmp_path, "provider-continuity", "fixture")
     sessions = []
 
-    def create(client, model=MODEL):
+    def create(client, model=MODEL, fast_providers=False):
         session = HarnessSession(
             run,
             len(sessions) + 1,
@@ -75,6 +75,7 @@ async def factory(tmp_path, monkeypatch):
             asyncio.Semaphore(1),
             auto_open="off",
             reasoning_effort=None,
+            fast_providers=fast_providers,
         )
         sessions.append(session)
         return session
@@ -84,11 +85,12 @@ async def factory(tmp_path, monkeypatch):
         await session.close()
 
 
+@pytest.mark.parametrize("fast_providers", [False, True])
 @pytest.mark.parametrize(
     "provider,slug", [("Google", "google-vertex"), ("Google AI Studio", "google-ai-studio")]
 )
 async def test_gemini_keeps_provider_and_signatures_through_http_and_stream_retries(
-    factory, monkeypatch, provider, slug
+    factory, monkeypatch, provider, slug, fast_providers
 ):
     requests = []
 
@@ -123,17 +125,20 @@ async def test_gemini_keeps_provider_and_signatures_through_http_and_stream_retr
     app.router.add_post("/chat/completions", handler)
     async with TestServer(app) as server, aiohttp.ClientSession() as client:
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
-        session = factory(client)
+        session = factory(client, fast_providers=fast_providers)
         await session.build()
     assert session.generation == "submitted"
     assert len(requests) == 5 and len(session.turns) == 4
     assert session.usage()["total_tokens"] == 430
     assert session.dispatcher.tool_usage == {"calls": 3, "failures": 0}
     assert session.result()["harness"]["gemini_provider"] == provider
-    assert requests[0]["provider"] == {"require_parameters": True}
+    routing = {"sort": "throughput"} if fast_providers else {}
+    assert session.result()["harness"]["fast_providers"] is fast_providers
+    assert requests[0]["provider"] == {"require_parameters": True, **routing}
     for request in requests[1:]:
         assert request["provider"] == {
             "require_parameters": True,
+            **routing,
             "only": [slug],
             "allow_fallbacks": False,
         }
@@ -254,7 +259,7 @@ async def test_compaction_and_repair_preserve_binding_but_compactor_is_unrestric
     app.router.add_post("/chat/completions", handler)
     async with TestServer(app) as server, aiohttp.ClientSession() as client:
         monkeypatch.setattr(api, "API_URL", str(server.make_url("")))
-        session = factory(client)
+        session = factory(client, fast_providers=True)
         await session.build()
         session.messages.insert(
             2, {"role": "assistant", "content": "old reference material " * 5000}
@@ -264,7 +269,8 @@ async def test_compaction_and_repair_preserve_binding_but_compactor_is_unrestric
         session.dispatcher.submission = None
         await session.conversation(repair=True)
     assert [r["model"] for r in requests] == [MODEL, MODEL, session_module.COMPACTION_MODEL, MODEL]
-    assert requests[2]["provider"] == {"require_parameters": True}
+    assert all(r["provider"]["sort"] == "throughput" for r in requests)
+    assert requests[2]["provider"] == {"require_parameters": True, "sort": "throughput"}
     assert requests[3]["provider"]["only"] == ["google-vertex"]
     assert session.gemini_provider == "Google"
     assert session.turns[-1]["phase"] == "repairing"

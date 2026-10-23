@@ -565,6 +565,7 @@ async def call_model_async(
     temperature: float | None = None,
     max_tokens: int | None = None,
     on_retry: RetryCallback | None = None,
+    fast_providers: bool = False,
 ) -> Any:
     """Call the OpenRouter API for a specific model."""
     headers = {
@@ -592,6 +593,9 @@ async def call_model_async(
         "temperature": 0.1 if temperature is None else temperature,
         "max_tokens": model_max_tokens,
     }
+
+    if fast_providers:
+        base_data["provider"] = {"sort": "throughput"}
 
     if "gemini-3" in model_id.lower():
         base_data["temperature"] = 1.0
@@ -723,6 +727,7 @@ async def call_model_streaming(
     on_progress: Callable[[int], None] | None = None,
     max_tokens: int | None = None,
     on_retry: RetryCallback | None = None,
+    fast_providers: bool = False,
 ) -> tuple[str, dict]:
     """Stream a chat completion via SSE, calling *on_progress(total_chars)* for
     each content chunk so the caller can drive a live progress bar.
@@ -756,6 +761,9 @@ async def call_model_streaming(
         "max_tokens": model_max_tokens,
         "stream": True,
     }
+
+    if fast_providers:
+        base_data["provider"] = {"sort": "throughput"}
 
     if "gemini-3" in model_id.lower():
         base_data["temperature"] = 1.0
@@ -1094,6 +1102,7 @@ async def call_image_generation(
     modalities: list[str] | None = None,
     image_config: dict[str, str] | None = None,
     on_retry: RetryCallback | None = None,
+    fast_providers: bool = False,
 ) -> tuple[dict[str, Any], dict]:
     """Generate images through non-streaming /chat/completions.
 
@@ -1111,6 +1120,8 @@ async def call_image_generation(
         "modalities": modalities or ["image", "text"],
         "stream": False,
     }
+    if fast_providers:
+        data["provider"] = {"sort": "throughput"}
     if image_config:
         data["image_config"] = image_config
 

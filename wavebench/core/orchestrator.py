@@ -144,6 +144,7 @@ async def main_async(
         config = load_config()
 
     raw_effort = config.get("reasoning_effort", "high")
+    fast_providers = config.get("fast_providers", "off") == "on"
     reasoning_effort: str | None = None if raw_effort == "off" else raw_effort
 
     auto_open = config.get("auto_open", "off")
@@ -279,6 +280,8 @@ async def main_async(
     )
     print(_box_divider(w, heavy=True))
     print(_box_row(f"{S.DIM}{'MODELS':>8}{S.RST}  {len(targets)} active", w, heavy=True))
+    if fast_providers and not tts_mode:
+        print(_box_row(f"{S.DIM}{'ROUTING':>8}{S.RST}  Fast providers (tokens/sec)", w, heavy=True))
     if tts_mode:
         print(
             _box_row(
@@ -440,6 +443,7 @@ async def main_async(
             def _run_model_task(name: str, mid: str) -> asyncio.Task:
                 kwargs: dict[str, Any] = {
                     "reasoning_effort": reasoning_effort,
+                    "fast_providers": fast_providers,
                     "auto_open": auto_open,
                     "auto_install": auto_install,
                 }
@@ -493,6 +497,7 @@ async def main_async(
                             auto_open=auto_open,
                             preview_destination=config.get("preview_destination", "automatic"),
                             reasoning_effort=reasoning_effort,
+                            fast_providers=fast_providers,
                             tracker=tracker,
                             web_search=web_search,
                             subagents=subagents_enabled,
@@ -729,6 +734,7 @@ async def main_async(
         results,
         costs=run_costs,
         reasoning_effort=raw_effort if not (tts_mode or image_mode) else None,
+        fast_providers=fast_providers if not tts_mode else None,
     )
     display_analytics(history, compact=True, pad=pad, sort_by=config.get("analytics_sort", "runs"))
     if harness_batch:

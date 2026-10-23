@@ -60,7 +60,7 @@ def test_destination_cycle_save_reopen_and_cancel(tmp_path, columns):
 
         try:
             drain()
-            for key in [b"\x1b[C"] * 3 + [b"\x1b[B"] * 5:
+            for key in [b"\x1b[C"] * 3 + [b"\x1b[B"] * 6:
                 os.write(master, key)
                 drain()
             assert b"Preview destination" in output

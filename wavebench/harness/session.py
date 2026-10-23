@@ -169,6 +169,7 @@ class HarnessSession:
         auto_open="incremental",
         preview_destination="automatic",
         reasoning_effort="high",
+        fast_providers: bool = False,
         tracker=None,
         web_search: BraveSearch | None = None,
         subagents: bool = False,
@@ -183,6 +184,7 @@ class HarnessSession:
         self.limits, self.api_slots, self.process_slots = limits, api_slots, process_slots
         self.auto_open, self.auto_install = auto_open, auto_install
         self.configured_effort = self.reasoning_effort = reasoning_effort
+        self.fast_providers = fast_providers
         self.workspace, self.metadata = allocate_project(run, slot, name)
         try:
             self.runtime = Runtime(self.workspace, self.metadata, limits, auto_install)
@@ -397,6 +399,7 @@ class HarnessSession:
                 "preview_destination": self.preview_destination,
                 "dependency_policy": self.auto_install,
                 "model_id": self.model_id,
+                "fast_providers": self.fast_providers,
                 "reasoning_effort": {
                     "configured": self.configured_effort,
                     "final": self.reasoning_effort,
@@ -590,6 +593,7 @@ class HarnessSession:
                     [],
                     max_tokens=COMPACTION_OUTPUT_TOKENS,
                     reasoning_effort=COMPACTION_EFFORT,
+                    fast_providers=self.fast_providers,
                     strict_reasoning=True,
                     cache_reuse=False,
                     input_tokens_bound=input_bound,
@@ -707,6 +711,7 @@ class HarnessSession:
                         cache_policy=self.cache_policy,
                         gemini_provider=self.gemini_provider,
                         reasoning_effort=self.reasoning_effort,
+                        fast_providers=self.fast_providers,
                         on_progress=(lambda chars: self.tracker.update(self.name, chars))
                         if self.tracker and self.tracker.is_running
                         else None,

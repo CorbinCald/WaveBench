@@ -27,6 +27,7 @@ async def test_run_model_writes_multiple_generated_images_with_detected_extensio
         modalities: list[str] | None,
         image_config: dict[str, str] | None,
         on_retry: Any,
+        fast_providers: bool = False,
     ) -> tuple[dict[str, Any], dict]:
         seen.update(
             {
