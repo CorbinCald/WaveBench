@@ -37,3 +37,22 @@ test-results/
 .coverage.*
 htmlcov/
 dist/
+
+# Local agent configuration and automation
+.agents/
+.claude/
+.codex/
+.cursor/
+skills/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+SKILL.md
+/WORKFLOW.md
+
+# Development session records and generated evidence
+/docs/superpowers/
+/docs/evidence/
+/docs/*-verification.md
+/.github/issue-assets/
+/scripts/*_results.json

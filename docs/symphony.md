@@ -25,7 +25,6 @@ The Symphony package lives under `symphony/` and exposes a `symphony` console sc
 - A Pi RPC JSONL client that launches `pi --mode rpc --no-session`, sends rendered prompts, consumes Pi events until `agent_end`, and auto-cancels extension UI dialogs so unattended runs do not stall indefinitely.
 - Structured Python logging as the operator-visible status surface.
 - A Linear state-machine workflow: `Todo` → `In Progress` → `Human Review` → `Merging`, where `Merging` commits any remaining workspace changes, rebases, pushes the issue branch, and creates or finds a GitHub pull request through `gh`.
-- Project Pi skills under `.agents/skills/` for Linear ticket handling and optional interactive Playwright validation evidence posted to Linear.
 
 ## Trust and safety posture
 
@@ -39,7 +38,7 @@ Implementation-defined policies:
 - Changes to hooks, `pi.command`, workspace root, or Git settings require restarting the daemon. Hot reload rejects changes to these execution settings and keeps the last working configuration. Prompt, tracker, polling, and agent-limit changes can still reload.
 - Pi authentication, model selection, tools, extensions, skills, and provider policy come from your normal Pi setup and/or flags in `pi.command`.
 - Pi RPC extension UI dialog requests (`select`, `confirm`, `input`, `editor`) are automatically cancelled in unattended Symphony runs. Fire-and-forget UI notifications are logged/ignored.
-- Tracker state writes are built into the orchestrator only. Agents may use the `write-linear` skill for concise plans, blockers, evidence links, and final handoff comments.
+- Tracker state writes are built into the orchestrator. Additional worker integrations come from your own local Pi configuration.
 
 Before production use, harden the host environment: run under a dedicated OS user, restrict credentials, choose conservative Pi tools/extensions, and keep workspaces outside sensitive directories.
 
@@ -91,8 +90,41 @@ Before production use, harden the host environment: run under a dedicated OS use
    gh auth status
    ```
 
-6. Set `LINEAR_PROJECT_SLUG` in your shell or `.env`. The supplied workflow resolves
-   `project_slug: $LINEAR_PROJECT_SLUG`; it contains no maintainer-specific project ID.
+6. Set `LINEAR_PROJECT_SLUG` in your shell or `.env`, then create your own
+   gitignored `WORKFLOW.md`. Workflow files and agent skills are local operator
+   configuration and are not shipped in this repository. A minimal starting point:
+
+   ```markdown
+   ---
+   tracker:
+     kind: linear
+     api_key: $LINEAR_API_KEY
+     project_slug: $LINEAR_PROJECT_SLUG
+     auto_transition: false
+     post_status_comments: false
+   workspace:
+     root: .symphony/workspaces
+   git:
+     enabled: true
+     repo: https://github.com/YOUR_ACCOUNT/YOUR_REPOSITORY.git
+     base_branch: main
+     push_on_merging: false
+     pr_on_merging: false
+   agent:
+     max_concurrent_agents: 1
+     max_turns: 3
+   pi:
+     command: pi --mode rpc --no-session
+   ---
+
+   Work on {{ issue.identifier }}: {{ issue.title }}.
+   {{ issue.description }}
+   Implement the requested change and report the validation results.
+   ```
+
+   Replace the repository URL and review the tracker states, worker permissions,
+   and any setup hooks before starting. The example leaves automatic tracker
+   transitions, status comments, pushes, and pull requests disabled.
 
 7. Start the daemon only when you are ready to dispatch real Linear work:
 
@@ -108,7 +140,7 @@ Before production use, harden the host environment: run under a dedicated OS use
 
    `python3 -m symphony --once ./WORKFLOW.md` is also a dispatching tick, not a dry run; use it only when you intentionally want Symphony to pick up eligible Linear issues.
 
-The default workflow stores issue workspaces under `.symphony/workspaces/`, which is gitignored.
+The example stores issue workspaces under `.symphony/workspaces/`, which is gitignored.
 
 The optional GitHub issue-sync workflow is disabled in forks by default. To use
 it, add repository secrets `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, and
@@ -128,12 +160,12 @@ work with an unavailable review state also stops after the bounded attempts.
 
 ## Git and branch lifecycle
 
-The workflow uses this git config block:
+To enable Git and pull-request automation, configure your local workflow:
 
 ```yaml
 git:
   enabled: true
-  repo: https://github.com/CorbinCald/WaveBench.git
+  repo: https://github.com/YOUR_ACCOUNT/YOUR_REPOSITORY.git
   remote: origin
   base_branch: main
   branch_prefix: symphony
@@ -153,7 +185,7 @@ Behavior:
 
 ## Pi configuration
 
-The workflow uses this Pi config block:
+Pi settings can be configured in your local workflow:
 
 ```yaml
 pi:
@@ -215,14 +247,13 @@ Behavior:
 
 Create the configured Linear states before enabling a long-running daemon. If a configured Linear state does not exist, Symphony logs a warning and leaves the issue in its current state.
 
-## Agent skills and evidence
+## Local worker configuration
 
-The repo includes project skills discovered by Pi from `.agents/skills/`:
-
-- `write-linear`: Linear comments, blocker reporting, evidence links, and final handoff template. It does not change issue state.
-- `interactive-verification`: optional Playwright CLI-driven interactive validation/demo evidence, with screenshots/videos uploaded to Linear.
-
-Use interactive evidence when tests are not enough or the reviewer should see the final behavior. For WaveBench, exercise `wavebench`, `wavebench --config`, or the issue-specific command. Playwright CLI applies when the app surface is browser-accessible, such as a web app, local preview, browser-hosted terminal, WebView, or demo page. Evidence should be posted to Linear, not kept under the repo or `.symphony/`; temporary files are only for upload and should be deleted.
+Install any worker skills and agent instructions in your own Pi environment or
+local workspace. They are not included in Git clones of this repository.
+Keep workflow settings, session notes, screenshots, recordings, and generated
+evidence outside version control. Reusable tests and user documentation belong
+in the repository.
 
 ## Validation
 

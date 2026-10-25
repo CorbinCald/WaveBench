@@ -197,7 +197,7 @@ Text outputs are Markdown. TTS saves provider-compatible audio and offers arrow-
 | `.benchmark_history.json` | Lifetime run results, including prompts and costs |
 | `.benchmark_query_history.<mode>.json` | Last 500 prompts per mode; Harness uses the legacy `code` category |
 
-Legacy Readline/libedit prompt histories are imported without deleting the originals. This repository ignores local state, `.env` files, generated projects, and browser-test artifacts. If you run WaveBench inside another repository, add equivalent ignore rules there. Review saved prompts, conversations, and logs before sharing them.
+Legacy Readline/libedit prompt histories are imported without deleting the originals. This repository ignores local state, `.env` files, generated projects, browser-test artifacts, agent instructions/skills, local workflow configuration, and development session records. If you run WaveBench inside another repository, add equivalent ignore rules there. Review saved prompts, conversations, and logs before sharing them.
 
 ## Development
 

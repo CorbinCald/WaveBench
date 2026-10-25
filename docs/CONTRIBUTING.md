@@ -82,8 +82,9 @@ python scripts/effort_audit_tight.py --live --output /tmp/wavebench-effort-check
 ```
 
 The cache and CLI verification helpers use the current Harness interface.
-Dated verification notes under `docs/` preserve historical observations;
-their model IDs, timings, prices, and superseded limits describe those runs.
+Keep local agent instructions, skills, workflow configuration, session notes,
+recordings, and generated evidence out of version control. Commit reusable
+tests and user documentation; keep raw development records locally.
 
 ## Style & linting
 

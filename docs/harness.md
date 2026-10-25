@@ -502,8 +502,7 @@ OpenAI harness requests use `prompt_cache_options.mode: "implicit"`, recorded as
 strings and drops their explicit content markers. Explicit-only mode therefore
 cannot cache a conversation that starts short and grows through tool calls.
 Automatic breakpoints cover that history without inserting user messages or
-rewriting tool results. [Failure analysis and live verification](cache-context-verification.md#tool-result-caching-fix)
-include upstream request evidence and actual cache reads.
+rewriting tool results.
 
 Before each build/repair request, Harness checks the active context. It compacts
 only for the context window: when estimated input **exceeds 240,000 tokens**, or
@@ -647,8 +646,6 @@ tool effects. Truncated or malformed streamed arguments do not execute.
 Stream byte limits are separately configurable and recorded. Diagnostics retain
 the reached limit, byte counters, parsing state, and sanitized provider/model
 identifiers without response excerpts. See [stream policy and defaults](stream-limits.md).
-The [limit verification notes](harness-limits-verification.md) include bounded
-live DeepSeek/Gemini runs and the full local checks.
 Python execution also has a 1 GiB address-space limit; Node uses a 512 MiB V8
 heap. A subprocess has a 128 MiB individual-file write limit. The aggregate
 storage monitor polls every 100 ms, so a fast writer can briefly overshoot it;
@@ -789,9 +786,7 @@ If a model sends a text reply without calling `submit`, the controller gives it
 one reminder per phase. Only an actual, valid `submit` call submits the project.
 Missing provider usage remains unknown. The streaming limit counts distinct calls
 against `harness.batch_calls` (64 by default). Sparse numeric call indices are
-valid identifiers. See the [September 21](benchmark-failures-verification.md),
-[September 22](benchmark-failures-sep-22-verification.md), and
-[lean Harness](lean-harness-verification.md) investigations.
+valid identifiers.
 
 Gemini conversations bind to the provider reported by their first successful
 turn: `Google` maps to `google-vertex`, and `Google AI Studio` maps to
@@ -856,7 +851,7 @@ python scripts/verify_harness_live.py --live \
 
 This command uses paid OpenRouter requests. Its headless viewer loads the
 managed URL without rerunning the project; browser interaction and the TUI
-should also be exercised locally. See [verification evidence](harness-verification.md).
+should also be exercised locally. Keep generated evidence outside version control.
 
 Protocol references: [OpenRouter tool calling](https://openrouter.ai/docs/guides/features/tool-calling),
 [Anthropic parallel-call semantics](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use),
@@ -869,5 +864,5 @@ To verify real cache reads on OpenAI, Anthropic, and Google and compact a
 python scripts/verify_context_live.py --live --output /tmp/wavebench-context-check
 ```
 
-This uses paid requests; `--cache-only` skips the long-context case. See
-[cache and compaction verification](cache-context-verification.md).
+This uses paid requests; `--cache-only` skips the long-context case. The selected
+output directory holds the verification records and should remain local.
