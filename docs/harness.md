@@ -351,6 +351,18 @@ total agent cap per model. Subagents are off by default. `--subagents` and
 the total cap for one run and implies `--subagents` unless `--no-subagents` is
 given. The benchmark header shows the effective **AGENTS** setting.
 
+When enabled, **Orchestrator LLM** and **Subagent LLM** let you select models
+with ←→ from your saved model selection (or the defaults), or type any
+`provider/model` ID. Ctrl+A restores the default. Save with Enter.
+The orchestrator defaults to each selected benchmark model; choosing an explicit
+orchestrator runs that model once instead. Subagents default to their orchestrator.
+Both choices persist, are ignored while subagents are off, and can be overridden
+for one run with `--orchestrator-model ID` and `--subagent-model ID`.
+
+For example: `wavebench --subagents --orchestrator-model provider/lead
+--subagent-model provider/worker "Build a small app"` (replace the example IDs).
+The saved keys are `orchestrator_model` and `subagent_model`.
+
 When enabled, every lead model receives one additional native tool:
 
 ```json
@@ -363,8 +375,8 @@ subagents, LangChain Deep Agents, OpenHands, Goose, and others): one minimal
 spawn tool, a brief-only context, bounded reports, fan-out through several
 calls in one turn, hard caps with readable errors, and no nesting.
 
-- **Same model, fresh context.** A subagent is a new conversation of the model
-  being benchmarked, with the same reasoning effort. It sees its own system
+- **Configurable model, fresh context.** A subagent is a new conversation of the
+  chosen subagent model, with the same reasoning effort as its orchestrator. It sees its own system
   prompt, the original user request as context, and the lead's `task` brief;
   it never sees the lead's history. The lead is instructed to delegate unless
   the whole project fits in one or two small files: decide the file layout and

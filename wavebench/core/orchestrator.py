@@ -230,6 +230,12 @@ async def main_async(
             }
             if not mapping and not harness_mode:
                 mapping = MODEL_MAPPING
+    orchestrator_model = getattr(args, "orchestrator_model", None) or config.get(
+        "orchestrator_model"
+    )
+    subagent_model = getattr(args, "subagent_model", None) or config.get("subagent_model")
+    if subagents_enabled and orchestrator_model:
+        mapping = {orchestrator_model: orchestrator_model}
     pad = max((len(n) for n in mapping), default=12) + 1
 
     if pricing_lookup:
@@ -501,6 +507,7 @@ async def main_async(
                             tracker=tracker,
                             web_search=web_search,
                             subagents=subagents_enabled,
+                            subagent_model=subagent_model if subagents_enabled else None,
                         )
                     )
                 await harness_batch.run()

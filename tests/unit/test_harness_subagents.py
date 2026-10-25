@@ -278,8 +278,9 @@ def test_cli_rejects_a_zero_agent_cap(monkeypatch, capsys):
         ({"subagents": True, "agent_cap": None}, "off", (True, 8)),
     ],
 )
+@pytest.mark.parametrize("model_source", ["default", "saved", "cli"])
 async def test_orchestrator_wires_the_run_setting_and_cap_into_each_session(
-    tmp_state_dir, monkeypatch, capsys, flags, config_state, expected
+    tmp_state_dir, monkeypatch, capsys, flags, config_state, expected, model_source
 ):
     from wavebench.core import orchestrator as orchestrator_mod
     from wavebench.harness import session as session_mod
@@ -319,6 +320,17 @@ async def test_orchestrator_wires_the_run_setting_and_cap_into_each_session(
     monkeypatch.setattr(orchestrator_mod, "get_directory_name", fake_get_directory_name)
     monkeypatch.setattr(session_mod, "HarnessSession", FakeSession)
     monkeypatch.setattr(session_mod, "HarnessBatch", FakeBatch)
+    model_config = (
+        {}
+        if model_source == "default"
+        else {"orchestrator_model": "vendor/saved-lead", "subagent_model": "vendor/saved-worker"}
+    )
+    if model_source == "cli":
+        flags = {
+            **flags,
+            "orchestrator_model": "vendor/cli-lead",
+            "subagent_model": "vendor/cli-worker",
+        }
     args = SimpleNamespace(prompt="Build it", mode="harness", text=False, auto_open="off", **flags)
     await orchestrator_mod.main_async(
         args,
@@ -330,6 +342,7 @@ async def test_orchestrator_wires_the_run_setting_and_cap_into_each_session(
             "auto_install": "off",
             "directory_naming": "slug",
             "web_search": "off",
+            **model_config,
             "subagents": config_state,
             "harness": {"subagent_parallel": 3},
         },
@@ -342,7 +355,13 @@ async def test_orchestrator_wires_the_run_setting_and_cap_into_each_session(
     label = f"On (3 parallel, {expected[1]} total)" if expected[0] else "Off"
     assert f"AGENTS  {label}" in output
     history = json.loads((tmp_state_dir / ".benchmark_history.json").read_text())
-    assert history["runs"][0]["models"]["model"]["status"] == "success"
+    selected = expected[0] and model_source != "default"
+    expected_name = f"vendor/{model_source}-lead" if selected else "model"
+    assert session.name == expected_name
+    assert session.kwargs["subagent_model"] == (
+        f"vendor/{model_source}-worker" if selected else None
+    )
+    assert history["runs"][0]["models"][expected_name]["status"] == "success"
 
 
 async def test_pool_rejections_count_without_spawning(tmp_path):

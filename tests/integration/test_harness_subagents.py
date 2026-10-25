@@ -808,3 +808,48 @@ async def test_no_reminder_when_the_lead_delegates_first_or_subagents_are_off(fa
     await quiet.execute()
     assert quiet.status == "success", quiet.error
     assert quiet.recoveries == []
+
+
+@pytest.mark.parametrize("worker", [None, "anthropic/worker"])
+async def test_subagent_uses_selected_model_and_its_output_limit(factory, monkeypatch, worker):
+    from wavebench import api
+    from wavebench.prompt_cache import CachePolicy
+
+    session = factory(subagent_model=worker)
+    expected = worker or session.model_id
+    monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, session.model_id, 800)
+    monkeypatch.setitem(api._MODEL_MAX_COMPLETION_CACHE, expected, 400)
+    requests = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        requests.append(model_id)
+        assert model_id == expected
+        assert kwargs["max_tokens"] == 400
+        assert kwargs["cache_policy"].family == CachePolicy(expected).family
+        turn = text("Task complete")
+        turn.model = expected
+        return turn
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    await session.subagents.spawn("task", {"name": "worker", "task": "Review the project"})
+    assert requests == [expected]
+    record = session.result()["harness"]["subagents"]
+    assert record["model_id"] == expected
+    assert record["runs"][0]["model_id"] == expected
+    assert record["runs"][0]["status"] == "completed"
+
+
+async def test_unsupported_subagent_model_fails_before_build(factory, monkeypatch):
+    checked = []
+
+    async def capable(client, key, model_id):
+        checked.append(model_id)
+        return model_id != "vendor/no-tools"
+
+    monkeypatch.setattr(module, "capability", capable)
+    session = factory(subagent_model="vendor/no-tools")
+    await session.build()
+    assert checked == ["vendor/lead", "vendor/no-tools"]
+    assert session.generation == "unsupported"
+    assert "subagent model vendor/no-tools" in session.error
+    assert not session.turns

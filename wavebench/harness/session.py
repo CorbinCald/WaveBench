@@ -173,8 +173,10 @@ class HarnessSession:
         tracker=None,
         web_search: BraveSearch | None = None,
         subagents: bool = False,
+        subagent_model: str | None = None,
     ):
         self.name, self.model_id = name, model_id
+        self.subagent_model = subagent_model or model_id
         self.prompt = prompt
         self.preview_identity = PreviewIdentity(name, model_id, slot, run.name, prompt)
         self.preview_destination = preview_destination
@@ -260,10 +262,10 @@ class HarnessSession:
         self._turn_output_tokens = 0
         self._stream_diagnostics: dict = {}
 
-    def output_tokens(self) -> int:
+    def output_tokens(self, model_id: str | None = None) -> int:
         return min(
             self.limits.turn_tokens,
-            api._MODEL_MAX_COMPLETION_CACHE.get(self.model_id, self.limits.turn_tokens),
+            api._MODEL_MAX_COMPLETION_CACHE.get(model_id or self.model_id, self.limits.turn_tokens),
         )
 
     def on_diagnostics(self, diagnostics: dict) -> None:
@@ -911,6 +913,18 @@ class HarnessSession:
             if self.tool_capability is False:
                 self.generation = "unsupported"
                 raise SetupError("unsupported tool calling: model catalog does not advertise tools")
+            if self.subagents and self.subagent_model != self.model_id:
+                try:
+                    subagent_capability = await asyncio.wait_for(
+                        capability(self.client, self.api_key, self.subagent_model), 20
+                    )
+                except asyncio.TimeoutError:
+                    subagent_capability = None
+                if subagent_capability is False:
+                    self.generation = "unsupported"
+                    raise SetupError(
+                        f"unsupported tool calling for subagent model {self.subagent_model}"
+                    )
             await self.runtime.preflight()
             await self.conversation()
             self.generation = "submitted"

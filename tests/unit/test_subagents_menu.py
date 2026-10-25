@@ -80,3 +80,64 @@ def test_non_terminal_explains_the_flags(monkeypatch, capsys):
 def test_cancel_keys_never_change_the_config(monkeypatch, key):
     keys(monkeypatch, ["space", key])
     assert menu.interactive_subagents({"subagents": "off"}) is None
+
+
+def test_model_choices_save_reload_and_reset(tmp_state_dir, monkeypatch, capsys):
+    from wavebench.storage import load_config, save_config, save_models
+
+    save_models({"lead": "vendor/lead", "worker": "vendor/worker"})
+    keys(monkeypatch, ["space", "down", "down", "down", "right", "down", "right", "right", "enter"])
+    updated = menu.interactive_subagents({})
+    save_config(updated)
+    assert load_config()["orchestrator_model"] == "vendor/lead"
+    assert load_config()["subagent_model"] == "vendor/worker"
+    assert "Orchestrator LLM" in capsys.readouterr().out
+    keys(monkeypatch, ["down", "down", "down", "ctrl-a", "down", "ctrl-a", "enter"])
+    reset = menu.interactive_subagents(load_config())
+    assert reset["orchestrator_model"] == reset["subagent_model"] == ""
+
+
+def test_custom_model_id_and_disabled_settings(monkeypatch):
+    keys(monkeypatch, ["down", "down", "down", *"vendor/custom", "down", *"vendor/worker", "enter"])
+    config = menu.interactive_subagents({"subagents": "on"})
+    assert config["orchestrator_model"] == "vendor/custom"
+    assert config["subagent_model"] == "vendor/worker"
+    keys(monkeypatch, ["space", "enter"])
+    disabled = menu.interactive_subagents(config)
+    assert disabled == {**config, "subagents": "off"}
+
+
+@pytest.mark.parametrize("save", [True, False])
+def test_settings_menu_keeps_model_edits_only_when_saved(tmp_state_dir, monkeypatch, save):
+    from wavebench.storage import load_config, save_config
+    from wavebench.tui.menus import config_menu
+
+    current = {
+        "subagents": "on",
+        "orchestrator_model": "vendor/old",
+        "subagent_model": "vendor/old",
+    }
+    save_config(current)
+    keys(
+        monkeypatch,
+        [
+            "down",
+            "down",
+            "down",
+            "ctrl-a",
+            *"vendor/lead",
+            "down",
+            "ctrl-a",
+            *"vendor/worker",
+            "enter",
+        ],
+    )
+    outer_keys = iter(["left", *(["down"] * 8), "space", "enter" if save else "escape"])
+    monkeypatch.setattr(config_menu, "_read_key_or_resize", lambda *_: next(outer_keys))
+    _, updated = config_menu.interactive_config_menu([], {"Fixture": "test/model"}, current)
+    if save:
+        save_config(updated)
+    else:
+        assert updated is None
+    assert load_config()["orchestrator_model"] == ("vendor/lead" if save else "vendor/old")
+    assert load_config()["subagent_model"] == ("vendor/worker" if save else "vendor/old")

@@ -7,12 +7,14 @@ import sys
 
 from wavebench.harness.config import Limits
 from wavebench.harness.subagents import subagents_status
+from wavebench.models import MODEL_MAPPING, is_image_model, is_tts_model
+from wavebench.storage import load_models
 from wavebench.tui.input import _read_key_or_resize, hold_raw
 from wavebench.tui.styles import S, _box_bot, _box_row, _box_top, _truncate
 
 PARALLEL_RANGE = (2, 5)
 MAX_CAP = 9_999
-FIELDS = ("enabled", "parallel", "cap")
+FIELDS = ("enabled", "parallel", "cap", "orchestrator_model", "subagent_model")
 
 
 def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dict | None:
@@ -27,6 +29,15 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
     if not isinstance(parallel, int) or not PARALLEL_RANGE[0] <= parallel <= PARALLEL_RANGE[1]:
         parallel = defaults.subagent_parallel
     cap_buffer = str(harness.get("subagent_cap", defaults.subagent_cap))
+    models = {key: config.get(key) or "" for key in FIELDS[3:]}
+    choices = [
+        "",
+        *dict.fromkeys(
+            mid
+            for mid in (load_models() or MODEL_MAPPING).values()
+            if not is_image_model(mid) and not is_tts_model(mid)
+        ),
+    ]
     cursor = 0
     message = ""
 
@@ -40,6 +51,7 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
     def updated() -> dict:
         return {
             **config,
+            **{key: value.strip() for key, value in models.items() if value or key in config},
             "subagents": "on" if enabled else "off",
             "harness": {**harness, "subagent_parallel": parallel, "subagent_cap": cap_value()},
         }
@@ -49,8 +61,8 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
         state = subagents_status(updated()) if cap_value() else "On (cap needed)"
         rows = [
             f"Subagents: {state} · Harness agents",
-            "Each model may delegate self-contained tasks to parallel subagents of",
-            "the same model. They share its workspace, tools, and phase time;",
+            "The orchestrator delegates tasks to parallel subagents. They share",
+            "its workspace, tools, and phase time;",
             "only their reports and changed files return to the lead.",
             "",
         ]
@@ -67,10 +79,24 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
                 "per model, build + repair · digits or ←→",
             ),
         ]
+        if enabled:
+            fields.extend(
+                [
+                    ("Orchestrator LLM", models["orchestrator_model"] or "Selected models", ""),
+                    ("Subagent LLM", models["subagent_model"] or "Same as orchestrator", ""),
+                ]
+            )
         for index, (label, value, hint) in enumerate(fields):
             marker = "▸" if index == cursor else " "
             rows.append(f"{marker} {label:<16} {value:<6} {S.DIM}{hint}{S.RST}")
-        rows.extend(["", "↑↓ select · Enter save · Esc cancel", message])
+        rows.extend(
+            [
+                "",
+                "LLM: ←→ choose · type provider/model · Ctrl+A reset" if enabled else "",
+                "↑↓ select · Enter save · Esc cancel",
+                message,
+            ]
+        )
         frame = [_box_top("Subagents", width)]
         frame.extend(_box_row(_truncate(row, width - 4), width) for row in rows)
         frame.append(_box_bot(width))
@@ -91,17 +117,38 @@ def interactive_subagents(config: dict, *, alternate_screen: bool = True) -> dic
                     if cap_value() is None:
                         message = f"Enter a total agent cap from 1 to {MAX_CAP:,}."
                         continue
+                    if any(
+                        value.strip()
+                        and ("/" not in value.strip() or any(c.isspace() for c in value.strip()))
+                        for value in models.values()
+                    ):
+                        message = "Use a provider/model ID, or Ctrl+A for the default."
+                        continue
                     return updated()
                 message = ""
                 field = FIELDS[cursor]
                 if key in ("up", "down"):
-                    cursor = (cursor + (1 if key == "down" else -1)) % len(FIELDS)
+                    cursor = (cursor + (1 if key == "down" else -1)) % (
+                        len(FIELDS) if enabled else 3
+                    )
                 elif field == "enabled" and key in ("space", "left", "right"):
                     enabled = not enabled
                 elif field == "parallel" and key in ("space", "left", "right"):
                     low, high = PARALLEL_RANGE
                     step = -1 if key == "left" else 1
                     parallel = low + (parallel - low + step) % (high - low + 1)
+                elif field in models:
+                    if key in ("left", "right"):
+                        index = choices.index(models[field]) if models[field] in choices else 0
+                        models[field] = choices[
+                            (index + (1 if key == "right" else -1)) % len(choices)
+                        ]
+                    elif key == "ctrl-a":
+                        models[field] = ""
+                    elif key == "backspace":
+                        models[field] = models[field][:-1]
+                    elif len(key) == 1 and key.isprintable() and not key.isspace():
+                        models[field] += key
                 elif field == "cap":
                     if key in ("left", "right"):
                         current = cap_value() or 1

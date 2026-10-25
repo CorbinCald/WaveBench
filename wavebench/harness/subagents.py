@@ -1,7 +1,7 @@
 """Bounded, parallel subagents that share a lead agent's workspace and phase limits.
 
 The lead model delegates with ``spawn_agent``. Each subagent is a fresh
-conversation of the same model with the same file tools, no submission, and no
+conversation of the configured model with the same file tools, no submission, and no
 nesting. Its requests count toward the lead's usage and run within the lead's
 phase time. Only a bounded report and the files it changed return to the lead.
 """
@@ -43,7 +43,7 @@ def subagents_status(config: dict) -> str:
 
 def lead_instructions(parallel: int, cap: int) -> str:
     return (
-        "Subagents: spawn_agent starts a fresh instance of your own model in this workspace; up "
+        "Subagents: spawn_agent starts a fresh instance of the configured subagent model in this workspace; up "
         f"to {parallel} run at once and {cap} in total. Unless the project fits in one or two "
         "small files, delegate: decide the file layout and shared interfaces (entry file, module "
         "APIs, data formats, names), write that scaffolding yourself, spawn one agent per "
@@ -136,6 +136,7 @@ class SubagentPool:
         session = self.session
         return {
             **self.usage(),
+            "model_id": session.subagent_model,
             "turn_limit": self.limits.subagent_turns,
             "time_limit_s": self.limits.subagent_seconds,
             "report_chars": self.limits.subagent_report_chars,
@@ -231,6 +232,7 @@ class SubagentRun:
     ):
         session = pool.session
         self.pool, self.session, self.limits = pool, session, pool.limits
+        self.model_id = session.subagent_model
         self.number, self.name, self.task = number, name, task
         self.read_only, self.call_id = read_only, call_id
         self.label = f"{number:02d}-{safe_name(name)}"
@@ -272,7 +274,7 @@ class SubagentRun:
         self.files: dict[str, set[str]] = {"written": set(), "edited": set(), "deleted": set()}
         self.pending_calls = 0
         self.estimate = PromptEstimate()
-        self.cache_policy = CachePolicy(session.model_id)
+        self.cache_policy = CachePolicy(self.model_id)
         self.gemini_provider: str | None = None
         self.api_seconds = 0.0
         self.retry_seconds = 0.0
@@ -318,7 +320,7 @@ class SubagentRun:
         return await controller.call_conversation(
             session.client,
             session.api_key,
-            session.model_id,
+            self.model_id,
             self.messages,
             tools,
             max_tokens=max_tokens,
@@ -375,7 +377,7 @@ class SubagentRun:
                 tools = self.dispatcher.available_tools()
                 local_input = await asyncio.to_thread(prompt_tokens, self.messages, tools)
                 input_bound = self.estimate.bound(local_input)
-                request_output = session.output_tokens()
+                request_output = session.output_tokens(self.model_id)
                 started = time.monotonic()
                 turn = None
                 plan = None
@@ -395,7 +397,7 @@ class SubagentRun:
                             max(0.001, deadline - time.monotonic()),
                         )
                     self.gemini_provider = bind_gemini_provider(
-                        session.model_id, self.gemini_provider, turn
+                        self.model_id, self.gemini_provider, turn
                     )
                     record.update(
                         usage=turn.usage,
@@ -563,6 +565,7 @@ class SubagentRun:
             "pending_calls": self.pending_calls,
             "tool_usage": self.dispatcher.tool_usage.copy(),
             "files": {key: sorted(paths) for key, paths in self.files.items()},
+            "model_id": self.model_id,
             "report_chars": len(self.report),
             "usage": self.session.usage(self.turns),
             "lint": self.dispatcher.lint_results,

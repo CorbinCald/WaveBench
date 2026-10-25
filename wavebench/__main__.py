@@ -199,6 +199,14 @@ def main() -> None:
         metavar="N",
         help="Total subagents each Harness model may spawn this run (implies --subagents)",
     )
+    parser.add_argument(
+        "--orchestrator-model",
+        metavar="ID",
+        help="Orchestrator model ID when subagents are enabled",
+    )
+    parser.add_argument(
+        "--subagent-model", metavar="ID", help="Subagent model ID when subagents are enabled"
+    )
     args = parser.parse_args()
     if args.mode == "code":
         args.mode = "harness"
@@ -485,6 +493,8 @@ def main() -> None:
                             if key == "s":
                                 args.subagents = None
                                 args.agent_cap = None
+                                args.orchestrator_model = None
+                                args.subagent_model = None
                             if selected_models is not None:
                                 save_models(selected_models)
                             save_config(config)

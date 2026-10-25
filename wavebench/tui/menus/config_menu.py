@@ -319,6 +319,11 @@ def interactive_config_menu(
             "label": "Subagents (Harness)",
             "value": {
                 "subagents": current_config.get("subagents", "off"),
+                **{
+                    key: current_config[key]
+                    for key in ("orchestrator_model", "subagent_model")
+                    if key in current_config
+                },
                 "harness": {
                     key: harness_config.get(key, getattr(harness_defaults, key))
                     for key in ("subagent_parallel", "subagent_cap")
@@ -848,6 +853,11 @@ def interactive_config_menu(
                             if updated is not None:
                                 item["value"] = {
                                     "subagents": updated["subagents"],
+                                    **{
+                                        key: updated[key]
+                                        for key in ("orchestrator_model", "subagent_model")
+                                        if key in updated
+                                    },
                                     "harness": {
                                         key: updated["harness"][key]
                                         for key in ("subagent_parallel", "subagent_cap")
@@ -920,6 +930,9 @@ def interactive_config_menu(
     for item in settings_items:
         if item.get("type") == "subagents":
             new_config["subagents"] = item["value"]["subagents"]
+            for key in ("orchestrator_model", "subagent_model"):
+                if key in item["value"]:
+                    new_config[key] = item["value"][key]
             new_config["harness"] = {
                 **(new_config.get("harness") or {}),
                 **item["value"]["harness"],
