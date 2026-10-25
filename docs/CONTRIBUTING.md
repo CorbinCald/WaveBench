@@ -72,6 +72,19 @@ skip without it. If you're writing a new test that is slow or hits the
 network, mark it with `@pytest.mark.slow` so the default suite stays fast,
 free, and offline.
 
+The helpers in `scripts/` that call paid APIs also require `--live`; `--help`
+never starts a benchmark. Give helpers with `--output` a new directory outside
+the checkout so raw transcripts and results stay private. The effort audit with
+multiple samples requires an explicit output directory too:
+
+```bash
+python scripts/effort_audit_tight.py --live --output /tmp/wavebench-effort-check
+```
+
+The cache and CLI verification helpers use the current Harness interface.
+Dated verification notes under `docs/` preserve historical observations;
+their model IDs, timings, prices, and superseded limits describe those runs.
+
 ## Style & linting
 
 ```bash

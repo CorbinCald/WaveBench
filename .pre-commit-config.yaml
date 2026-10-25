@@ -1,7 +1,7 @@
 repos:
   # Keep this rev in lockstep with the dev extra in pyproject.toml.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.6
+    rev: v0.17.1
     hooks:
       - id: ruff
         name: ruff-check

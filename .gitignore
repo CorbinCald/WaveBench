@@ -30,6 +30,9 @@ build/
 .superpowers/
 .pytest_cache/
 .ruff_cache/
+.playwright-cli/
+playwright-report/
+test-results/
 .coverage
 .coverage.*
 htmlcov/

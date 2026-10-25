@@ -15,7 +15,7 @@ from wavebench.harness.session import HarnessSession
 from wavebench.harness.workspace import allocate_run
 
 PROMPT = (
-    "Read all of reference.txt using wb read, start=1, end=161. It contains reference "
+    "Read all of reference.txt using read_file, start_line=1, end_line=161. It contains reference "
     "records and the exact output required on its last line. Next write main.py to print "
     "that output exactly. Then lint, then submit main.py as runtime python. Make each "
     "step a separate tool call in a separate turn. Do not rewrite reference.txt. "
@@ -38,20 +38,23 @@ def check_result(result: dict, messages: list[dict]) -> list[str]:
     assert result["status"] == "success", result.get("error")
     assert len(harness["attempts"]) == 1
     assert harness["attempts"][0]["diagnostics"].strip() == EXPECTED
-    assert len(turns) >= 4, "The probe must exercise separate read/write/lint/done turns"
-    assert turns[0]["usage"]["prompt_tokens"] < 1024, "Initial prompt must not mask tool caching"
+    assert len(turns) >= 4, "The probe must exercise separate read/write/lint/submit turns"
+    assert turns[1]["usage"]["prompt_tokens"] > turns[0]["usage"]["prompt_tokens"], (
+        "Reading the reference must grow the conversation"
+    )
     assert all(t["model"] == harness["model_id"] for t in turns)
-    assert [m["content"] for m in messages if m["role"] == "user"] == [PROMPT]
+    user_messages = [m["content"] for m in messages if m["role"] == "user"]
+    assert user_messages[0] == PROMPT
+    assert all(message.startswith("[WaveBench]") for message in user_messages[1:])
     commands = []
     for message in messages:
         for call in message.get("tool_calls", []):
-            commands.append(json.loads(call["function"]["arguments"])["command"])
+            commands.append(call["function"]["name"])
         if message["role"] == "tool":
-            assert json.loads(message["content"])["ok"], message["content"]
-    assert commands[0] == "read" and commands[-1] == "done", commands
-    assert "write" in commands and "lint" in commands, commands
-    writes = turns[1]["usage"]["prompt_tokens_details"]
-    assert writes["cache_write_tokens"] > 0, "No cache written after reading the reference"
+            assert not message["content"].startswith("Error:"), message["content"]
+    assert commands[0] == "read_file" and commands[-1] == "submit", commands
+    assert "write_file" in commands and "lint" in commands, commands
+    # Providers do not all report cache writes. Subsequent cache reads prove reuse.
     for turn in turns[2:]:
         usage = turn["usage"]
         ratio = usage["prompt_tokens_details"]["cached_tokens"] / usage["prompt_tokens"]
@@ -73,7 +76,7 @@ async def verify(output: Path, key: str, models: list[str]) -> None:
                 PROMPT,
                 client,
                 key,
-                Limits(build_turns=8, total_tokens=80_000, turn_tokens=2048, build_seconds=180),
+                Limits(build_turns=8, turn_tokens=2048, build_seconds=180),
                 asyncio.Semaphore(1),
                 asyncio.Semaphore(1),
                 auto_open="off",
@@ -93,7 +96,7 @@ async def verify(output: Path, key: str, models: list[str]) -> None:
                     "usage": result["usage"],
                     "turns": result["harness"]["turns"],
                     "runtime_output": result["harness"]["attempts"][0]["diagnostics"],
-                    "user_messages": 1,
+                    "user_messages": sum(m["role"] == "user" for m in session.messages),
                 }
                 reports.append(report)
                 (output / "results.json").write_text(json.dumps(reports, indent=2))

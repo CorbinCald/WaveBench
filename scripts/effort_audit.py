@@ -8,15 +8,11 @@ transmitted *and* that the upstream model is visibly adjusting its
 behavior based on it.
 """
 
+import argparse
 import asyncio
 import json
-import os
 import sys
 import time
-
-# Import from the repo we're auditing.
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
 
 import aiohttp
 
@@ -174,4 +170,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--live", action="store_true", help="Allow paid OpenRouter requests")
+    if not parser.parse_args().live:
+        parser.error("--live is required because this uses paid model requests")
     asyncio.run(main())

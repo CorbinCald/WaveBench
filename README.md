@@ -1,279 +1,219 @@
 # WaveBench
 
-A terminal tool for comparing large language models side by side through the [OpenRouter](https://openrouter.ai/) API. Send one prompt to multiple models, compare their generated projects, prose, speech, or images, and track performance and cost from your terminal. Runtime checks measure whether a project starts or runs successfully; you judge its quality.
+Compare large language models from your terminal through [OpenRouter](https://openrouter.ai/). Send one prompt to multiple models, watch them work side by side, inspect their projects, prose, speech, or images, and compare time, token usage, and cost.
 
 [![CI](https://github.com/CorbinCald/WaveBench/actions/workflows/ci.yml/badge.svg)](https://github.com/CorbinCald/WaveBench/actions/workflows/ci.yml)
 
-## Prerequisites
+WaveBench is an interactive comparison tool. Harness checks whether generated projects run or start successfully; you judge their correctness, design, and usefulness. It does not produce an automatic quality score or a model leaderboard.
 
-- Python 3.10+
-- Git and [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html)
-- An [OpenRouter API key](https://openrouter.ai/keys)
+## What you can compare
 
-## Installation
+| Mode | What it does | Output |
+|---|---|---|
+| **Harness** (default) | Models build multi-file projects with file tools, lint, sandboxed execution, and one repair after a failed run | Independent project directories, diagnostics, and managed web previews |
+| **Text** | Sends the same prompt to your selected text models | Markdown files |
+| **TTS** | Synthesizes your text with speech models | Audio files and an interactive player |
+| **Image** | Generates images with optional aspect ratio and size settings | Image files and a gallery |
 
-Install once with pipx, then launch with `wavebench`. Pipx manages a private
-Python environment and all dependencies automatically; no environment activation
-is needed, and your system Python stays unchanged.
+Harness also supports optional Brave web research, parallel subagents, separate orchestrator and worker models, and reasoning effort chosen per subagent. Live progress and lifetime analytics include their usage. Reasoning settings follow model capabilities from the live catalog, and optional **Fast providers** routing favors tokens per second.
+
+[Watch the animated progress display.](docs/wave-animation.md)
+
+## Requirements
+
+- **All modes:** Python 3.10+, Git for installation from this repository, and an [OpenRouter API key](https://openrouter.ai/keys) with access to your chosen models.
+- **Harness:** Linux, Bubblewrap, `/usr/bin/python3`, `/usr/bin/node`, and working unprivileged user namespaces. Auto-install additionally needs system `python3-pip`. See the [sandbox setup](docs/harness.md#isolation-and-dependency-policy), including Ubuntu's AppArmor requirements.
+- **Text, TTS, and Image:** No Bubblewrap requirement. Audio playback and automatic file opening depend on the host's audio/desktop support. CI exercises Linux with Python 3.10, 3.12, and 3.14.
+
+Harness has no unsandboxed fallback. On a system without its runtime, choose another mode, for example `wavebench --mode text`.
+
+## Install and start
+
+Install [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html), then install WaveBench in its own Python environment. Current pipx releases require Python 3.11+; for Python 3.10, use the [virtual-environment setup](docs/CONTRIBUTING.md#local-setup).
 
 ```bash
 pipx install git+https://github.com/CorbinCald/WaveBench.git
+pipx ensurepath
 ```
 
-If pipx is new to your machine, run `pipx ensurepath` once and open a new terminal
-so the `wavebench` command is available. On Ubuntu, install pipx with
-`sudo apt install pipx`; on macOS, use `brew install pipx`. Other platforms are
-covered in the [pipx installation guide](https://pipx.pypa.io/stable/how-to/install-pipx.html).
+Open a new terminal if `wavebench` is not yet on your PATH. On Ubuntu, pipx is available through `sudo apt install pipx`; on macOS, through `brew install pipx`.
 
-Update with `pipx upgrade wavebench`, or remove it with `pipx uninstall wavebench`.
-
-For an existing checkout that should pick up source changes immediately:
-
-```bash
-cd WaveBench
-pipx install --editable .
-wavebench
-```
-
-After dependency changes, run `pipx reinstall wavebench` to refresh that
-installation. Contributors who need test/lint tools can use the separate
-[development setup](docs/CONTRIBUTING.md#local-setup).
-
-Runtime dependencies are `aiohttp` and `tiktoken` (for context-size estimates). The tokenizer downloads its public vocabulary on first use and caches it locally. WaveBench plays TTS outputs natively through the OS audio backend without launching external apps.
-
-## Configuration
-
-Provide your OpenRouter API key via **environment variable** or a **`.env` file** in the directory where you launch WaveBench:
+Choose a working directory for your settings, history, and results. Set `OPENROUTER_API_KEY` in your environment, or put this line in a `.env` file in that directory:
 
 ```env
 OPENROUTER_API_KEY=your_key_here
 ```
 
-In a checkout, copy `.env.example` to `.env` and fill in your key. Keep real keys
-and private prompts out of commits and public issue reports.
-
-WaveBench stores model selection, user settings, analytics history, prompt history,
-and generated projects in the current working directory. Launch from your existing
-WaveBench directory to keep using its `.env`, settings, and history; new users can
-choose any working directory. See [Persistent Files](#persistent-files).
-
-## Quick Start
+In a checkout, you can copy `.env.example` to `.env`. Keep real keys and private prompts out of commits and public issue reports.
 
 ```bash
+wavebench --config
 wavebench
 ```
 
-Interactive startup shows a **Harness / Text / TTS / Image** mode selector, a summary of active models, and a prompt input with mode-specific history. Harness replaces one-shot code generation with isolated, multi-file projects. Type `c` at the mode prompt to open the configuration menu.
-
-Harness agents can optionally search the web with Brave and open public source
-pages with `web_fetch` to read text, tables, links, and available dates. Press **`w`** at the
-mode prompt, or run **`wavebench --setup-web-search`**, to open the guided setup:
-create a [Brave Search API key](https://api-dashboard.search.brave.com/app/keys),
-paste it into the masked field, and press Enter to test and enable it. Setup
-works without an OpenRouter key. The benchmark menu shows **Off**, **On (Brave)**,
-or **Needs setup**. Web search starts disabled and applies to Harness agents;
-Text, TTS, and Image modes retain their existing behavior.
-
-Harness agents can also delegate work to parallel **subagents** of the same
-model. Press **`s`** at the mode prompt to enable Subagents, choose how many run
-at once (2–5), and set the total agent cap per model; the same screen is under
-**Settings → Subagents (Harness)**. Subagents share the lead agent's workspace,
-tools, and phase time, and only their bounded reports return to
-the lead, which alone submits the project. The live display adds one line
-beneath each delegating model with a fixed slot per agent: its state (running,
-waiting for a slot, idle, done, or failed), its name, and the requests it has
-used. `--subagents`, `--no-subagents`, and
-`--agent-cap N` override the saved setting for one run. See
-[Subagents](docs/harness.md#subagents).
-
-Setup saves the key in the gitignored, owner-only `.benchmark_secrets.json` in
-the current directory. Alternatively, export `BRAVE_SEARCH_API_KEY`; the environment
-value takes precedence and is never copied to disk. `--web-search` and
-`--no-web-search` override the saved setting for one run. Disabling keeps the key
-for later use. Testing the connection sends one search; Brave charges are separate
-from the OpenRouter costs shown in benchmark analytics. See [search limits and
-records](docs/harness.md#optional-web-search).
-
-Harness requires **Linux, Bubblewrap, `/usr/bin/python3`, and `/usr/bin/node`**. Install `bubblewrap`, `python3`, and `nodejs` with your distribution's package manager. Auto-install also requires system `python3-pip`. The host must permit unprivileged user namespaces. A failed sandbox preflight is reported before model generation; there is no unsandboxed fallback. Text, TTS, and image modes keep their existing platform support.
-
-[Watch a preview of the animated progress display.](docs/wave-animation.md)
-
-### CLI Flags
-
-| Flag | Description |
-|---|---|
-| `--prompt "…"` | Skip interactive input and run immediately |
-| `--mode harness\|text\|tts\|image` | Select the response mode; defaults to `harness`. `--mode code` remains a compatibility alias |
-| `--text` | Alias for `--mode text` |
-| `--tts-voice VOICE` | Voice for TTS mode; defaults to `alloy` for OpenAI models; known non-OpenAI TTS models use provider voices automatically when the default is selected (for example Gemini `Kore`, Zonos `american_female`, Voxtral `en_paul_neutral`) |
-| `--tts-format mp3\|pcm` | Preferred audio format for TTS mode; defaults to `mp3` and is adjusted for providers such as Gemini that require `pcm` |
-| `--tts-speed FLOAT` | TTS playback speed multiplier for providers that support it |
-| `--image-aspect-ratio RATIO` | Set the image aspect ratio, such as `1:1` or `16:9`; enables custom image settings |
-| `--image-size 1K\|2K\|4K` | Set the requested image size; enables custom image settings |
-| `--config` / `--models` | Open the configuration menu and exit after saving/cancelling |
-| `--open off\|incremental\|after_all` / `--auto-open …` | Schedule harness validation and present managed previews. `off` still validates, headlessly; `after_all` waits for initial generation. New configurations default to `incremental` |
-| `--auto-install` | Install `requirements.txt` PyPI wheels in each model's isolated dependency directory; generated package scripts/build hooks are never installed or run |
-| `--subagents` / `--no-subagents` | Enable or disable parallel subagents for Harness agents for one run |
-| `--agent-cap N` | Total subagents each Harness model may spawn this run; implies `--subagents` unless `--no-subagents` is given |
-| `--stats` | Display all lifetime models plus Harness efficiency, reliability, and failure breakdowns |
-| `--clear-history` | Reset all analytics history |
+Choose the models you want before your first run: a fresh installation otherwise uses its bundled selection and may call several paid models. The startup menu offers **Harness / Text / TTS / Image**, shows the active selection, and keeps separate prompt history for each mode. Press **c** for configuration, **s** for subagents, or **w** for web search.
 
 Examples:
 
 ```bash
 wavebench --prompt "Create a multi-file Python CSV summary program"
-wavebench --mode harness --auto-open off --prompt "Build a static counter website with HTML, CSS and JavaScript"
-wavebench --agent-cap 4 --prompt "Build a three-page static site; delegate each page to a subagent"
-wavebench --prompt "Explain quantum computing" --mode text
-wavebench --prompt "Explain quantum computing" --text
-wavebench --prompt "Read this aloud in a calm tone" --mode tts
-wavebench --prompt "A watercolor ocean wave" --mode image --image-aspect-ratio 16:9
-wavebench --config
+wavebench --mode harness --open off --prompt "Build a static counter website with HTML, CSS and JavaScript"
+wavebench --mode text --prompt "Explain quantum computing"
+wavebench --mode tts --prompt "Read this aloud in a calm tone"
+wavebench --mode image --image-aspect-ratio 16:9 --prompt "A watercolor ocean wave"
 wavebench --stats
 ```
 
-## How It Works
+### Updating
 
-1. **Prompt** — You enter a description of what you want built or answered.
-2. **Build** — Harness allocates a fresh project per model. Every model gets the same small tools (`read_file`, `write_file`, `edit_file`, `list_files`, `delete_file`, `lint`, and `submit`) with plain-text results, bounded by the same number of model requests and active time. With Subagents enabled, a model can also call `spawn_agent` to run bounded parallel subagents of itself in the same workspace; their usage counts toward the model's totals.
-3. **Schedule** — `incremental` validates submitted projects immediately. `after_all` waits until every model has submitted or reached a terminal generation outcome. `off` validates immediately without opening previews. Waiting projects release API slots.
-4. **Validate** — WaveBench admits one sandboxed project run. Exit code 0 passes console programs; an HTTP readiness check passes web/server startup. These checks measure runtime/startup, not subjective project quality.
-5. **Repair** — Only a failed first run gives the same model/conversation one bounded repair phase, then one final run. Lint never consumes a run. Cancellation never unlocks a retry.
-6. **Inspect** — Successful web previews attach to the already running process. Enter, Ctrl-C, or the review deadline stops it and its children. Projects, diagnostics, and attempts survive failures and cancellation.
-7. **Results** — History includes all build/repair usage and cost, generation and runtime outcomes, workspace/entry point, lint results, configuration, and separate generation, tool, queue, setup, runtime, and repair times. Missing usage remains unknown. Harness analytics are labeled separately from historical one-shot records.
+For an installation from Git, use `pipx reinstall wavebench` to fetch the current source and refresh dependencies, including when the package version has not changed. Remove the installation with `pipx uninstall wavebench`. Settings and generated results stay in your working directory.
 
-Text mode still saves Markdown, TTS saves audio and provides native playback, and image mode saves images and its gallery. See [Harness commands, runtimes, limits, and verification](docs/harness.md).
+For an existing checkout, `pipx install --editable .` makes source edits immediately available. Pull changes in that checkout and run `pipx reinstall wavebench` when dependencies change. Contributors should use the [development setup](docs/CONTRIBUTING.md#local-setup).
 
-Harness uses explicit prompt caching for Anthropic, GPT-5.6 and later, and Gemini 2.5 and later, with stable routing for other models. Above 240,000 context tokens (earlier for smaller model windows), GPT-5.6 Luna at High effort summarizes older history while preserving the first user message and latest complete assistant response with its tool results. See [cache and compaction behavior](docs/harness.md#prompt-caching-and-context-compaction).
+## Harness workflow
 
-## Configuration Menu
+1. **Build:** Each selected model gets a fresh project, file tools, lint, and the same configured request/time limits. Optional research and delegation tools are shared across the comparison.
+2. **Submit and validate:** The model submits an entry point. Console programs pass on exit code 0; static sites and HTTP servers pass a readiness check. These checks do not test application interactions or grade quality.
+3. **Repair:** A failed initial execution gives that model one bounded repair phase and one final execution. Failed generation, dependency setup, and cancellation do not unlock extra runs.
+4. **Inspect:** Successful web projects can open in managed previews labeled with the model, prompt, run, and attempt. Enter, Ctrl-C, or the review deadline stops managed processes. Projects and diagnostics remain on disk.
+5. **Compare:** Results separate generation and runtime outcomes, record retries and failures, and track time, usage, cache hits, tool activity, and reported cost. Unknown usage stays unknown.
 
-Open the interactive config menu with `wavebench --config` or by pressing `c` at the startup mode prompt.
+**Auto-open** controls scheduling: `incremental` validates projects as they arrive; `after_all` waits for initial generation to finish; `off` validates headlessly without presenting previews. A new configuration uses `incremental` with dependency installation off.
 
-The menu has four tabs:
+Supported runners are Python, Node.js, Python/Node HTTP servers, and static HTML. There is no arbitrary shell tool, npm installation, package-script execution, desktop GUI runner, or development reloader. With Auto-install on, `requirements.txt` may install PyPI wheels into isolated per-model directories. Generated programs have no network access. See [runners and isolation](docs/harness.md#supported-project-runners).
 
-- **Models** — Search, browse, and toggle non-TTS models from the OpenRouter catalog. Models are ranked by provider tier, pricing, recency, supported capabilities, and context length. Press `+` to manually add a model by its OpenRouter ID.
-- **TTS** — Search, browse, and toggle speech-output models separately from the main model list. If no TTS models are selected, TTS mode falls back to the bundled OpenRouter TTS defaults.
-- **Image** — Select image-output models separately from text and speech models. If none are selected, image mode uses its bundled defaults.
-- **Settings** — Configure:
-  - **Reasoning effort** — `max`, `xhigh`, `high`, `medium`, `low`, or `off`. Supported levels are checked against OpenRouter’s model catalog before each run and cached for its requests. Unsupported values are mapped to the nearest supported level (ties go upward); built-in compatibility rules are used if metadata is unavailable.
-  - **Fast providers (tokens/sec)** — `off` (default) or `on`. Prioritizes each selected model’s highest-throughput provider using [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection#provider-sorting). Applies to Harness (including subagents and compaction), Text, and Image requests; TTS uses a separate speech endpoint. Faster providers may cost more, and throughput preference does not guarantee the lowest total response time. Gemini tool conversations stay with their initial provider to preserve signed history. The setting is recorded with benchmark results.
-  - **Analytics sort** — `runs`, `avg_time`, `rate`, `avg_tokens`, or `cost`; Harness comparisons also support `speed`, `cache`, `tool_fail`, `cost_per_pass`, and `p95`. Missing measurements sort last.
-  - **Theme** — 9 color schemes: `default`, `plum`, `lemon`, `blueberry`, `grape`, `pear`, `acai`, `tangerine`, and `lime`, live-previewed while cycling.
-  - **Directory naming** — `llm` for the fast OpenRouter fallback chain, or `slug` for a deterministic local parser.
-  - **Auto-open files** — `off`, `incremental`, or `after_all`.
-  - **Preview destination** — Automatic, Connected laptop, or Wavebench host. Controls where Harness web previews open; [SSH setup and behavior](docs/harness.md#preview-destination).
-  - **Web search (Harness)** — Press Space for Brave setup, key replacement, or disabling.
-  - **Subagents (Harness)** — Press Space to enable parallel subagents, choose 2–5 agents at once, and set the total agent cap per model. See [Subagents](docs/harness.md#subagents).
-  - **Auto-install deps** — `off` or `on`; always visible, including when Auto-open is off. Applies to harness `requirements.txt` manifests.
-  - **Harness limits** — Preview review timeout, build/repair time limits, the build request limit, and output tokens per request. See [Harness limits](docs/harness.md#limits-and-records).
-  - **TTS voice / format / speed** — default voice, audio format, and playback speed for TTS mode. Voice identifiers are provider-specific.
-  - **Image settings** — Provider defaults or custom aspect ratio and image size.
+For remote/headless use, `--open off` needs no desktop integration. Automatic preview forwarding to a connected laptop requires the optional Herdr companion; ordinary SSH alone does not provide it. Local desktop previews can use **Settings → Preview destination → Wavebench host**. See [preview destinations](docs/harness.md#preview-destination).
 
-Selections persist across runs in local JSON files.
+### Subagents and model roles
 
-Model availability changes over time. WaveBench warns when selected IDs are
-missing from a successfully fetched catalog. Use `wavebench --config` to replace
-retired selections. A warning keeps your selection intact because private model
-IDs may still work. If the catalog cannot be fetched, the app uses your saved or
-bundled selection without claiming that those IDs are unavailable.
+Press **s** at startup or open **Settings → Subagents (Harness)**. Subagents are off by default. When enabled, the default is four concurrent workers and eight total per benchmark model; concurrency can be set from two to five.
 
-## Output
+- **Orchestrator LLM:** Defaults to each selected benchmark model. An explicit model replaces that selection with one orchestrator run.
+- **Subagent LLM:** Defaults to the orchestrator's model. Choose another model to compare a lead/worker combination.
+- **Reasoning effort:** The orchestrator may choose `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` for each spawned worker. Omitted effort inherits the lead's setting; unsupported levels are mapped to supported ones.
 
-Harness results use a modality folder, an exclusive invocation directory, and independent model slots:
+Workers share the lead's workspace and phase time, receive a fresh task context, and return bounded reports. Only the lead submits the project; workers cannot spawn more agents. Their calls and costs count toward the orchestrator's result, so a mixed-model result measures the whole team.
 
-```text
-benchmarkResults/
-└── harness/<prompt>/<run-id>/
-    ├── prompt.txt
-    ├── 001-model-a-<id>/project/
-    │   ├── main.py
-    │   └── helpers.py
-    ├── 002-model-b-<id>/project/
-    │   ├── index.html
-    │   ├── styles.css
-    │   └── app.js
-    └── metadata/<model-slot>/   # Controller-owned, outside model roots
-        ├── result.json
-        ├── browser.log          # Browser output when opening a preview
-        ├── conversation.json
-        ├── tool-0001.json
-        ├── run-1-<id>.log
-        └── subagents/01-<name>/ # One folder per spawned subagent
-            ├── result.json
-            ├── conversation.json
-            └── tool-0001.json
+```bash
+wavebench --agent-cap 4 --prompt "Build a three-page static site; delegate each page to a subagent"
+# Replace these placeholders with available OpenRouter model IDs:
+wavebench --subagents --orchestrator-model provider/lead --subagent-model provider/worker --prompt "Build a small app"
 ```
 
-In text mode, outputs are saved as `.md` files. In TTS mode, outputs are saved as provider-compatible audio files (`.mp3` by default for OpenAI/Voxtral/Zonos and most speech models, `.pcm` for Gemini TTS), then an interactive arrow-key browser lets you move between outputs with ↑/↓ or ←/→ and press Enter/Space to play one through WaveBench's native audio backend.
+Model-role choices apply only when subagents are enabled. See [subagent behavior and limits](docs/harness.md#subagents).
 
-## Project Structure
+### Optional web research
+
+Run `wavebench --setup-web-search` or press **w** at startup to configure [Brave Search](https://api-dashboard.search.brave.com/app/keys). Setup accepts a masked key, tests it with one search, and enables Harness `web_search` and `web_fetch`. It works without an OpenRouter key.
+
+Setup saves the key in owner-only `.benchmark_secrets.json`. Alternatively, export `BRAVE_SEARCH_API_KEY` in your shell; the environment takes precedence and is not copied to disk. Disabling search keeps the saved key. `--web-search` and `--no-web-search` override the setting for one run.
+
+Search returns source links; page reads extract public HTML/text without logging in or running JavaScript. Research calls have quotas, and research closes as the build approaches its limits. These tools apply to Harness only. See [search, page-reading, and data handling](docs/harness.md#optional-web-search).
+
+## Configuration
+
+`wavebench --config` has **Models**, **TTS**, **Image**, and **Settings** tabs. Search and toggle models from OpenRouter's catalog, or press **+** to add an ID manually. TTS and Image fall back to bundled defaults when their selection is empty. Missing catalog IDs produce a warning without deleting saved selections; private IDs may still work.
+
+| Setting | Behavior |
+|---|---|
+| Reasoning effort | `max`, `xhigh`, `high`, `medium`, `low`, or `off`; validated against live model capabilities, with compatibility fallbacks |
+| Fast providers (tokens/sec) | Off by default; favors high-throughput providers for Harness, Text, and Image. May change price; does not guarantee lowest total latency |
+| Analytics sort | Runs, time, rate, tokens, cost, and Harness efficiency/reliability metrics |
+| Theme | Nine color schemes with live previews |
+| Directory naming | `llm` (default) uses a separate model request; `slug` derives names locally |
+| Auto-open / Preview destination | When projects validate and where their web previews open |
+| Web search / Subagents | Harness research, model roles, and delegation limits |
+| Auto-install deps | Off by default; isolated PyPI wheels, including during headless validation |
+| Harness limits | Build/repair time, build requests, output tokens per request, and preview review timeout |
+| TTS voice / format / speed | Provider-specific voices; MP3 or PCM, adjusted where required |
+| Image settings | Provider defaults, or custom aspect ratio and size |
+
+Gemini tool conversations stay with their initial provider to preserve signed history. Prompt caching and context compaction are handled automatically: older context is summarized above 240,000 estimated tokens, or earlier for smaller windows, while preserving the original request and recent complete tool exchange. Compaction currently uses GPT-5.6 Luna at High effort. See [cache and compaction details](docs/harness.md#prompt-caching-and-context-compaction).
+
+### CLI reference
+
+Use `wavebench --help` for the full current help.
+
+| Flag | Description |
+|---|---|
+| `--prompt "…"` | Run with a supplied prompt |
+| `--mode harness\|text\|tts\|image` | Choose a mode; default is Harness. `--mode code` remains a compatibility alias |
+| `--text` | Alias for `--mode text` |
+| `--config` / `--models` | Open configuration, then exit |
+| `--open off\|incremental\|after_all` / `--auto-open …` | Set validation/presentation timing; `off` still validates Harness projects |
+| `--auto-install` | Enable isolated Harness dependency installation |
+| `--setup-web-search` | Configure and test Brave search, then exit |
+| `--web-search` / `--no-web-search` | Override Harness research for this run |
+| `--subagents` / `--no-subagents` | Override Harness delegation for this run |
+| `--agent-cap N` | Set total workers per model; implies `--subagents` unless `--no-subagents` is given |
+| `--orchestrator-model ID` | Override the lead model when subagents are enabled |
+| `--subagent-model ID` | Override the worker model when subagents are enabled |
+| `--tts-voice VOICE` | Choose a provider voice; the default maps automatically for known models |
+| `--tts-format mp3\|pcm` | Preferred audio format; adjusted for provider requirements |
+| `--tts-speed FLOAT` | Speech speed for providers that support it |
+| `--image-aspect-ratio RATIO` | Request an aspect ratio such as `1:1` or `16:9` |
+| `--image-size 1K\|2K\|4K` | Request an image size |
+| `--stats` | Show lifetime analytics; no API key required |
+| `--clear-history` | Reset analytics, keeping the previous history as `.bak`; no API key required |
+
+## Costs and data
+
+Benchmark requests spend API credits. Harness defaults allow **50 build requests, 20 repair requests, 30 minutes of active build time, and up to 128,000 output tokens per request**, subject to provider limits. Workers have their own request caps within the lead's phase time. These are workload limits, **not a dollar spending cap**. Start with a small model selection and review [all limits](docs/harness.md#limits-and-records).
+
+Harness totals include reported build, repair, subagent, and compaction usage. Brave charges and LLM directory-naming requests are separate from the displayed benchmark totals. Use **Directory naming → slug** to avoid the naming request. Provider routing, cache state, reasoning settings, delegation, and retries affect comparisons; saved results record those details.
+
+Prompts, generated conversations, and tool results are sent to OpenRouter and the providers serving those requests, including the compaction model. Optional searches go to Brave, and page reads contact source websites. Runtime dependencies are `aiohttp` and `tiktoken`; the tokenizer downloads and caches its public vocabulary on first use.
+
+Generated web pages run JavaScript in the browser you use to inspect them. The Linux process sandbox does not isolate that browser or its network access. Treat generated apps as untrusted and avoid entering credentials. See [Security](SECURITY.md) for the reporting policy.
+
+## Output and persistent files
+
+All state belongs to the **directory where you launch WaveBench**. Launch from the same directory to reuse its `.env`, model selection, settings, and history.
+
+Harness allocates a separate run and project per model:
 
 ```text
-wavebench/
-├── __main__.py                 # CLI entry point, interactive startup, dispatch
-├── api.py                      # OpenRouter API client: streaming, retries, model catalog
-├── models.py                   # Default model mapping and catalog scoring
-├── parsers.py                  # Code extraction and prompt-derived directory names
-├── storage.py                  # JSON persistence for models/config/history
-├── query_history.py            # Portable prompt history and legacy import
-├── modes/                      # Response modes and registry
-│   ├── __init__.py             # Mode protocol, ParsedOutput, MODES
-│   ├── code.py                 # CodeMode prompt framing + parser wrapper
-│   ├── harness.py              # Harness mode exports (code is a compatibility alias)
-│   ├── text.py                 # TextMode prompt framing + Markdown pass-through
-│   └── tts.py                  # TTSMode prompt framing + audio-byte pass-through
-├── harness/                    # Bounded projects, tools, conversations, managed execution
-│   ├── workspace.py            # Root-bound file operations and exclusive allocation
-│   ├── commands.py             # Model tools and the dispatcher shared with the wb CLI
-│   ├── transport.py            # OpenRouter streamed conversations/tool arguments
-│   ├── session.py              # Budgets, scheduling, attempts, repair, results
-│   ├── subagents.py            # Parallel subagents sharing the lead's workspace and limits
-│   ├── runtime.py              # Sandbox, dependencies, supervision, preview proxy
-│   └── trusted.py              # Read-only sandbox checks and launch helper
-├── core/                       # Benchmark orchestration and artifact handling
-│   ├── __init__.py             # Public re-exports
-│   ├── orchestrator.py         # main_async run coordinator
-│   ├── runner.py               # per-model run_model and unique filenames
-│   ├── auto_open.py            # viewer/terminal/tab launching
-│   └── auto_install.py         # dependency detection and per-output-dir venvs
-└── tui/
-    ├── styles.py               # Themes, ANSI helpers, box drawing, formatting
-    ├── input.py                # Raw keyboard reads
-    ├── line_editor.py          # Readline-style prompt editor
-    ├── tts_player.py           # Arrow-key TTS output browser/player
-    ├── progress/               # Live progress tracker and wave rendering
-    ├── analytics/              # Cost helper and lifetime stats table
-    └── menus/                  # Model browser and tabbed config menu
+benchmarkResults/harness/<prompt>/<run-id>/
+├── prompt.txt
+├── 001-model-a-<id>/project/
+├── 002-model-b-<id>/project/
+└── metadata/<model-slot>/
+    ├── result.json
+    ├── conversation.json
+    ├── tool-0001.json
+    ├── run-1-<id>.log
+    └── subagents/<number>-<name>/
 ```
 
-A more detailed architectural map — including data flow, public seams, and testing tiers — lives in [`docs/architecture.md`](docs/architecture.md).
+Text outputs are Markdown. TTS saves provider-compatible audio and offers arrow-key selection with Enter/Space playback. Image mode saves images and its gallery. Generated output goes under `benchmarkResults/`.
 
-## Persistent Files
-
-These are created in the current working directory and are gitignored:
+### Persistent files
 
 | File | Contents |
 |---|---|
-| `.benchmark_models.json` | Currently selected `{short_name: openrouter_id}` model mapping |
-| `.benchmark_config.json` | Settings such as theme, reasoning effort, analytics sort, directory naming, auto-open, auto-install, web search, subagents, and TTS voice/format/speed |
-| `.benchmark_secrets.json` | Private Brave API key from interactive setup; gitignored and never sent to models |
-| `.benchmark_history.json` | Lifetime run history for analytics |
-| `.benchmark_query_history.<mode>.json` | Portable prompt history (last 500 entries per mode); Harness uses `code`, alongside `text`, `tts`, and `image` |
+| `.benchmark_models.json` | Selected names and OpenRouter model IDs |
+| `.benchmark_config.json` | Settings, model roles, modality options, and Harness limits |
+| `.benchmark_secrets.json` | Brave key from guided setup; never sent to models |
+| `.benchmark_history.json` | Lifetime run results, including prompts and costs |
+| `.benchmark_query_history.<mode>.json` | Last 500 prompts per mode; Harness uses the legacy `code` category |
 
-Existing `.benchmark_query_history.<mode>` files from GNU Readline or libedit are imported automatically, including escaped spaces and Unicode. Harness also supports the older `.benchmark_query_history` fallback. The next submitted prompt saves that mode's history as JSON; original files are kept. History works across Python installations without requiring either readline backend.
-
-Because state paths are based on `os.getcwd()`, running WaveBench from different directories creates separate project-local state. TTS mode automatically uses selected TTS-capable models, falling back to the bundled TTS defaults when none are selected.
+Legacy Readline/libedit prompt histories are imported without deleting the originals. This repository ignores local state, `.env` files, generated projects, and browser-test artifacts. If you run WaveBench inside another repository, add equivalent ignore rules there. Review saved prompts, conversations, and logs before sharing them.
 
 ## Development
 
-Local setup, test commands, style conventions, and contribution guidelines live in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). Quick start for contributors:
+See [Contributing](docs/CONTRIBUTING.md) for the virtual-environment setup and test-isolation rules. In an activated development environment:
 
 ```bash
 pip install -e '.[dev]'
 pre-commit install
-pytest
+python -m pytest
+ruff check .
+ruff format --check .
 ```
+
+The default test suite excludes paid API tests. Sandbox integration tests require the Harness runtime; `WAVEBENCH_REQUIRE_SANDBOX_TESTS=1` makes missing support fail instead of skip.
+
+The [architecture guide](docs/architecture.md) maps the CLI, API client, Harness, modes, TUI, and persistence. The installed `wb` command exposes Harness file tools for local development. [Symphony](docs/symphony.md) is a separate, optional Linear-driven automation service; ordinary WaveBench usage and contribution require no tracker setup.
 
 ## License
 

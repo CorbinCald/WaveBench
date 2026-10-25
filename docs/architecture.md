@@ -46,7 +46,8 @@ small single-purpose tools and renders each result as plain text. Its bounded
 scheduler overlaps independent calls, serializes conflicting paths, and puts
 lint behind writes. With Subagents enabled, the lead's dispatcher also exposes
 `spawn_agent`, routed to a session-owned `SubagentPool` in `subagents.py`. Each
-spawned `SubagentRun` is a fresh conversation of the same model with a child
+spawned `SubagentRun` is a fresh conversation of the configured subagent model,
+using the lead's reasoning effort unless overridden in `spawn_agent`, with a child
 dispatcher on the same workspace and runtime: no `submit`, no `spawn_agent`, an
 optional read-only mode, research calls routed through the lead's quotas, and
 tool counts added to the lead's totals. Subagent turns are appended to the
@@ -167,7 +168,8 @@ WaveBench stores local state in the current working directory:
 | File | Contents |
 |---|---|
 | `.benchmark_models.json` | selected `{short_name: openrouter_id}` mapping; TTS mode filters this to TTS-capable IDs and falls back to bundled TTS defaults if none are selected |
-| `.benchmark_config.json` | `reasoning_effort`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `auto_install`, `web_search`, `subagents`, `harness` limits, `tts_voice`, `tts_format`, `tts_speed` |
+| `.benchmark_config.json` | `reasoning_effort`, `fast_providers`, `analytics_sort`, `theme`, `directory_naming`, `auto_open`, `preview_destination`, `auto_install`, `web_search`, `subagents`, `orchestrator_model`, `subagent_model`, `harness` limits, TTS and image settings |
+| `.benchmark_secrets.json` | Owner-only Brave API key from interactive setup; excluded from Git |
 | `.benchmark_history.json` | `{version: 1, runs: [...]}` analytics history |
 | `.benchmark_query_history.<mode>.json` | portable prompt-entry history for the interactive editor (`code`, `text`, `tts`, `image`), up to 500 entries per mode |
 

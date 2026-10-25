@@ -95,7 +95,6 @@ def main():
                         "harness": {
                             "build_turns": 16,
                             "repair_turns": 8,
-                            "total_tokens": 128000,
                             "turn_tokens": 8192,
                             "build_seconds": 300,
                             "repair_seconds": 180,
@@ -158,7 +157,11 @@ def main():
                     if result.get("harness", {}).get("attempts")
                 )
             if kind == "web" and policy != "off":
-                row["preview_loads"] = (case / "cli.log").read_text().count("PREVIEW_HTTP 200")
+                # Browser subprocess output is deliberately kept out of the TUI log.
+                row["preview_loads"] = sum(
+                    log.read_text().count("PREVIEW_HTTP 200")
+                    for log in (case / "benchmarkResults").rglob("browser.log")
+                )
                 row["passed"] = row["passed"] and row["preview_loads"] == len(args.model)
             evidence.append(row)
             (output / "evidence.json").write_text(json.dumps(evidence, indent=2))

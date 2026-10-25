@@ -360,7 +360,7 @@ Both choices persist, are ignored while subagents are off, and can be overridden
 for one run with `--orchestrator-model ID` and `--subagent-model ID`.
 
 For example: `wavebench --subagents --orchestrator-model provider/lead
---subagent-model provider/worker "Build a small app"` (replace the example IDs).
+--subagent-model provider/worker --prompt "Build a small app"` (replace the example IDs).
 The saved keys are `orchestrator_model` and `subagent_model`.
 
 When enabled, every lead model receives one additional native tool.

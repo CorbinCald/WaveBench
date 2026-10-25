@@ -32,7 +32,7 @@ async def verify(output: Path, key: str, cache_only: bool):
                 slot,
                 model.split("/")[1],
                 model,
-                "This is a cache acceptance test. On every turn, call wb ls exactly once. "
+                "This is a cache acceptance test. On every turn, call list_files exactly once. "
                 "Do not summarize the following static reference records.\n"
                 + "\n".join(
                     f"Record {i}: project files persist between tool calls; inspect the directory."
@@ -58,10 +58,12 @@ async def verify(output: Path, key: str, cache_only: bool):
                         reasoning_effort=None,
                         input_tokens_bound=prompt_tokens(instance.messages, TOOL_SCHEMA) * 11 // 10,
                         cache_policy=instance.cache_policy,
+                        gemini_provider=instance.gemini_provider,
                     )
+                    instance.bind_gemini_provider(turn)
                     instance.messages.append(turn.message)
                     calls = turn.message.get("tool_calls") or []
-                    assert calls, f"{model} did not call wb"
+                    assert calls, f"{model} did not call list_files"
                     native = [
                         {
                             "id": c["id"],
@@ -70,14 +72,14 @@ async def verify(output: Path, key: str, cache_only: bool):
                         }
                         for c in calls
                     ]
-                    assert all(c["arguments"]["command"] == "ls" for c in native)
+                    assert all(c["name"] == "list_files" for c in native)
                     records = await instance.dispatcher.batch(native)
                     instance.messages.extend(
-                        {"role": "tool", "tool_call_id": r["id"], "content": json.dumps(r)}
+                        {"role": "tool", "tool_call_id": r["id"], "content": r["text"]}
                         for r in records
                     )
                     instance.messages.append(
-                        {"role": "user", "content": "Next cache check: call wb ls once again."}
+                        {"role": "user", "content": "Next cache check: call list_files once again."}
                     )
                     rows.append(
                         {
@@ -126,10 +128,10 @@ async def verify(output: Path, key: str, cache_only: bool):
                 "luna-compaction",
                 COMPACTION_MODEL,
                 "Create main.py that prints exactly 'cache and context verified' and exits. "
-                "Use no dependencies. Lint it and submit it with wb done. Sentinel: first-user-preserved-7391.",
+                "Use no dependencies. Lint it and call submit. Sentinel: first-user-preserved-7391.",
                 client,
                 key,
-                Limits(total_tokens=1_000_000, build_seconds=360, turn_tokens=8192),
+                Limits(build_seconds=360, turn_tokens=8192),
                 asyncio.Semaphore(1),
                 asyncio.Semaphore(1),
                 auto_open="off",
@@ -156,14 +158,14 @@ async def verify(output: Path, key: str, cache_only: bool):
                             {
                                 "id": "seed-ls",
                                 "type": "function",
-                                "function": {"name": "wb", "arguments": '{"command":"ls"}'},
+                                "function": {"name": "list_files", "arguments": "{}"},
                             }
                         ],
                     },
                     {
                         "role": "tool",
                         "tool_call_id": "seed-ls",
-                        "content": '{"ok":true,"files":[]}',
+                        "content": "(no files)",
                     },
                 ]
             )

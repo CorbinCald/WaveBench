@@ -8,15 +8,13 @@ per-effort aggregates so we can see differentiation emerge despite
 temperature=0.1 sample variance.
 """
 
+import argparse
 import asyncio
 import json
-import os
 import statistics
 import sys
 import time
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+from pathlib import Path
 
 import aiohttp
 
@@ -169,11 +167,14 @@ async def run_one_call(
     }
 
 
-async def main() -> None:
+async def main(output: Path) -> None:
     api_key = load_api_key()
     if not api_key:
         print("ERROR: OPENROUTER_API_KEY not found")
         sys.exit(1)
+
+    # Reserve a new output location before spending credits; never replace old results.
+    output.mkdir(parents=True, exist_ok=False)
 
     print("=" * 72)
     print("TIGHT EFFORT AUDIT — Opus 4.7, n=3 per effort, max_tokens=16000")
@@ -296,7 +297,7 @@ async def main() -> None:
 
     # Dump raw results for reference
     print(f"\n  grand total cost: ${running_cost:.4f}")
-    dump_path = os.path.join(ROOT, "scripts", "effort_audit_tight_results.json")
+    dump_path = output / "effort_audit_tight_results.json"
     with open(dump_path, "w") as fh:
         json.dump(
             {
@@ -315,4 +316,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--live", action="store_true", help="Allow paid OpenRouter requests")
+    parser.add_argument("--output", type=Path, required=True, help="New directory for raw results")
+    args = parser.parse_args()
+    if not args.live:
+        parser.error("--live is required because this uses paid model requests")
+    asyncio.run(main(args.output.absolute()))
