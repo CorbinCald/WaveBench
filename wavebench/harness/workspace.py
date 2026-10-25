@@ -151,7 +151,7 @@ class Workspace:
                 entries.append({"name": name, "type": kind, "bytes": info.st_size})
             return entries
 
-    def tree(self, path: str = ".", limit: int = 1000) -> dict:
+    def tree(self, path: str = ".", limit: int = 1000, *, count_lines: bool = True) -> dict:
         """Every file below path with its size and line count, depth first."""
         files: list[dict] = []
 
@@ -174,7 +174,7 @@ class Workspace:
                             os.close(child)
                     elif stat.S_ISREG(info.st_mode):
                         lines = None
-                        if info.st_size <= 2 * 1024 * 1024:
+                        if count_lines and info.st_size <= 2 * 1024 * 1024:
                             file = os.open(
                                 name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
                             )
@@ -194,6 +194,49 @@ class Workspace:
         with self.directory(parts) as fd:
             walk(fd, base, len(parts))
         return {"files": files[:limit], "truncated": len(files) > limit}
+
+    def search(self, query: str, path: str = ".", *, case_sensitive: bool = False) -> dict:
+        """Bounded literal search using the same descriptor-safe reads as the file tool."""
+        if not isinstance(query, str) or not query.strip() or len(query) > 500:
+            raise ValueError("query must be nonempty literal text of at most 500 characters")
+        try:
+            listing = self.tree(path, count_lines=False)
+        except NotADirectoryError:
+            # read() below still rejects symlinks, hardlinks and special files.
+            listing = {"files": [{"path": path}], "truncated": False}
+        matches, skipped = [], []
+        truncated = listing["truncated"]
+        scanned = 0
+        needle = query if case_sensitive else query.casefold()
+        for entry in listing["files"]:
+            name = entry["path"]
+            if scanned + entry.get("bytes", 0) > 16 * 1024 * 1024:
+                truncated = True
+                break
+            try:
+                content = self.read(name)
+            except (OSError, ValueError, UnicodeError):
+                skipped.append(name)
+                continue
+            scanned += len(content.encode("utf-8"))
+            if scanned > 16 * 1024 * 1024:
+                truncated = True
+                break
+            if "\x00" in content:
+                skipped.append(name)
+                continue
+            for number, line in enumerate(content.splitlines(), 1):
+                haystack = line if case_sensitive else line.casefold()
+                if needle not in haystack:
+                    continue
+                if len(matches) == 50:
+                    return {"matches": matches, "truncated": True, "skipped": skipped}
+                offset = max(0, haystack.index(needle) - 100)
+                snippet = line[offset : offset + 500]
+                if offset or offset + 500 < len(line):
+                    snippet = "…" + snippet + "…"
+                matches.append({"path": name, "line": number, "text": snippet})
+        return {"matches": matches, "truncated": truncated, "skipped": skipped}
 
     def _size(
         self, fd: int, *, include_runtime: bool = False, limit: int | None = None, depth: int = 0

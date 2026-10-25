@@ -43,7 +43,7 @@ class Limits:
     stream_idle_seconds: int = 60
     subagent_parallel: int = 4
     subagent_cap: int = 8
-    subagent_turns: int = 20
+    subagent_turns: int = 40
     subagent_seconds: int = 600
     subagent_report_chars: int = 6_000
 

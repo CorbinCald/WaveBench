@@ -89,6 +89,10 @@ class ProgressTracker:
         "budget_exhausted": "no budget",
         "cancelled": "cancelled",
         "failed": "failed",
+        "incomplete": "not done",
+        "blocked": "blocked",
+        "unknown": "unknown",
+        "completed": "unknown",
     }
     SUBAGENT_SLOT = 9
 
@@ -308,15 +312,17 @@ class ProgressTracker:
 
     def _subagent_counts(self, model_name: str) -> dict[str, int]:
         """A model's agents by state; waiting agents have no slot yet."""
-        counts = {"running": 0, "waiting": 0, "done": 0, "failed": 0}
+        counts = {"running": 0, "waiting": 0, "done": 0, "attention": 0, "failed": 0}
         for state in self._subagents.get(model_name, {}).values():
             status = state["status"]
             if status == "waiting":
                 counts["waiting"] += 1
             elif status in self.SUBAGENT_RUNNING:
                 counts["running"] += 1
-            elif status == "completed":
+            elif status == "reported_complete":
                 counts["done"] += 1
+            elif status in {"incomplete", "blocked", "unknown", "completed"}:
+                counts["attention"] += 1
             else:
                 counts["failed"] += 1
         return counts
@@ -844,6 +850,26 @@ class ProgressTracker:
             summary = failure_summary(result)
             if summary:
                 details.append(summary)
+            agents = (result.get("harness") or {}).get("subagents") or {}
+            runs = agents.get("runs") or []
+            if runs:
+                reported = sum(r.get("status") == "reported_complete" for r in runs)
+                details.append(f"Workers: {reported}/{len(runs)} reported complete (self-reported)")
+                for run in runs:
+                    status = run.get("status", "unknown")
+                    errors = (run.get("tool_usage") or {}).get("failures", 0)
+                    if status == "reported_complete" and not errors:
+                        continue
+                    label = (
+                        "unknown (legacy)" if status == "completed" else status.replace("_", " ")
+                    )
+                    detail = run.get("remaining_work") or run.get("error") or ""
+                    if isinstance(detail, list):
+                        detail = "; ".join(detail)
+                    text = f"! {run.get('label', run.get('name', 'worker'))}: {label}; {errors} tool errors"
+                    if detail:
+                        text += ": " + " ".join(detail.split())[:240]
+                    details.append(text)
         return [
             f"{S.DIM}  {line}{S.RST}"
             for detail in details
@@ -888,11 +914,16 @@ class ProgressTracker:
         pad = " " * (self.SUBAGENT_SLOT - 6)
         if status == "waiting":
             glyph, name, tail = f"{S.DIM}○", f"{S.DIM}{name}{S.RST}", bar + pad
-        elif status == "completed":
+        elif status == "reported_complete":
             glyph, name, tail = f"{S.GRN}✓", f"{S.DIM}{name}{S.RST}", bar + pad
+            if state.get("tool_failures"):
+                label = f"{state['tool_failures']} errors"[: self.SUBAGENT_SLOT]
+                glyph, tail = f"{S.YEL}✓", f"{S.YEL}{label:<{self.SUBAGENT_SLOT}}{S.RST}"
         elif status not in self.SUBAGENT_RUNNING:
             ending = self.SUBAGENT_ENDINGS.get(status, status)[: self.SUBAGENT_SLOT]
             glyph, tail = f"{S.RED}✗", f"{S.DIM}{ending}{S.RST}"
+            if status in {"incomplete", "blocked", "unknown", "completed"}:
+                glyph = f"{S.YEL}!"
             tail += " " * (self.SUBAGENT_SLOT - len(ending))
         elif (
             status == "streaming"
@@ -934,15 +965,15 @@ class ProgressTracker:
             shown = [
                 (number, state)
                 for number, state in sorted(agents.items())
-                if not (fold_done and state["status"] == "completed")
+                if not (fold_done and state["status"] == "reported_complete")
                 and not (fold_waiting and state["status"] == "waiting")
             ]
             name_w = min(name_w, max((len(self._subagent_name(s)) for _, s in shown), default=0))
             chips = []
             if fold_done and counts["done"]:
-                done = f"{counts['done']} done"
+                done = f"{counts['done']} reported"
                 if not live:
-                    done = f"{counts['done']} agent{'s' if counts['done'] != 1 else ''} done"
+                    done = f"{counts['done']} reported complete"
                 chips.append(f"{S.GRN}✓{S.RST} {S.DIM}{done}{S.RST}")
             chips += [self._subagent_chip(n, s, tick, name_w, slot=slot) for n, s in shown]
             if fold_waiting and counts["waiting"]:
@@ -962,15 +993,27 @@ class ProgressTracker:
                     line += detail
             return prefix + line
         # Narrowest: one glyph per agent, grouped by state like a progress strip.
-        marks = [f"{S.GRN}✓"] * counts["done"] + [f"{S.RED}✗"] * counts["failed"]
+        marks = (
+            [f"{S.GRN}✓"] * counts["done"]
+            + [f"{S.YEL}!"] * counts["attention"]
+            + [f"{S.RED}✗"] * counts["failed"]
+        )
         marks += [
             f"{_styles.ACCENT}{_SPIN[(tick + number) % len(_SPIN)]}"
             for number, state in sorted(agents.items())
             if state["status"] in self.SUBAGENT_RUNNING
         ]
         marks += [f"{S.DIM}○"] * counts["waiting"]
-        for keys in (("done", "running", "waiting", "failed"), ("running", "waiting"), ()):
-            summary = " · ".join(f"{counts[key]} {key}" for key in keys if counts[key])
+        for keys in (
+            ("done", "attention", "running", "waiting", "failed"),
+            ("running", "waiting"),
+            (),
+        ):
+            summary = " · ".join(
+                f"{counts[key]} {'reported' if key == 'done' else key}"
+                for key in keys
+                if counts[key]
+            )
             if len(marks) + 2 + len(summary) <= width:
                 gap = "  " if summary else ""
                 return prefix + f"{''.join(marks)}{S.RST}{gap}{S.DIM}{summary}{S.RST}"

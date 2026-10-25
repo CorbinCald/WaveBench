@@ -65,6 +65,7 @@ takes only the arguments it needs:
 
 | Tool | Arguments | Result the model sees |
 |---|---|---|
+| `search_files` | literal `query`, optional file/directory `path`, `case_sensitive` | Matching paths, line numbers and excerpts. Defaults to case-insensitive; bounded to 50 matches, 1,000 files and 16 MiB scanned. Truncation and unreadable/binary files are reported. Narrow query/path to continue. |
 | `read_file` | `path`, optional `start_line`/`end_line` (1-based, inclusive) | The file text. A file over 100,000 characters returns whole lines under a `[path: lines A-B of N]` header, ending with `[Continue with start_line=…]`. |
 | `write_file` | `path`, `content`, optional `append` | `Wrote path (N lines).` `append` adds to the end, so a very large file can be written over several responses. |
 | `edit_file` | `path`, `old_text`, `new_text`, optional `replace_all` | `Edited path (1 replacement).` An absent or ambiguous `old_text` leaves the file unchanged and says why: a whitespace-only difference, escaped `\n`, or the matching line numbers. |
@@ -398,7 +399,7 @@ calls in one turn, hard caps with readable errors, and no nesting.
 - **Same workspace and tools.** Subagents use the same file tools, lint,
   and, when enabled, `web_search`/`web_fetch` on the lead's project. They cannot
   call `submit` or `spawn_agent` (depth is one); a `read_only: true` agent is
-  offered only `read_file`, `list_files`, and `lint`. Parallel agents should own disjoint files; the
+  offered `read_file`, `search_files`, `list_files`, `lint`, and `finish_task`. Parallel agents should own disjoint files; the
   workspace's atomic replacement prevents torn files but not lost updates.
   Within one lead turn, spawn calls start after the batch's earlier
   `write_file`, `edit_file`, and `delete_file` calls, and later file changes wait for the agents, so
@@ -409,18 +410,43 @@ calls in one turn, hard caps with readable errors, and no nesting.
   `harness.subagent_cap` agents (default 8) across build and repair. The tool
   is withdrawn from the next request once the cap is reached or the finishing
   reserve is active, and rejected calls explain why without spawning.
-- **Bounded agents.** Each agent has at most `harness.subagent_turns` model
-  requests (default 20) and `harness.subagent_seconds` active seconds (default
-  600), within the lead's phase time. A reminder precedes the final request;
-  pending tool calls on that request are not run. Failed responses are retried
-  twice, as for the lead. The lead's phase deadline cancels running agents.
-- **Bounded reports.** The tool result is JSON with `ok`, `agent`, `status`
-  (`completed`, `turn_limit`, `time_limit`, `failed`, or `cancelled`), the plain-text `report` truncated to
-  `harness.subagent_report_chars` (default 6,000), `files` written/edited/deleted
-  by that agent, `turns`, `tool_calls`, `tool_failures`, `usage`, `time_s`, and
-  `agents_left`. Errors are returned as results; a failed agent never ends the
-  lead's phase, and the lead always sees the agent's status, changed files, and
-  report as text. Only the lead's own `submit` submits the project.
+- **Bounded agents.** Each agent has `harness.subagent_turns` working model
+  requests (default 40) and `harness.subagent_seconds` active seconds (default
+  600), within the lead's phase time. All working requests can execute tools.
+  One additional request, within the same time limit, offers only `finish_task`
+  to preserve an honest handoff when the working allowance is exhausted. An invalid
+  handoff gets one further correction attempt, also restricted to `finish_task`.
+  Workers see remaining requests/time each turn, a warning with five requests
+  left, and a targeted-discovery reminder after five turns without file changes.
+  Failed responses consume working requests and may be retried twice. The lead's
+  phase deadline cancels running agents, including those waiting for a slot.
+- **Explicit outcomes.** A worker calls `finish_task` with `outcome` (`completed`,
+  `incomplete`, or `blocked`), `report`, `remaining_work`, and `verification`.
+  The `remaining_work` list covers only the assigned task: `[]` for completed,
+  or up to 12 unfinished items for incomplete/blocked. Integration notes about
+  other agents belong in the report. This avoids confusing “none” prose with
+  unfinished work.
+  Verification describes checks actually performed, or says they were not run.
+  This is a worker's claim, not independent quality scoring. Plain text alone
+  triggers a correction; repeated missing outcomes become unknown. A completed
+  handoff following a failed tool in the same batch is rejected so the worker
+  can fix the problem or report incomplete. `finish_task` must be last in its batch.
+- **Bounded reports.** The structured tool result includes `ok`, `agent`, `status`
+  (`reported_complete`, `incomplete`, `blocked`, `unknown`, `turn_limit`,
+  `time_limit`, `failed`, or `cancelled`), and the plain-text `report` truncated to
+  `harness.subagent_report_chars` (default 6,000). It also includes changed `files`,
+  `turns`, `tool_calls`, `tool_failures`, `usage`, `time_s`, and `agents_left`.
+  Errors are returned as results; a failed agent never ends the lead's phase.
+  Only the lead's own `submit` submits the project.
+
+The handoff includes `task_outcome` (unknown until explicitly reported),
+`stop_reason`, `remaining_work`, `verification`, a structured `failure` when
+applicable, and the last eight `tool_errors` alongside the total failure count.
+Remaining work and verification are separate from the truncated report and appear
+first in the lead's tool result. `ok` is true only for an explicit completed
+handoff; it does not mean the project was functionally verified. The lead must
+resolve unsuccessful tasks or delegate smaller follow-up work. Original worker
+outcomes remain in the logs even if the lead later repairs the project.
 
 Accounting rolls up to the benchmarked model: subagent requests appear in the
 model's turns with phase `subagent`, and in its total tokens, cost, TURNS, and
@@ -450,20 +476,26 @@ A slot holds a state glyph, the agent's name, and a six-block bar of requests
 used out of `harness.subagent_turns`, counting the request in progress. The glyph
 is a spinner while the agent runs (bright while it streams output, dim while it
 reasons, runs tools, or lints), `○` with an empty bar while it waits for one of
-the `harness.subagent_parallel` slots, and `✓` with its final bar once done.
+the `harness.subagent_parallel` slots, and `✓` for reported completion. Recovered
+tool errors remain visible in that worker's slot. Incomplete, blocked, and unknown
+outcomes show `!`; older `completed` records are shown as unknown.
 A streaming agent that produces no output for 10 seconds shows a yellow `●` and
 `idle 12s` in place of its bar; an agent that ends early shows `✗` and `no turns`,
 `timed out`, `cancelled`, or `failed`. When exactly one agent is
 running, its output tokens and interval-average rate follow the slots.
 
 Finished agents keep their names after the delegation ends and after the model
-finishes. As width shrinks, names shorten, finished agents fold into `✓ 3 done`
-(`✓ 3 agents done` once none are running), waiting agents fold into
+finishes. As width shrinks, names shorten, finished agents fold into `✓ 3 reported`
+(`✓ 3 reported complete` once none are running), waiting agents fold into
 `○ 2 waiting`, and the slots drop; the narrowest form is one glyph per agent,
 grouped by state, with as many counts as fit, such as `✓✓✓✗⠦⠧○○○  2 running ·
 3 waiting`. Every model's own row is placed before any agent line, and agent
 lines take the remaining terminal rows in table order, models with running or
 waiting agents first, so agents never hide a model.
+
+The permanent Run Results display includes worker completion counts and names
+of unfinished, blocked, unknown, or failed workers, with reasons and tool-error
+counts. These remain visible even when the lead's project passes startup checks.
 
 Lifetime analytics
 add an `agents` total. `harness.subagents` in each result records the setting,
@@ -623,7 +655,7 @@ per phase, then ends the phase.
 | Calls per batch / concurrent file calls | 64 / 4 |
 | Concurrent API requests / subprocess checks or launches | 12 / 4 |
 | Subagents at once / total per model | 4 (2–5) / 8 |
-| Subagent model requests / active time / report | 20 / 600 seconds / 6,000 characters |
+| Subagent working requests / final handoff / active time / report | 40 / 1 request + 1 correction if needed / 600 seconds / 6,000 characters |
 | File data / project source data | 8 MiB per file / 128 MiB |
 | Total source, runtime and dependency storage | 512 MiB, monitored during subprocesses |
 | Project execution attempts | **One initial run, plus one retry only after failure** |

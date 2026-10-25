@@ -102,6 +102,14 @@ wavebench --subagents --orchestrator-model provider/lead --subagent-model provid
 
 Model-role choices apply only when subagents are enabled. See [subagent behavior and limits](docs/harness.md#subagents).
 
+Workers get 40 working requests by default, plus one final handoff request within
+their ten-minute time limit. Invalid handoffs get one correction attempt.
+File-content search and remaining-budget reminders help them finish within that
+allowance. Workers explicitly report complete,
+incomplete, or blocked work; the lead receives remaining work and tool errors.
+The terminal and saved results preserve those outcomes even if the lead later
+repairs the project. “Reported complete” is a worker's claim, not a quality score.
+
 ### Optional web research
 
 Run `wavebench --setup-web-search` or press **w** at startup to configure [Brave Search](https://api-dashboard.search.brave.com/app/keys). Setup accepts a masked key, tests it with one search, and enables Harness `web_search` and `web_fetch`. It works without an OpenRouter key.

@@ -25,7 +25,7 @@ def plain(text: str) -> str:
 def test_limits_validate_the_parallel_window_and_positive_caps():
     defaults = Limits()
     assert (defaults.subagent_parallel, defaults.subagent_cap) == (4, 8)
-    assert (defaults.subagent_turns, defaults.subagent_seconds) == (20, 600)
+    assert (defaults.subagent_turns, defaults.subagent_seconds) == (40, 600)
     assert Limits(subagent_parallel=2).subagent_parallel == 2
     assert Limits(subagent_parallel=5).subagent_parallel == 5
     for value in (1, 6):
@@ -73,12 +73,14 @@ def test_tool_schemas_separate_lead_and_subagent_capabilities(tmp_path):
         "write_file",
         "edit_file",
         "list_files",
+        "search_files",
         "delete_file",
         "lint",
+        "finish_task",
     ]
     # A read-only agent is never offered tools it may not use.
     reader = Dispatcher(None, None, tmp_path, Limits(), parent=lead, read_only=True)
-    assert names(reader.tools) == ["read_file", "list_files", "lint"]
+    assert names(reader.tools) == ["read_file", "list_files", "search_files", "lint", "finish_task"]
 
 
 def test_prompts_state_caps_ownership_and_the_report_contract():
@@ -89,7 +91,7 @@ def test_prompts_state_caps_ownership_and_the_report_contract():
     assert "Subagents" not in system_prompt("on", True)
     limits = Limits(subagent_turns=5, subagent_seconds=90)
     writer = subagent_prompt("on", True, limits, read_only=False)
-    assert "5 model requests and 90 seconds of active time" in writer
+    assert "5 working model requests and 90 seconds of active time" in writer
     assert "PyPI wheels" in writer and "web_search" in writer
     assert "cannot submit the project or spawn agents" in writer
     assert "The lead sees only that report" in writer
@@ -390,7 +392,7 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
     with pytest.raises(ValueError, match="the phase is finishing"):
         await pool.spawn("call", {"name": "a", "task": "b"})
     session.finishing = False
-    pool.runs.append(SimpleNamespace(status="completed"))
+    pool.runs.append(SimpleNamespace(status="reported_complete"))
     with pytest.raises(ValueError, match="agent cap reached"):
         await pool.spawn("call", {"name": "a", "task": "b"})
     assert pool.rejected == 3 and pool.remaining == 0
@@ -400,7 +402,10 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
         "cap": 1,
         "spawned": 1,
         "active": 0,
-        "completed": 1,
+        "reported_complete": 1,
+        "incomplete": 0,
+        "blocked": 0,
+        "unknown": 0,
         "failed": 0,
         "rejected": 3,
         "reminded": False,

@@ -79,7 +79,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         nargs="*",
-        help="ls [PATH], read PATH [START:END], write PATH (stdin), edit PATH (JSON old_text/new_text on stdin), delete PATH, lint, parallel COMMAND..., submit (JSON runtime/entry on stdin)",
+        help="ls [PATH], read PATH [START:END], search QUERY [PATH], write PATH (stdin), edit PATH (JSON old_text/new_text on stdin), delete PATH, lint, parallel COMMAND..., submit (JSON runtime/entry on stdin)",
     )
     args, extra = parser.parse_known_args()
     args.command.extend(extra)

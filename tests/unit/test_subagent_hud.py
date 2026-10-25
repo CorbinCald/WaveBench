@@ -47,7 +47,7 @@ def delegating(clock):
     tracker.update_subagent("lead", 1, status="streaming", output_tokens=150)
     tracker.update_subagent("lead", 2, status="linting", turn=3, settled_tokens=610)
     clock["now"] += 9.5
-    tracker.update_subagent("lead", 3, status="completed", turn=3, settled_tokens=805)
+    tracker.update_subagent("lead", 3, status="reported_complete", turn=3, settled_tokens=805)
     return tracker
 
 
@@ -75,12 +75,12 @@ def test_agents_keep_their_positions_as_they_stall_and_finish(delegating, clock)
     delegating.update_subagent("lead", 2, status="budget_exhausted")
     ended = line(delegating)
     assert re.search(r"✗ about-page   no budget   ", ended)
-    delegating.update_subagent("lead", 1, status="completed")
+    delegating.update_subagent("lead", 1, status="reported_complete")
     assert slots(stalled) == slots(ended) == slots(line(delegating)) == start
 
 
 def test_a_lone_running_agent_shows_its_output_and_rate(delegating, clock):
-    delegating.update_subagent("lead", 2, status="completed")
+    delegating.update_subagent("lead", 2, status="reported_complete")
     clock["now"] += 0.5
     delegating.update_subagent("lead", 1, output_tokens=300)
     # 300 streamed tokens over the 10 s since this request began.
@@ -104,7 +104,7 @@ def test_folding_keeps_running_and_failed_agents_named(clock):
             "lead", number, label=f"{number:02d}-{name}", status="waiting", max_turns=16
         )
     for number in (1, 2, 5):
-        tracker.update_subagent("lead", number, status="completed")
+        tracker.update_subagent("lead", number, status="reported_complete")
     tracker.update_subagent("lead", 3, status="streaming", turn=9, output_tokens=40)
     tracker.update_subagent("lead", 4, status="tools", turn=5)
     tracker.update_subagent("lead", 6, status="turn_limit", turn=16)
@@ -113,12 +113,12 @@ def test_folding_keeps_running_and_failed_agents_named(clock):
     wide = line(tracker, 112)
     # Finished agents fold first, then waiting ones; running and failed agents stay named.
     assert re.fullmatch(
-        rf"  ╰ ✓ 3 done   {SPIN} maps    ▰▰▰▰▱▱      {SPIN} bots    ▰▰▱▱▱▱      "
+        rf"  ╰ ✓ 3 reported   {SPIN} maps    ▰▰▰▰▱▱      {SPIN} bots    ▰▰▱▱▱▱      "
         r"✗ netcode no turns    ○ 3 waiting",
         wide,
     )
     assert re.fullmatch(
-        rf"  ╰ ✓ 3 done  {SPIN} maps     {SPIN} bots     ✗ netcode  ○ 3 waiting",
+        rf"  ╰ ✓ 3 reported  {SPIN} maps     {SPIN} bots     ✗ netcode  ○ 3 waiting",
         line(tracker, 90),
     )
     assert re.fullmatch(rf"  ╰ ✓✓✓✗{SPIN}{SPIN}○○○  2 running · 3 waiting", line(tracker, 40))
@@ -144,22 +144,24 @@ def test_line_outlives_lead_turns_then_keeps_names_until_it_must_fold(delegating
     assert "home-page" in line(delegating)  # No flicker between the lead's turns.
     before = slots(line(delegating))
     for number in (1, 2):
-        delegating.update_subagent("lead", number, status="completed")
+        delegating.update_subagent("lead", number, status="reported_complete")
     done = line(delegating)
     assert re.fullmatch(
         r"  ╰ ✓ home-page +▰▰▱▱▱▱ +✓ about-page +▰▰▱▱▱▱ +✓ contact-page ▰▰▱▱▱▱", done
     )
     assert slots(done) == before  # Ending a delegation moves nothing.
-    assert line(delegating, 40) == "  ╰ ✓ 3 agents done"
+    assert line(delegating, 40) == "  ╰ ✓ 3 reported complete"
     delegating.update_subagent("lead", 4, label="04-late-fix", status="budget_exhausted")
-    assert line(delegating, 60) == "  ╰ ✓ 3 agents done   ✗ late-fix no budget"
+    assert line(delegating, 60) == "  ╰ ✓ 3 reported complete   ✗ late-fix no budget"
     delegating.update_subagent(
-        "lead-2", 1, label="01-integration-pass", status="completed", turn=4, max_turns=10
+        "lead-2", 1, label="01-integration-pass", status="reported_complete", turn=4, max_turns=10
     )
     assert line(delegating, name="lead-2") == "  ╰ ✓ integration-pass ▰▰▰▱▱▱"
-    assert line(delegating, 24, name="lead-2") == "  ╰ ✓ 1 agent done"
+    assert line(delegating, 24, name="lead-2") == "  ╰ ✓  1 reported"
     delegating.set_phase("lead", "finished")
-    assert line(delegating, 60) == "  ╰ ✓ 3 agents done   ✗ late-fix no budget"  # Lasts the run.
+    assert (
+        line(delegating, 60) == "  ╰ ✓ 3 reported complete   ✗ late-fix no budget"
+    )  # Lasts the run.
 
 
 def test_agents_column_shows_running_over_spawned(delegating):
@@ -254,7 +256,9 @@ async def test_live_delegations_take_spare_rows_before_finished_ones(clock, monk
     for name in ("solo", "live"):
         tracker.update_harness(name, {"api_turns": 3}, 6.0)
         tracker.set_phase(name, "building")
-    tracker.update_subagent("done", 1, label="01-finished-part", status="completed", max_turns=16)
+    tracker.update_subagent(
+        "done", 1, label="01-finished-part", status="reported_complete", max_turns=16
+    )
     tracker.update_subagent("live", 1, label="01-running-part", status="streaming", max_turns=16)
     results["done"] = {
         "status": "success",
@@ -268,3 +272,48 @@ async def test_live_delegations_take_spare_rows_before_finished_ones(clock, monk
     assert not any("finished-part" in row for row in frame)
     frame = await render(tracker, monkeypatch, 40)
     assert any("✓ finished-part" in row for row in frame)  # Finished models keep theirs.
+
+
+@pytest.mark.parametrize(
+    "status,label",
+    [
+        ("incomplete", "not done"),
+        ("blocked", "blocked"),
+        ("unknown", "unknown"),
+        ("completed", "unknown"),
+    ],
+)
+def test_unfinished_and_legacy_workers_never_get_green_completion(clock, status, label):
+    tracker = ProgressTracker(1, {}, model_names=["lead"])
+    tracker.update_subagent("lead", 1, label="01-worker", status=status, max_turns=40)
+    assert "✓" not in line(tracker)
+    assert "!" in line(tracker) and label in line(tracker)
+    assert tracker._subagent_counts("lead")["attention"] == 1
+
+
+def test_final_results_keep_failed_workers_visible_after_lead_recovers(clock):
+    tracker = ProgressTracker(1, {})
+    result = {
+        "status": "success",
+        "harness": {
+            "subagents": {
+                "runs": [
+                    {
+                        "label": "01-terrain",
+                        "status": "incomplete",
+                        "remaining_work": ["World export is missing"],
+                        "tool_usage": {"failures": 2},
+                    },
+                    {
+                        "label": "02-repair",
+                        "status": "reported_complete",
+                        "tool_usage": {"failures": 0},
+                    },
+                ]
+            }
+        },
+    }
+    rendered = plain("\n".join(tracker._format_harness_details("lead", 80, result)))
+    assert "1/2 reported complete" in rendered
+    assert "01-terrain: incomplete; 2 tool errors" in rendered
+    assert "World export is missing" in rendered

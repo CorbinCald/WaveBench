@@ -81,6 +81,36 @@ LIST_FILES = _tool(
     "List files recursively with line counts; path narrows it to a directory.",
     {"path": _PATH},
 )
+SEARCH_FILES = _tool(
+    "search_files",
+    "Find literal text in project files without reading whole modules. Case-insensitive by "
+    "default. Returns paths, line numbers, and matching lines. Narrow path/query if truncated.",
+    {
+        "query": {"type": "string"},
+        "path": _PATH,
+        "case_sensitive": {"type": "boolean"},
+    },
+    ["query"],
+)
+FINISH_TASK = _tool(
+    "finish_task",
+    "Finish your delegated task with an explicit outcome, not a project submission. "
+    "Use completed only when the assigned work is finished; incomplete for unfinished work, "
+    "blocked when a missing dependency prevents progress. Report remaining work separately. "
+    "Verification describes checks actually performed, or 'not run'; completion is self-reported.",
+    {
+        "outcome": {"type": "string", "enum": ["completed", "incomplete", "blocked"]},
+        "report": {"type": "string"},
+        "remaining_work": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 500},
+            "maxItems": 12,
+            "description": "Unfinished parts of YOUR assigned task only. Use [] when none remain. Put notes about other agents' work in report, not here.",
+        },
+        "verification": {"type": "string"},
+    },
+    ["outcome", "report", "remaining_work", "verification"],
+)
 DELETE_FILE = _tool("delete_file", "Delete a file or directory.", {"path": _PATH}, ["path"])
 LINT = _tool(
     "lint",
@@ -123,28 +153,30 @@ SPAWN_AGENT = _tool(
     ["name", "task"],
 )
 
-WORKSPACE_TOOLS = [READ_FILE, WRITE_FILE, EDIT_FILE, LIST_FILES, DELETE_FILE, LINT]
+WORKSPACE_TOOLS = [READ_FILE, WRITE_FILE, EDIT_FILE, LIST_FILES, SEARCH_FILES, DELETE_FILE, LINT]
 TOOL_SCHEMA = [*WORKSPACE_TOOLS, SUBMIT]
 FILE_CHANGES = frozenset({"write_file", "edit_file", "delete_file"})
-READS = frozenset({"read_file", "list_files"})
+READS = frozenset({"read_file", "list_files", "search_files"})
 RESEARCH_TOOLS = frozenset({"web_search", "web_fetch"})
-BARRIERS = frozenset({"lint", "submit"})
+BARRIERS = frozenset({"lint", "submit", "finish_task"})
 KNOWN_TOOLS = frozenset(
-    t["function"]["name"] for t in [*TOOL_SCHEMA, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
+    t["function"]["name"]
+    for t in [*TOOL_SCHEMA, FINISH_TASK, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
 )
 ARGUMENTS = {
     t["function"]["name"]: set(t["function"]["parameters"]["properties"])
-    for t in [*TOOL_SCHEMA, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
+    for t in [*TOOL_SCHEMA, FINISH_TASK, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
 }
 REQUIRED = {
     t["function"]["name"]: t["function"]["parameters"]["required"]
-    for t in [*TOOL_SCHEMA, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
+    for t in [*TOOL_SCHEMA, FINISH_TASK, SPAWN_AGENT, WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
 }
 
 # wb CLI verbs for the same tools.
 VERBS = {
     "ls": "list_files",
     "read": "read_file",
+    "search": "search_files",
     "write": "write_file",
     "edit": "edit_file",
     "delete": "delete_file",
@@ -173,6 +205,10 @@ def parse_command(text: str, data: dict | None = None) -> dict:
         arguments["start_line"] = int(bounds[0])
         if len(bounds) == 2:
             arguments["end_line"] = int(bounds[1])
+    if name == "search_files" and words:
+        arguments["query"] = words.pop(0)
+        if words:
+            arguments["path"] = words.pop(0)
     if words:
         raise ValueError(
             "unexpected arguments; supply content, edits, or submission as JSON on stdin"
@@ -290,6 +326,15 @@ def _render(name: str, result: dict, limits: Limits) -> str:
         )
         if result["truncated"]:
             text += "\n[Listing truncated; pass a directory path to see more.]"
+    elif name == "search_files":
+        text = (
+            "\n".join(f"{m['path']}:{m['line']}: {m['text']}" for m in result["matches"])
+            or "No matches."
+        )
+        if result["truncated"]:
+            text += "\n[Search truncated; narrow path or query.]"
+        if result["skipped"]:
+            text += "\n[Unreadable/binary files skipped: " + ", ".join(result["skipped"]) + "]"
     elif name == "delete_file":
         text = f"Deleted {result['deleted']}."
     elif name == "lint":
@@ -334,8 +379,17 @@ def _render(name: str, result: dict, limits: Limits) -> str:
         text = (
             f"Agent {result['agent']} {result['status']} after {result['turns']} "
             f"request{'' if result['turns'] == 1 else 's'} ({result['time_s']:g}s)."
-            + (f" Files {changed}." if changed else " No files changed.")
             + (f" Error: {result['error']}" if result.get("error") else "")
+            + f"\nTask outcome: {result.get('task_outcome', 'unknown')} (self-reported)."
+            + f" Stop reason: {result.get('stop_reason', 'unknown')}."
+            + f"\nRemaining work: {json.dumps(result.get('remaining_work') or [], ensure_ascii=False)}"
+            + f"\nVerification: {result.get('verification') or '(not reported)'}"
+            + (
+                f"\nTool failures: {result['tool_failures']}. {json.dumps(result.get('tool_errors', []), ensure_ascii=False)}"
+                if result.get("tool_failures")
+                else ""
+            )
+            + (f"\nFiles: {_clip(changed, 2000)}" if changed else "\nNo files changed.")
             + f"\nReport:\n{result.get('report') or '(none)'}"
             + ("\n[Report truncated.]" if result.get("report_truncated") else "")
             + f"\n({result['agents_left']} agents left.)"
@@ -389,12 +443,14 @@ class Dispatcher:
                 for t in WORKSPACE_TOOLS
                 if not (read_only and t["function"]["name"] in FILE_CHANGES)
             ]
+            tools.append(FINISH_TASK)
         else:
             tools = [*TOOL_SCHEMA, *([SPAWN_AGENT] if subagents is not None else [])]
         if web_search is not None:
             tools += [WEB_SEARCH_SCHEMA, WEB_FETCH_SCHEMA]
         self.tools = copy.deepcopy(tools)
         self.submission: dict | None = None
+        self.handoff: dict | None = None
         self.lint_results: list[dict] = []
         self._calls: dict[str, tuple[str, dict]] = {}
         self._lock = asyncio.Lock()
@@ -512,6 +568,8 @@ class Dispatcher:
         }
 
     async def _execute(self, name: str, arguments: dict) -> dict:
+        if self.handoff is not None:
+            raise ValueError("the delegated task was already finished; this call was skipped")
         if self.submission is not None:
             raise ValueError("the project was already submitted; this call was skipped")
         if self.read_only and name in FILE_CHANGES:
@@ -526,8 +584,46 @@ class Dispatcher:
             result = await self.runtime.lint()
             self.lint_results.append(result)
             return {**result, "ok": result.get("exit_code") == 0 and not result.get("error")}
+        if name == "finish_task":
+            outcome = arguments.get("outcome")
+            if outcome not in {"completed", "incomplete", "blocked"}:
+                raise ValueError("outcome must be completed, incomplete, or blocked")
+            for key, cap in (
+                ("report", 24_000),
+                ("verification", 4_000),
+            ):
+                value = arguments.get(key)
+                if not isinstance(value, str) or len(value) > cap:
+                    raise ValueError(f"{key} must be text of at most {cap} characters")
+                if not value.strip():
+                    raise ValueError(f"{key} must not be empty")
+            remaining = arguments.get("remaining_work")
+            if (
+                not isinstance(remaining, list)
+                or len(remaining) > 12
+                or any(
+                    not isinstance(item, str) or not item.strip() or len(item) > 500
+                    for item in remaining
+                )
+            ):
+                raise ValueError(
+                    "remaining_work must be a list of up to 12 unfinished assigned tasks (500 characters each); use [] when none remain"
+                )
+            if outcome == "completed" and remaining:
+                raise ValueError(
+                    "completed requires remaining_work: []; put other agents' work or integration notes in report, or use incomplete/blocked"
+                )
+            if outcome != "completed" and not remaining:
+                raise ValueError("list remaining_work for an incomplete or blocked task")
+            self.handoff = dict(arguments)
+            return {"handoff": self.handoff}
         operations = {
             "read_file": lambda: self._read(arguments),
+            "search_files": lambda: self.workspace.search(
+                arguments.get("query"),
+                _clean_path(arguments.get("path"), optional=True),
+                case_sensitive=arguments.get("case_sensitive") is True,
+            ),
             "write_file": lambda: self._write(arguments),
             "edit_file": lambda: self._edit(arguments),
             "list_files": lambda: self.workspace.tree(
@@ -595,6 +691,10 @@ class Dispatcher:
         if name == "submit" and earlier_failed:
             raise ValueError(
                 "not submitted because an earlier call in this response failed; fix it, then submit"
+            )
+        if name == "finish_task" and arguments.get("outcome") == "completed" and earlier_failed:
+            raise ValueError(
+                "cannot report completed after a failed call in this batch; fix it or report incomplete"
             )
         if name in RESEARCH_TOOLS:
             return {**await self._research(name, arguments), "calls_left": self.calls_left()}
@@ -690,6 +790,8 @@ class Dispatcher:
                                 raise ValueError(
                                     f"more than {self.limits.batch_calls} tool calls in one response; skipped"
                                 )
+                            if name == "finish_task" and index != len(calls) - 1:
+                                raise ValueError("finish_task must be the last call in a batch")
                             payload = await self._run(
                                 name,
                                 call.get("arguments"),

@@ -103,13 +103,17 @@ def text(content: str, *specs, usage=None) -> Turn:
     turn = (
         calls(0, *specs)
         if specs
-        else Turn(
-            {"role": "assistant", "content": content},
-            dict(USAGE),
-            "vendor/lead",
-            "offline",
-            "stop",
-            {},
+        else calls(
+            "finish",
+            (
+                "finish_task",
+                {
+                    "outcome": "completed",
+                    "report": content,
+                    "remaining_work": [],
+                    "verification": "not run",
+                },
+            ),
         )
     )
     turn.message["content"] = content
@@ -183,7 +187,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
                 )
             if index == 1:
                 reports = results(messages, 3)
-                assert [r["status"] for r in reports] == ["completed"] * 3
+                assert [r["status"] for r in reports] == ["reported_complete"] * 3
                 assert all(r["ok"] for r in reports)
                 assert [r["files"]["written"] for r in reports] == [
                     ["lib/alpha.py"],
@@ -192,7 +196,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
                 ]
                 assert [r["agent"] for r in reports] == ["01-alpha", "02-beta", "03-gamma"]
                 assert {r["agents_left"] for r in reports} == {0}
-                assert all(r["turns"] == 2 and r["tool_calls"] == 1 for r in reports)
+                assert all(r["turns"] == 2 and r["tool_calls"] == 2 for r in reports)
                 assert all(r["usage"] == {"total_tokens": 30, "cost": 0.002} for r in reports)
                 assert "wrote lib/alpha.py" in reports[0]["report"]
                 # The cap is reached, so the tool is withdrawn from this request.
@@ -240,31 +244,34 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
     assert session.usage()["api_turns"] == 9
     assert session.usage()["total_tokens"] == 9 * 15
     assert session.usage()["cost"] == pytest.approx(0.009)
-    assert session.dispatcher.tool_usage == {"calls": 9, "failures": 0}
+    assert session.dispatcher.tool_usage == {"calls": 12, "failures": 0}
     result = session.result()
     agents = result["harness"]["subagents"]
     assert agents["enabled"] and agents["parallel"] == 2 and agents["cap"] == 3
-    assert agents["spawned"] == agents["completed"] == 3
+    assert agents["spawned"] == agents["reported_complete"] == 3
     assert [run["reasoning_effort"] for run in agents["runs"]] == ["low", "max", "high"]
     assert [t["reasoning_effort"] for t in session.turns if t.get("agent") == 1] == ["low", "low"]
     assert session.reasoning_effort == "high"
     assert agents["failed"] == agents["rejected"] == agents["active"] == 0
     assert agents["usage"]["total_tokens"] == 90 and agents["usage"]["api_turns"] == 6
-    assert [run["status"] for run in agents["runs"]] == ["completed"] * 3
+    assert [run["status"] for run in agents["runs"]] == ["reported_complete"] * 3
     assert agents["runs"][1]["files"]["written"] == ["lib/beta.py"]
-    assert agents["runs"][1]["tool_usage"] == {"calls": 1, "failures": 0}
+    assert agents["runs"][1]["tool_usage"] == {"calls": 2, "failures": 0}
     assert result["harness"]["model_usage"]["total_tokens"] == 135
     assert result["harness"]["timing"]["subagent_s"] > 0
     assert "delegating" in [event["phase"] for event in session.events]
     for run in agents["runs"]:
         folder = session.metadata / "subagents" / run["label"]
         saved = json.loads((folder / "result.json").read_text())
-        assert saved["status"] == "completed" and saved["task"].startswith("Write lib/")
-        assert len(json.loads((folder / "conversation.json").read_text())) == 5
+        assert saved["status"] == "reported_complete" and saved["task"].startswith("Write lib/")
+        assert any(
+            m["role"] == "tool" and "handoff" in m["content"]
+            for m in json.loads((folder / "conversation.json").read_text())
+        )
         assert (folder / "tool-0001.json").exists()
     assert tracker._harness_metrics(session.name)["subagents"] == 3
     assert "agents 3" in tracker._format_harness_tool_metrics(session.name)
-    assert tracker._harness[session.name]["subagents"]["completed"] == 3
+    assert tracker._harness[session.name]["subagents"]["reported_complete"] == 3
     stored = json.loads((session.metadata / "result.json").read_text())
     assert stored["harness"]["subagents"]["spawned"] == 3
 
@@ -333,12 +340,12 @@ async def test_cap_rejections_no_nesting_no_submission_and_read_only(factory, mo
     assert not session.workspace.ls("notes.md") if False else True
     assert "notes.md" not in [entry["name"] for entry in session.workspace.ls()]
     agents = session.result()["harness"]["subagents"]
-    assert agents["spawned"] == 2 and agents["rejected"] == 1 and agents["completed"] == 2
+    assert agents["spawned"] == 2 and agents["rejected"] == 1 and agents["reported_complete"] == 2
     assert agents["runs"][1]["read_only"] is True
-    assert agents["runs"][0]["tool_usage"] == {"calls": 3, "failures": 2}
-    assert agents["runs"][1]["tool_usage"] == {"calls": 2, "failures": 1}
+    assert agents["runs"][0]["tool_usage"] == {"calls": 4, "failures": 2}
+    assert agents["runs"][1]["tool_usage"] == {"calls": 3, "failures": 1}
     # Lead: 2 spawns + 1 rejected spawn + write + lint + done; agents: 3 + 2 calls.
-    assert session.dispatcher.tool_usage == {"calls": 11, "failures": 4}
+    assert session.dispatcher.tool_usage == {"calls": 13, "failures": 4}
 
 
 async def test_turn_limit_injects_final_notice_and_skips_pending_tools(factory, monkeypatch):
@@ -367,7 +374,7 @@ async def test_turn_limit_injects_final_notice_and_skips_pending_tools(factory, 
         return text("half done", write("lib/b.py", "B = 2\n"))
 
     monkeypatch.setattr(module, "call_conversation", model)
-    session = factory(limits=Limits(subagent_turns=2, review_seconds=1))
+    session = factory(limits=Limits(subagent_turns=1, review_seconds=1))
     await session.build()
     await session.execute()
     assert session.status == "success", session.error
@@ -396,7 +403,7 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
                     ),
                 )
             report = results(messages, 1)[0]
-            assert report["status"] == "completed" and report["turns"] == 3
+            assert report["status"] == "reported_complete" and report["turns"] == 3
             return calls(index, DONE)
         assert kwargs["max_tokens"] == Limits().turn_tokens == 128_000
         if index == 0:
@@ -404,7 +411,7 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
         assert "reached the output limit" in json.dumps(messages)
         if index == 1:
             return calls(index, write("main.py", "print(42)\n"))
-        assert messages[-1]["content"] == FINAL_NOTICE
+        assert "1 working requests left" in messages[-1]["content"]
         return text("main.py prints 42.")
 
     monkeypatch.setattr(module, "call_conversation", model)
@@ -449,7 +456,7 @@ async def test_subagent_recovers_from_separate_outages_without_spending_correcti
             if not any(m["role"] == "tool" for m in messages):
                 return calls(0, spawn("writer", "Write main.py and report."))
             report = results(messages, 1)[0]
-            assert report["status"] == ("completed" if ending == "complete" else "failed")
+            assert report["status"] == ("reported_complete" if ending == "complete" else "failed")
             return calls(1, DONE)
         step = steps[seen]
         seen += 1
@@ -548,7 +555,7 @@ async def test_a_failed_subagent_keeps_the_lead_working(factory, monkeypatch):
                 assert crash["status"] == "failed" and "provider failed" in crash["error"]
                 assert crash["usage"] == {"total_tokens": 7, "cost": None}
                 assert crash["text"].startswith("Agent 01-crash failed after 1 request ")
-                assert worker["status"] == "completed"
+                assert worker["status"] == "reported_complete"
                 assert worker["files"]["written"] == ["lib/worker.py"]
                 return calls(index, write("main.py", "from lib.worker import W\nprint(W)\n"), LINT)
             return calls(index, DONE)
@@ -566,8 +573,8 @@ async def test_a_failed_subagent_keeps_the_lead_working(factory, monkeypatch):
     await session.execute()
     assert session.status == "success", session.error
     agents = session.result()["harness"]["subagents"]
-    assert [run["status"] for run in agents["runs"]] == ["failed", "completed"]
-    assert agents["failed"] == 1 and agents["completed"] == 1
+    assert [run["status"] for run in agents["runs"]] == ["failed", "reported_complete"]
+    assert agents["failed"] == 1 and agents["reported_complete"] == 1
     assert agents["runs"][0]["failure"]["category"] == "model_protocol"
     assert agents["usage"]["known_total_tokens"] == 990_007 + 15
     assert session.usage()["cost"] is None  # The crash reported no cost.
@@ -668,7 +675,7 @@ async def test_subagent_research_shares_the_lead_quotas(factory, monkeypatch):
         "calls": 2,
         "failures": 0,
     }
-    assert harness["subagents"]["runs"][0]["tool_usage"] == {"calls": 3, "failures": 1}
+    assert harness["subagents"]["runs"][0]["tool_usage"] == {"calls": 4, "failures": 1}
 
 
 async def test_repair_phase_can_still_spawn_within_the_shared_cap(factory, monkeypatch):
@@ -714,7 +721,7 @@ async def test_repair_phase_can_still_spawn_within_the_shared_cap(factory, monke
     assert len(session.attempts) == 2 and session.repair == "submitted"
     agents = session.result()["harness"]["subagents"]
     assert [run["name"] for run in agents["runs"]] == ["builder", "fixer"]
-    assert agents["spawned"] == 2 and agents["completed"] == 2
+    assert agents["spawned"] == 2 and agents["reported_complete"] == 2
 
 
 async def test_disabled_subagents_expose_no_tool_and_reject_calls(factory, monkeypatch):
@@ -854,7 +861,7 @@ async def test_subagent_uses_selected_model_and_its_output_limit(factory, monkey
     record = session.result()["harness"]["subagents"]
     assert record["model_id"] == expected
     assert record["runs"][0]["model_id"] == expected
-    assert record["runs"][0]["status"] == "completed"
+    assert record["runs"][0]["status"] == "reported_complete"
 
 
 async def test_unsupported_subagent_model_fails_before_build(factory, monkeypatch):
@@ -888,6 +895,248 @@ async def test_null_subagent_effort_inherits_lead_setting(factory, monkeypatch, 
     )
     assert seen == [lead_effort]
     run = session.subagents.runs[0]
-    assert run.status == "completed"
+    assert run.status == "reported_complete"
     assert run.record()["reasoning_effort"] == lead_effort
     assert run.turns[0]["reasoning_effort"] == lead_effort
+
+
+async def test_last_working_request_executes_then_extra_request_reports(factory, monkeypatch):
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        kind, _ = role(messages)
+        if kind == "lead":
+            if not any(m["role"] == "tool" for m in messages):
+                return calls(0, spawn("writer", "Write main.py to print 42"))
+            report = results(messages, 1)[0]
+            assert report["ok"] and report["task_outcome"] == "completed"
+            assert report["turns"] == 2
+            assert report["verification"] == "not run"
+            return calls(1, DONE)
+        if messages[-1]["content"] == FINAL_NOTICE:
+            assert tool_names(tools) == ["finish_task"]
+            assert results(messages, 1)[0]["ok"]
+            return text("Wrote the complete program")
+        assert "1 working requests left" in messages[-1]["content"]
+        return calls(0, write("main.py", "print(42)\n"))
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(subagent_turns=1, review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    record = session.subagents.runs[0].record()
+    assert record["report_requests"] == 1 and record["pending_calls"] == 0
+    assert record["failure"] is None
+
+
+async def test_discovery_can_continue_past_twenty_requests_then_deliver(factory, monkeypatch):
+    seen = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal seen
+        kind, _ = role(messages)
+        if kind == "lead":
+            if not any(m["role"] == "tool" for m in messages):
+                return calls(
+                    0,
+                    write("interfaces.txt", "invoice_total(amount)\n"),
+                    spawn("writer", "Inspect interfaces and write main.py"),
+                )
+            report = results(messages, 1)[0]
+            assert report["ok"] and report["turns"] == 24
+            return calls(1, DONE)
+        seen += 1
+        if seen <= 22:
+            return calls(seen, ("search_files", {"query": "invoice_total"}))
+        if seen == 23:
+            assert any("five working turns" in m.get("content", "") for m in messages)
+            return calls(seen, write("main.py", "print(42)\n"))
+        return text("Program complete")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+
+
+@pytest.mark.parametrize("outcome", ["incomplete", "blocked"])
+async def test_unfinished_handoff_survives_report_truncation_and_reaches_lead(
+    factory, monkeypatch, outcome
+):
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        kind, _ = role(messages)
+        if kind == "lead":
+            if not any(m["role"] == "tool" for m in messages):
+                return calls(0, spawn("supplier", "Implement supplier integration"))
+            report = results(messages, 1)[0]
+            assert not report["ok"] and report["status"] == outcome
+            assert report["remaining_work"] == ["Supplier credentials are missing"]
+            assert report["verification"] == "No live supplier check was possible"
+            assert report["failure"]["code"] == "subagent_" + outcome
+            assert "Supplier credentials are missing" in report["text"]
+            assert report["report_truncated"]
+            return calls(1, write("main.py", "print('offline mode')\n"), DONE)
+        return calls(
+            0,
+            (
+                "finish_task",
+                {
+                    "outcome": outcome,
+                    "report": "details " * 40,
+                    "remaining_work": ["Supplier credentials are missing"],
+                    "verification": "No live supplier check was possible",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(subagent_report_chars=30, review_seconds=1))
+    await session.build()
+    await session.execute()
+    assert session.status == "success", session.error
+    worker = session.subagents.runs[0]
+    saved = json.loads((worker.metadata / "result.json").read_text())
+    assert saved["status"] == outcome and saved["failure"]
+    assert saved["remaining_work"] == ["Supplier credentials are missing"]
+    assert any("WaveBench outcome" in m.get("content", "") for m in worker.messages)
+    tracker = ProgressTracker(1, {})
+    rendered = "\n".join(tracker._format_harness_details(session.name, 80, session.result()))
+    assert outcome in rendered and "Supplier credentials" in rendered
+
+
+async def test_missing_outcome_is_unknown_instead_of_success(factory, monkeypatch):
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        return Turn(
+            {"role": "assistant", "content": ""}, dict(USAGE), model_id, "offline", "stop", {}
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    report = await session.subagents.spawn(
+        "call", {"name": "empty", "task": "Review files", "read_only": True}
+    )
+    assert not report["ok"] and report["task_outcome"] == "unknown"
+    assert report["status"] == "unknown" and report["turns"] == 2
+    assert report["failure"]["code"] == "subagent_unknown"
+
+
+async def test_failed_edit_is_seen_by_worker_lead_and_saved_after_recovery(factory, monkeypatch):
+    seen = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal seen
+        seen += 1
+        if seen == 1:
+            return calls(
+                0,
+                ("edit_file", {"path": "main.py", "old_text": "missing"}),
+                (
+                    "finish_task",
+                    {
+                        "outcome": "completed",
+                        "report": "done",
+                        "remaining_work": [],
+                        "verification": "not run",
+                    },
+                ),
+            )
+        assert "requires new_text" in json.dumps(messages)
+        assert "cannot report completed" in json.dumps(messages)
+        return text("Review finished; no changes required")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    report = await session.subagents.spawn("call", {"name": "review", "task": "Review project"})
+    assert report["ok"] and report["task_outcome"] == "completed"
+    assert report["tool_failures"] == 2
+    assert report["tool_errors"][0]["tool"] == "edit_file"
+    assert "requires new_text" in report["tool_errors"][0]["error"]
+    worker = session.subagents.runs[0]
+    saved = json.loads((worker.metadata / "result.json").read_text())
+    assert saved["tool_errors"] == report["tool_errors"]
+
+
+@pytest.mark.parametrize("correct_report", [True, False])
+async def test_malformed_last_handoff_has_one_bounded_correction(
+    factory, monkeypatch, correct_report
+):
+    count = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 1:
+            return calls(0, write("main.py", "print(42)\n"))
+        assert tool_names(tools) == ["finish_task"]
+        if count == 3:
+            assert "use [] when none remain" in json.dumps(messages)
+            if correct_report:
+                return text("main.py is complete")
+        return calls(
+            count,
+            (
+                "finish_task",
+                {
+                    "outcome": "completed",
+                    "report": "main.py complete",
+                    "remaining_work": "None",
+                    "verification": "not run",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(limits=Limits(subagent_turns=1, review_seconds=1))
+    report = await session.subagents.spawn(
+        "call", {"name": "writer", "task": "Write main.py to print 42"}
+    )
+    assert report["ok"] is correct_report
+    assert report["status"] == ("reported_complete" if correct_report else "turn_limit")
+    assert count == 3
+    if not correct_report:
+        assert report["report"] == "main.py complete"
+        assert report["task_outcome"] == "unknown"
+    record = session.subagents.runs[0].record()
+    assert record["report_requests"] == 2
+    assert record["tool_usage"]["failures"] == (1 if correct_report else 2)
+    assert record["tool_errors"][0]["tool"] == "finish_task"
+    assert session.workspace.read("main.py") == "print(42)\n"
+
+
+async def test_queued_worker_cancellation_is_not_left_pending(factory):
+    session = factory()
+    session.subagents.semaphore = asyncio.Semaphore(0)
+    task = asyncio.create_task(
+        session.subagents.spawn("call", {"name": "waiting", "task": "Review files"})
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    worker = session.subagents.runs[0]
+    saved = json.loads((worker.metadata / "result.json").read_text())
+    assert saved["status"] == "cancelled" and saved["stop_reason"] == "cancelled"
+    assert saved["failure"]["category"] == "cancelled"
+    assert session.subagents.usage()["active"] == 0
+    assert session.subagents.usage()["failed"] == 1
+
+
+async def test_nonobject_tool_arguments_are_recoverable_and_logged(factory, monkeypatch):
+    seen = 0
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        nonlocal seen
+        seen += 1
+        if seen == 1:
+            return calls(0, ("write_file", ["invalid"]), ("finish_task", ["invalid"]))
+        assert "tool arguments must be a JSON object" in json.dumps(messages)
+        return text("Review complete; no files changed")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory()
+    report = await session.subagents.spawn(
+        "call", {"name": "review", "task": "Review the empty project"}
+    )
+    assert report["ok"] and report["tool_failures"] == 2
+    assert report["files"] == {"written": [], "edited": [], "deleted": []}
+    assert all(e["error"] == "tool arguments must be a JSON object" for e in report["tool_errors"])

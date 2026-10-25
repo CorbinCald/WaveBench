@@ -463,3 +463,42 @@ async def test_equivalent_paths_preserve_write_read_order(project, monkeypatch):
         ]
     )
     assert results[1]["text"] == "print(42)"
+
+
+def test_search_locates_interfaces_without_reading_entire_modules(project, tmp_path):
+    ws, metadata = project
+    ws.write("js/large.js", "\n" * 2000 + "export function damageEnemy(amount) {}\n")
+    ws.write("js/other.js", "const damageenemy = 1;\n")
+    ws.write("assets/binary", "\x00damageEnemy")
+    secret = tmp_path / "secret-search.txt"
+    secret.write_text("damageEnemy SECRET")
+    (ws.root / "link").symlink_to(secret)
+    os.link(secret, ws.root / "hard")
+    result = ws.search("damageEnemy", "js")
+    assert [(m["path"], m["line"]) for m in result["matches"]] == [
+        ("js/large.js", 2001),
+        ("js/other.js", 1),
+    ]
+    assert ws.search("damageEnemy", "js", case_sensitive=True)["matches"] == result["matches"][:1]
+    assert ws.search("damageEnemy", "js/large.js")["matches"] == result["matches"][:1]
+    result = ws.search("damageEnemy")
+    assert len(result["matches"]) == 2
+    assert {"assets/binary", "hard", "link"} <= set(result["skipped"])
+    assert "SECRET" not in json.dumps(result)
+    with pytest.raises(ValueError):
+        ws.search("damageEnemy", "../")
+    with pytest.raises(ValueError):
+        ws.search("")
+
+
+async def test_search_truncation_and_errors_are_visible_to_models(project):
+    ws, metadata = project
+    ws.write("many.py", "interface = 1\n" * 51)
+    dispatcher = Dispatcher(ws, None, metadata, Limits())
+    result = (await dispatcher.batch([call("search", "search_files", query="interface")]))[0]
+    assert result["ok"] and len(result["matches"]) == 50 and result["truncated"]
+    assert "many.py:1:" in result["text"] and "narrow path or query" in result["text"]
+    result = (
+        await dispatcher.batch([call("missing", "search_files", query="interface", path="missing")])
+    )[0]
+    assert not result["ok"] and "does not exist" in result["text"]
