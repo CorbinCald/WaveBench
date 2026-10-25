@@ -101,16 +101,24 @@ SUBMIT = _tool(
     },
     ["runtime", "entry"],
 )
+SUBAGENT_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
 SPAWN_AGENT = _tool(
     "spawn_agent",
-    "Delegate a self-contained task to a fresh instance of your model working in this project "
+    "Delegate a self-contained task to the configured subagent model working in this project "
     "with the file tools. It sees nothing else, so task must be a complete brief: objective, "
     "files it owns, interfaces to follow, and what to report. Calls in one response run in "
-    "parallel; give them disjoint files. Returns the agent's report.",
+    "parallel; give them disjoint files. Choose reasoning_effort per task: low for routine work, "
+    "high for difficult work; omit to inherit yours. Returns the agent's report.",
     {
         "name": {"type": "string", "description": "Short label, for example physics."},
         "task": {"type": "string"},
         "read_only": {"type": "boolean", "description": "For research or review agents."},
+        "reasoning_effort": {
+            "type": "string",
+            "enum": list(SUBAGENT_EFFORTS),
+            "description": "Optional per-agent effort; omit to inherit. Mapped to model-supported levels.",
+        },
     },
     ["name", "task"],
 )

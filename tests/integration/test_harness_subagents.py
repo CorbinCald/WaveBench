@@ -158,6 +158,7 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
         nonlocal active, peak
         assert kwargs["fast_providers"] is True
         kind, agent = role(messages)
+        assert kwargs["reasoning_effort"] == {"alpha": "low", "beta": "max"}.get(agent, "high")
         history = conversations.setdefault(kind + agent, [])
         history.append(json.loads(json.dumps(messages)))
         index = len(history) - 1
@@ -168,7 +169,15 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
                 return calls(
                     index,
                     *(
-                        spawn(name, f"Write lib/{name}.py defining VALUE = {value}")
+                        spawn(
+                            name,
+                            f"Write lib/{name}.py defining VALUE = {value}",
+                            **(
+                                {"reasoning_effort": {"alpha": "low", "beta": "max"}[name]}
+                                if name != "gamma"
+                                else {}
+                            ),
+                        )
                         for name, value in (("alpha", 1), ("beta", 2), ("gamma", 3))
                     ),
                 )
@@ -236,6 +245,9 @@ async def test_parallel_subagents_share_workspace_and_budget_then_lead_submits(
     agents = result["harness"]["subagents"]
     assert agents["enabled"] and agents["parallel"] == 2 and agents["cap"] == 3
     assert agents["spawned"] == agents["completed"] == 3
+    assert [run["reasoning_effort"] for run in agents["runs"]] == ["low", "max", "high"]
+    assert [t["reasoning_effort"] for t in session.turns if t.get("agent") == 1] == ["low", "low"]
+    assert session.reasoning_effort == "high"
     assert agents["failed"] == agents["rejected"] == agents["active"] == 0
     assert agents["usage"]["total_tokens"] == 90 and agents["usage"]["api_turns"] == 6
     assert [run["status"] for run in agents["runs"]] == ["completed"] * 3
@@ -374,9 +386,15 @@ async def test_subagent_recovers_within_its_turn_limit_and_keeps_reasoning_capac
         kind, agent = role(messages)
         index = seen.get(kind + agent, 0)
         seen[kind + agent] = index + 1
+        assert kwargs["reasoning_effort"] == ("high" if kind == "lead" else "low")
         if kind == "lead":
             if index == 0:
-                return calls(index, spawn("writer", "Write main.py to print 42 and report."))
+                return calls(
+                    index,
+                    spawn(
+                        "writer", "Write main.py to print 42 and report.", reasoning_effort="low"
+                    ),
+                )
             report = results(messages, 1)[0]
             assert report["status"] == "completed" and report["turns"] == 3
             return calls(index, DONE)
@@ -853,3 +871,23 @@ async def test_unsupported_subagent_model_fails_before_build(factory, monkeypatc
     assert session.generation == "unsupported"
     assert "subagent model vendor/no-tools" in session.error
     assert not session.turns
+
+
+@pytest.mark.parametrize("lead_effort", ["medium", None])
+async def test_null_subagent_effort_inherits_lead_setting(factory, monkeypatch, lead_effort):
+    seen = []
+
+    async def model(client, key, model_id, messages, tools, **kwargs):
+        seen.append(kwargs["reasoning_effort"])
+        return text("Reviewed")
+
+    monkeypatch.setattr(module, "call_conversation", model)
+    session = factory(reasoning_effort=lead_effort)
+    await session.subagents.spawn(
+        "review", {"name": "review", "task": "Review", "reasoning_effort": None}
+    )
+    assert seen == [lead_effort]
+    run = session.subagents.runs[0]
+    assert run.status == "completed"
+    assert run.record()["reasoning_effort"] == lead_effort
+    assert run.turns[0]["reasoning_effort"] == lead_effort

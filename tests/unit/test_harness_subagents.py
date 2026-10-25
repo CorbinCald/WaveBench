@@ -56,7 +56,12 @@ def test_tool_schemas_separate_lead_and_subagent_capabilities(tmp_path):
     function = SPAWN_AGENT["function"]
     assert function["name"] == "spawn_agent"
     assert function["parameters"]["required"] == ["name", "task"]
-    assert set(function["parameters"]["properties"]) == {"name", "task", "read_only"}
+    assert set(function["parameters"]["properties"]) == {
+        "name",
+        "task",
+        "read_only",
+        "reasoning_effort",
+    }
     assert function["parameters"]["additionalProperties"] is False
     assert "run in parallel" in function["description"]
     pool = SimpleNamespace(available=lambda: True)
@@ -108,7 +113,12 @@ def test_prompts_state_caps_ownership_and_the_report_contract():
 def test_spawn_arguments_are_validated_before_any_request(arguments, message):
     with pytest.raises(ValueError, match=message):
         SubagentPool.validate(arguments)
-    assert SubagentPool.validate({"name": " api ", "task": "brief"}) == ("api", "brief", False)
+    assert SubagentPool.validate({"name": " api ", "task": "brief"}) == (
+        "api",
+        "brief",
+        False,
+        None,
+    )
 
 
 def test_finishing_withdraws_spawning():
@@ -400,7 +410,12 @@ async def test_pool_rejections_count_without_spawning(tmp_path):
 
 
 def test_spawn_treats_null_read_only_as_false():
-    assert SubagentPool.validate({"name": "a", "task": "b", "read_only": None}) == ("a", "b", False)
+    assert SubagentPool.validate({"name": "a", "task": "b", "read_only": None}) == (
+        "a",
+        "b",
+        False,
+        None,
+    )
     assert SubagentPool.validate({"name": "a", "task": "b", "read_only": True})[2] is True
 
 
@@ -449,3 +464,22 @@ async def test_missing_required_fields_produce_readable_tool_errors(
     finally:
         workspace.close()
     assert not result["ok"] and result["error"] == message
+
+
+@pytest.mark.parametrize(
+    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", None]
+)
+def test_spawn_accepts_documented_efforts_or_inheritance(effort):
+    properties = SPAWN_AGENT["function"]["parameters"]["properties"]
+    if effort is not None:
+        assert effort in properties["reasoning_effort"]["enum"]
+    assert "reasoning_effort" in SPAWN_AGENT["function"]["description"]
+    assert SubagentPool.validate(
+        {"name": "worker", "task": "Review", "reasoning_effort": effort}
+    ) == ("worker", "Review", False, effort)
+
+
+@pytest.mark.parametrize("effort", ["ultra", "", "HIGH", "off", 1, False, [], {}])
+def test_spawn_rejects_invalid_reasoning_effort(effort):
+    with pytest.raises(ValueError, match="reasoning_effort must be one of"):
+        SubagentPool.validate({"name": "worker", "task": "Review", "reasoning_effort": effort})

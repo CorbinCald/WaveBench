@@ -363,10 +363,17 @@ For example: `wavebench --subagents --orchestrator-model provider/lead
 --subagent-model provider/worker "Build a small app"` (replace the example IDs).
 The saved keys are `orchestrator_model` and `subagent_model`.
 
-When enabled, every lead model receives one additional native tool:
+When enabled, every lead model receives one additional native tool.
+The orchestrator can set `reasoning_effort` per subagent: `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, or `max`. Omit it (or send null) to inherit
+the orchestrator's effort at spawn time. The chosen effort stays with that
+subagent across turns and retries; it does not change the orchestrator or siblings.
+The existing provider negotiation maps unsupported levels to supported ones.
+Each subagent record and turn records its requested effort; turn adjustments
+capture provider mappings and fallbacks.
 
 ```json
-{"name": "spawn_agent", "arguments": {"name": "about-page", "task": "Write about.html …", "read_only": false}}
+{"name": "spawn_agent", "arguments": {"name": "about-page", "task": "Write about.html …", "reasoning_effort": "low", "read_only": false}}
 ```
 
 The design follows the pattern shared by current agent harnesses (Claude Code
@@ -376,8 +383,8 @@ spawn tool, a brief-only context, bounded reports, fan-out through several
 calls in one turn, hard caps with readable errors, and no nesting.
 
 - **Configurable model, fresh context.** A subagent is a new conversation of the
-  chosen subagent model, with the same reasoning effort as its orchestrator. It sees its own system
-  prompt, the original user request as context, and the lead's `task` brief;
+  chosen subagent model, with the reasoning effort selected by its orchestrator.
+  It sees its own system prompt, the original user request as context, and the lead's `task` brief;
   it never sees the lead's history. The lead is instructed to delegate unless
   the whole project fits in one or two small files: decide the file layout and
   shared contracts, write that scaffolding itself, spawn one agent per

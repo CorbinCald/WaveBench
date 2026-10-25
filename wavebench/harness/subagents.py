@@ -15,7 +15,7 @@ import time
 from wavebench.prompt_cache import CachePolicy
 from wavebench.tokens import PromptEstimate, context_usage, prompt_tokens
 
-from .commands import FILE_CHANGES, Dispatcher
+from .commands import FILE_CHANGES, SUBAGENT_EFFORTS, Dispatcher
 from .config import Limits
 from .failure import failure_record
 from .transport import GEMINI_PROVIDER_ROUTES, RecoveryBudget, TurnError, wait_for_recovery
@@ -174,9 +174,14 @@ class SubagentPool:
             tracker.update(self.session.name, sum(self._chars.values()))
 
     @staticmethod
-    def validate(arguments) -> tuple[str, str, bool]:
-        if not isinstance(arguments, dict) or set(arguments) - {"name", "task", "read_only"}:
-            raise ValueError("spawn_agent accepts only name, task, and read_only")
+    def validate(arguments) -> tuple[str, str, bool, str | None]:
+        if not isinstance(arguments, dict) or set(arguments) - {
+            "name",
+            "task",
+            "read_only",
+            "reasoning_effort",
+        }:
+            raise ValueError("spawn_agent accepts only name, task, read_only, and reasoning_effort")
         name, task = arguments.get("name"), arguments.get("task")
         # Some providers send every optional schema field; null means unset.
         read_only = arguments.get("read_only")
@@ -190,12 +195,15 @@ class SubagentPool:
             raise ValueError(f"task exceeds {MAX_TASK_CHARS:,} characters")
         if type(read_only) is not bool:
             raise ValueError("read_only must be a boolean")
-        return name.strip(), task, read_only
+        effort = arguments.get("reasoning_effort")
+        if effort is not None and (not isinstance(effort, str) or effort not in SUBAGENT_EFFORTS):
+            raise ValueError("reasoning_effort must be one of: " + ", ".join(SUBAGENT_EFFORTS))
+        return name.strip(), task, read_only, effort
 
     async def spawn(self, call_id: str, arguments) -> dict:
         session = self.session
         try:
-            name, task, read_only = self.validate(arguments)
+            name, task, read_only, effort = self.validate(arguments)
             if session.dispatcher.submission is not None:
                 raise ValueError("phase already submitted; skipped")
             if session.finishing:
@@ -207,7 +215,7 @@ class SubagentPool:
         except ValueError:
             self.rejected += 1
             raise
-        run = SubagentRun(self, len(self.runs) + 1, name, task, read_only, call_id)
+        run = SubagentRun(self, len(self.runs) + 1, name, task, read_only, call_id, effort)
         self.runs.append(run)
         if session.phase_name != "delegating":
             session.phase("delegating")
@@ -228,11 +236,21 @@ class SubagentRun:
     """One bounded conversation; its turns are charged to the lead's session."""
 
     def __init__(
-        self, pool: SubagentPool, number: int, name: str, task: str, read_only: bool, call_id: str
+        self,
+        pool: SubagentPool,
+        number: int,
+        name: str,
+        task: str,
+        read_only: bool,
+        call_id: str,
+        reasoning_effort: str | None = None,
     ):
         session = pool.session
         self.pool, self.session, self.limits = pool, session, pool.limits
         self.model_id = session.subagent_model
+        self.reasoning_effort = (
+            session.reasoning_effort if reasoning_effort is None else reasoning_effort
+        )
         self.number, self.name, self.task = number, name, task
         self.read_only, self.call_id = read_only, call_id
         self.label = f"{number:02d}-{safe_name(name)}"
@@ -328,7 +346,7 @@ class SubagentRun:
             stream_limits=self.limits,
             cache_policy=self.cache_policy,
             gemini_provider=self.gemini_provider,
-            reasoning_effort=session.reasoning_effort,
+            reasoning_effort=self.reasoning_effort,
             fast_providers=session.fast_providers,
             on_progress=(lambda chars: self.pool.note_progress(self.number, chars))
             if live
@@ -384,6 +402,7 @@ class SubagentRun:
                 record = {
                     "phase": "subagent",
                     "agent": self.number,
+                    "reasoning_effort": self.reasoning_effort,
                     "input_tokens_bound": input_bound,
                     "max_output_tokens": request_output,
                 }
@@ -566,6 +585,7 @@ class SubagentRun:
             "tool_usage": self.dispatcher.tool_usage.copy(),
             "files": {key: sorted(paths) for key, paths in self.files.items()},
             "model_id": self.model_id,
+            "reasoning_effort": self.reasoning_effort,
             "report_chars": len(self.report),
             "usage": self.session.usage(self.turns),
             "lint": self.dispatcher.lint_results,
